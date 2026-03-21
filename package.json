@@ -1,0 +1,12 @@
+{
+  "name": "opapp-desktop",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "lint": "echo \"TODO: configure desktop lint\"",
+    "test": "npm run smoke:windows:release",
+    "doctor": "echo \"TODO: configure desktop doctor\"",
+    "smoke:windows:release": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./tooling/scripts/windows-release-smoke.ps1"
+  }
+}

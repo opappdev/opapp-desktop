@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+.pnpm-store/
+.DS_Store
+*.log
+.vs/
+bin/
+obj/
+AppPackages/
+BundleArtifacts/
+Generated Files/
+*.suo
+*.user
+.bundle/
+x64/
+*.binlog
+*.wrn
+
+distribution/artifacts/*
+!distribution/artifacts/README.md

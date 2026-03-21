@@ -1,0 +1,4 @@
+packages:
+  - "hosts/*"
+  - "bridges/*"
+  - "tooling/*"

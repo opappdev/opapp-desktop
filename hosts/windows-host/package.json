@@ -1,0 +1,29 @@
+{
+  "name": "OpappWindowsHost",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "windows": "npx @react-native-community/cli run-windows --no-packager --logging --no-telemetry",
+    "build:windows": "npx @react-native-community/cli run-windows --no-packager --no-launch --logging --no-telemetry"
+  },
+  "dependencies": {
+    "react": "19.1.1",
+    "react-native": "0.82.0",
+    "react-native-windows": "0.82.0"
+  },
+  "devDependencies": {
+    "@react-native-community/cli": "20.0.0",
+    "@react-native-community/cli-platform-android": "20.0.0",
+    "@react-native-community/cli-platform-ios": "20.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "react-native-windows": {
+    "init-windows": {
+      "name": "OpappWindowsHost",
+      "namespace": "OpappWindowsHost",
+      "template": "cpp-app"
+    }
+  }
+}
