@@ -5,8 +5,19 @@
   "packageManager": "pnpm@10.32.1",
   "scripts": {
     "lint": "echo \"TODO: configure desktop lint\"",
-    "test": "npm run smoke:windows:release",
+    "test": "npm run verify:windows",
     "doctor": "echo \"TODO: configure desktop doctor\"",
-    "smoke:windows:release": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./tooling/scripts/windows-release-smoke.ps1"
+    "verify:windows": "node ./tooling/scripts/verify-windows.mjs",
+    "verify:windows:surface-model": "node ./tooling/scripts/verify-windows.mjs --include-secondary-window",
+    "smoke:windows:release": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=tab-session",
+    "smoke:windows:bootstrap-main-compact": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=main-window-bootstrap-compact",
+    "smoke:windows:current-window": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=settings-default-current-window",
+    "smoke:windows:settings-default-new-window": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=settings-default-new-window",
+    "smoke:windows:save-main-window-preferences": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=save-main-window-preferences",
+    "smoke:windows:surface-model": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=secondary-window",
+    "verify:windows:portable": "node ./tooling/scripts/verify-windows.mjs --launch=portable",
+    "verify:windows:portable:surface-model": "node ./tooling/scripts/verify-windows.mjs --launch=portable --include-secondary-window",
+    "smoke:windows:portable": "node ./tooling/scripts/windows-release-smoke.mjs --launch=portable --scenario=tab-session",
+    "smoke:windows:portable:surface-model": "node ./tooling/scripts/windows-release-smoke.mjs --launch=portable --scenario=secondary-window"
   }
 }

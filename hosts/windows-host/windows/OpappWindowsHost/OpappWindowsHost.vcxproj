@@ -82,7 +82,7 @@
       </AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>shell32.lib;user32.lib;windowsapp.lib;%(AdditionalDependenices)</AdditionalDependencies>
+      <AdditionalDependencies>shell32.lib;user32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
@@ -102,11 +102,19 @@
     <ClInclude Include="OpappWindowsHost.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="AutolinkedNativeModules.g.h" />
+    <ClInclude Include="HostCore.h" />
+    <ClInclude Include="WindowManager.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="OpappWindowsHost.cpp" />
+    <ClCompile Include="HostCore.cpp" />
+    <ClCompile Include="WindowPolicyRegistry.cpp" />
+    <ClCompile Include="WindowStateStore.cpp" />
+    <ClCompile Include="LaunchConfig.cpp" />
+    <ClCompile Include="WindowManager.cpp" />
+    <ClCompile Include="WindowManagerModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

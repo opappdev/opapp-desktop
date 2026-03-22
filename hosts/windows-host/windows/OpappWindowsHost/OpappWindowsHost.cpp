@@ -3,89 +3,18 @@
 
 #include "pch.h"
 #include "OpappWindowsHost.h"
+#include "HostCore.h"
+#include "WindowManager.h"
+
+#include <MddBootstrap.h>
+#include <WindowsAppSDK-VersionInfo.h>
 
 #include "AutolinkedNativeModules.g.h"
-
 #include "NativeModules.h"
 
-#include <string>
+using namespace OpappWindowsHost;
 
 namespace {
-
-std::string ToUtf8(winrt::hstring const &value) {
-  return winrt::to_string(value);
-}
-
-std::string ToUtf8(std::wstring const &value) {
-  return winrt::to_string(winrt::hstring{value});
-}
-
-std::string GetLogPath() {
-  char tempPath[MAX_PATH] = {};
-  auto length = GetTempPathA(MAX_PATH, tempPath);
-  if (length == 0 || length > MAX_PATH) {
-    return "opapp-windows-host.log";
-  }
-
-  return std::string(tempPath) + "opapp-windows-host.log";
-}
-
-void ResetLog() noexcept {
-  auto logPath = GetLogPath();
-  HANDLE file = CreateFileA(
-      logPath.c_str(),
-      GENERIC_WRITE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE,
-      nullptr,
-      CREATE_ALWAYS,
-      FILE_ATTRIBUTE_NORMAL,
-      nullptr);
-
-  if (file != INVALID_HANDLE_VALUE) {
-    CloseHandle(file);
-  }
-}
-
-void AppendLog(std::string const &message) noexcept {
-  SYSTEMTIME timestamp{};
-  GetLocalTime(&timestamp);
-
-  char prefix[64] = {};
-  sprintf_s(
-      prefix,
-      "[%04d-%02d-%02d %02d:%02d:%02d.%03d] ",
-      timestamp.wYear,
-      timestamp.wMonth,
-      timestamp.wDay,
-      timestamp.wHour,
-      timestamp.wMinute,
-      timestamp.wSecond,
-      timestamp.wMilliseconds);
-
-  auto line = std::string(prefix) + message + "\r\n";
-  auto logPath = GetLogPath();
-
-  HANDLE file = CreateFileA(
-      logPath.c_str(),
-      FILE_APPEND_DATA,
-      FILE_SHARE_READ | FILE_SHARE_WRITE,
-      nullptr,
-      OPEN_ALWAYS,
-      FILE_ATTRIBUTE_NORMAL,
-      nullptr);
-
-  if (file != INVALID_HANDLE_VALUE) {
-    DWORD written = 0;
-    WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
-    CloseHandle(file);
-  }
-
-  OutputDebugStringA(line.c_str());
-}
-
-std::string BoolString(bool value) {
-  return value ? "true" : "false";
-}
 
 void LogRedBoxError(std::string const &phase, winrt::Microsoft::ReactNative::IRedBoxErrorInfo const &info) noexcept {
   AppendLog(phase + ".Message=" + ToUtf8(info.Message()));
@@ -100,6 +29,72 @@ void LogRedBoxError(std::string const &phase, winrt::Microsoft::ReactNative::IRe
         phase + ".Frame[" + std::to_string(i) + "]=" + ToUtf8(frame.Method()) + " @ " + ToUtf8(frame.File()) +
         ":" + std::to_string(frame.Line()) + ":" + std::to_string(frame.Column()));
   }
+}
+
+struct WindowsAppRuntimeBootstrap {
+  HMODULE Module{nullptr};
+  decltype(&MddBootstrapShutdown) Shutdown{nullptr};
+  bool Initialized{false};
+
+  ~WindowsAppRuntimeBootstrap() noexcept {
+    if (Initialized && Shutdown) {
+      Shutdown();
+      AppendLog("WinMain.BootstrapShutdown.Done");
+    }
+
+    if (Module) {
+      FreeLibrary(Module);
+    }
+  }
+};
+
+bool HasPackageIdentity() noexcept {
+  UINT32 packageFullNameLength = 0;
+  auto result = GetCurrentPackageFullName(&packageFullNameLength, nullptr);
+  return result != APPMODEL_ERROR_NO_PACKAGE;
+}
+
+WindowsAppRuntimeBootstrap InitializeWindowsAppRuntimeBootstrap() {
+  AppendLog("WinMain.BootstrapInitialize");
+
+  if (HasPackageIdentity()) {
+    AppendLog("WinMain.BootstrapInitialize.SkipPackageIdentity");
+    return {};
+  }
+
+  auto bootstrapModule = LoadLibraryW(L"Microsoft.WindowsAppRuntime.Bootstrap.dll");
+  if (!bootstrapModule) {
+    throw winrt::hresult_error(
+        HRESULT_FROM_WIN32(GetLastError()),
+        L"LoadLibrary(Microsoft.WindowsAppRuntime.Bootstrap.dll) failed");
+  }
+
+  auto initialize = reinterpret_cast<decltype(&MddBootstrapInitialize2)>(
+      GetProcAddress(bootstrapModule, "MddBootstrapInitialize2"));
+  auto shutdown =
+      reinterpret_cast<decltype(&MddBootstrapShutdown)>(GetProcAddress(bootstrapModule, "MddBootstrapShutdown"));
+  if (!initialize || !shutdown) {
+    auto error = GetLastError();
+    FreeLibrary(bootstrapModule);
+    throw winrt::hresult_error(
+        HRESULT_FROM_WIN32(error == 0 ? ERROR_PROC_NOT_FOUND : error),
+        L"GetProcAddress(MddBootstrap*) failed");
+  }
+
+  PACKAGE_VERSION minVersion{};
+  minVersion.Version = WINDOWSAPPSDK_RUNTIME_VERSION_UINT64;
+  auto hr = initialize(
+      WINDOWSAPPSDK_RELEASE_MAJORMINOR,
+      WINDOWSAPPSDK_RELEASE_VERSION_TAG_W,
+      minVersion,
+      MddBootstrapInitializeOptions_None);
+  if (FAILED(hr)) {
+    FreeLibrary(bootstrapModule);
+    throw winrt::hresult_error(hr, L"MddBootstrapInitialize2 failed");
+  }
+
+  AppendLog("WinMain.BootstrapInitialize.Done");
+  return WindowsAppRuntimeBootstrap{bootstrapModule, shutdown, true};
 }
 
 struct LoggingRedBoxHandler
@@ -155,61 +150,143 @@ struct CompReactPackageProvider
 };
 
 // The entry point of the Win32 application
-_Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE instance, HINSTANCE, PSTR /* commandLine */, int showCmd) {
-  ResetLog();
+_Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, PSTR /*commandLine*/, int /*showCmd*/) {
+  try {
+    ResetLog();
+    AppendLog("WinMain.Start");
 
-  winrt::init_apartment(winrt::apartment_type::single_threaded);
-  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    winrt::init_apartment(winrt::apartment_type::single_threaded);
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-  WCHAR appDirectory[MAX_PATH];
-  GetModuleFileNameW(NULL, appDirectory, MAX_PATH);
-  PathCchRemoveFileSpec(appDirectory, MAX_PATH);
-
-  auto reactNativeWin32App{winrt::Microsoft::ReactNative::ReactNativeAppBuilder().Build()};
-  auto settings{reactNativeWin32App.ReactNativeHost().InstanceSettings()};
-
-  settings.EnableDefaultCrashHandler(true);
-  settings.NativeLogger([](winrt::Microsoft::ReactNative::LogLevel level, winrt::hstring const &message) {
-    AppendLog(
-        std::string("NativeLogger[") + std::to_string(static_cast<int>(level)) + "] " + ToUtf8(message));
-  });
-  settings.InstanceLoaded([](auto const &, winrt::Microsoft::ReactNative::InstanceLoadedEventArgs const &args) {
-    AppendLog(std::string("InstanceLoaded failed=") + BoolString(args.Failed()));
-  });
-  settings.RedBoxHandler(winrt::make<LoggingRedBoxHandler>(
-      winrt::Microsoft::ReactNative::RedBoxHelper::CreateDefaultHandler(reactNativeWin32App.ReactNativeHost())));
-
-  RegisterAutolinkedNativeModulePackages(settings.PackageProviders());
-  settings.PackageProviders().Append(winrt::make<CompReactPackageProvider>());
+    WCHAR appDirectory[MAX_PATH];
+    GetModuleFileNameW(NULL, appDirectory, MAX_PATH);
+    PathCchRemoveFileSpec(appDirectory, MAX_PATH);
 
 #if BUNDLE
-  settings.BundleRootPath(std::wstring(appDirectory).append(L"\\Bundle").c_str());
-  settings.JavaScriptBundleFile(L"index.windows");
-  settings.UseFastRefresh(false);
-  AppendLog(
-      std::string("Runtime=Bundle root=") + ToUtf8(settings.BundleRootPath()) + " file=" +
-      ToUtf8(settings.JavaScriptBundleFile()));
+    if (!InitializeWindowPolicyRegistry(appDirectory, true)) {
+      AppendLog("FatalWindowPolicyRegistryLoadFailure");
+      return -1;
+    }
 #else
-  settings.JavaScriptBundleFile(L"index");
-  settings.UseFastRefresh(true);
-  AppendLog("Runtime=Metro");
+    InitializeWindowPolicyRegistry(appDirectory, false);
+#endif
+
+    auto windowsAppRuntimeBootstrap = InitializeWindowsAppRuntimeBootstrap();
+
+    auto launchSurface = GetInitialLaunchSurface();
+    AppendLog(
+        "LaunchSurface surface=" + ToUtf8(launchSurface.SurfaceId) + " policy=" +
+        ToUtf8(launchSurface.Policy) + " mode=" + ToUtf8(launchSurface.MetricsMode));
+
+    AppendLog("WinMain.BuildReactNativeApp");
+    auto reactNativeWin32App{winrt::Microsoft::ReactNative::ReactNativeAppBuilder().Build()};
+    AppendLog("WinMain.BuildReactNativeApp.Done");
+    auto reactNativeHost = reactNativeWin32App.ReactNativeHost();
+    InitializeWindowManager(reactNativeHost);
+    AppendLog("WinMain.WindowManagerInitialized");
+
+    auto settings{reactNativeHost.InstanceSettings()};
+    auto startupSecondarySurface = GetSecondaryStartupSurface();
+    auto restoredSecondarySurfaces = LoadRestorableSecondarySurfaces(startupSecondarySurface);
+    auto startupInitialOpenSurface = GetInitialAutoOpenSurface();
+
+    settings.EnableDefaultCrashHandler(true);
+    settings.NativeLogger([](winrt::Microsoft::ReactNative::LogLevel level, winrt::hstring const &message) {
+      AppendLog(
+          std::string("NativeLogger[") + std::to_string(static_cast<int>(level)) + "] " + ToUtf8(message));
+    });
+    settings.InstanceLoaded([settings, startupSecondarySurface, restoredSecondarySurfaces](
+                                auto const &,
+                                winrt::Microsoft::ReactNative::InstanceLoadedEventArgs const &args) {
+      AppendLog(std::string("InstanceLoaded failed=") + BoolString(args.Failed()));
+
+      if (args.Failed()) {
+        return;
+      }
+
+      if (startupSecondarySurface) {
+        if (auto error = QueueManagedWindowOpen(settings.UIDispatcher(), *startupSecondarySurface)) {
+          AppendLog(
+              "SecondaryStartupSurfaceFailed surface=" + ToUtf8(startupSecondarySurface->SurfaceId) + " reason=" +
+              *error);
+        }
+      }
+
+      for (auto const &restoredSecondarySurface : restoredSecondarySurfaces) {
+        if (auto error = QueueManagedWindowOpen(settings.UIDispatcher(), restoredSecondarySurface)) {
+          AppendLog(
+              "RestoredSecondaryWindowFailed window=" + ToUtf8(restoredSecondarySurface.WindowId) + " surface=" +
+              ToUtf8(restoredSecondarySurface.SurfaceId) + " reason=" + *error);
+        }
+      }
+    });
+    settings.RedBoxHandler(winrt::make<LoggingRedBoxHandler>(
+        winrt::Microsoft::ReactNative::RedBoxHelper::CreateDefaultHandler(reactNativeHost)));
+
+    RegisterAutolinkedNativeModulePackages(settings.PackageProviders());
+    settings.PackageProviders().Append(winrt::make<CompReactPackageProvider>());
+
+#if BUNDLE
+    settings.BundleRootPath(std::wstring(appDirectory).append(L"\\Bundle").c_str());
+    settings.JavaScriptBundleFile(L"index.windows");
+    settings.UseFastRefresh(false);
+    AppendLog(
+        std::string("Runtime=Bundle root=") + ToUtf8(settings.BundleRootPath()) + " file=" +
+        ToUtf8(settings.JavaScriptBundleFile()));
+#else
+    settings.JavaScriptBundleFile(L"index");
+    settings.UseFastRefresh(true);
+    AppendLog("Runtime=Metro");
 #endif
 #if _DEBUG
-  settings.UseDirectDebugger(true);
-  settings.UseDeveloperSupport(true);
-  AppendLog("DeveloperSupport=Enabled");
+    settings.UseDirectDebugger(true);
+    settings.UseDeveloperSupport(true);
+    AppendLog("DeveloperSupport=Enabled");
 #else
-  settings.UseDirectDebugger(false);
-  settings.UseDeveloperSupport(false);
-  AppendLog("DeveloperSupport=Disabled");
+    settings.UseDirectDebugger(false);
+    settings.UseDeveloperSupport(false);
+    AppendLog("DeveloperSupport=Disabled");
 #endif
 
-  auto appWindow{reactNativeWin32App.AppWindow()};
-  appWindow.Title(L"OpappWindowsHost");
-  appWindow.Resize({1000, 1000});
+    AppendLog("WinMain.ConfigureInitialWindow");
+    ConfigureInitialWindow(reactNativeWin32App, launchSurface);
+    AppendLog("WinMain.ConfigureInitialWindow.Done");
 
-  auto viewOptions{reactNativeWin32App.ReactViewOptions()};
-  viewOptions.ComponentName(L"OpappWindowsHost");
+    if (startupInitialOpenSurface) {
+      AppendLog(
+          "InitialOpenSurface surface=" + ToUtf8(startupInitialOpenSurface->SurfaceId) + " policy=" +
+          ToUtf8(startupInitialOpenSurface->Policy) + " presentation=" +
+          ToUtf8(startupInitialOpenSurface->Presentation));
+    }
 
-  reactNativeWin32App.Start();
+    if (startupSecondarySurface) {
+      AppendLog(
+          "SecondaryStartupSurface surface=" + ToUtf8(startupSecondarySurface->SurfaceId) + " policy=" +
+          ToUtf8(startupSecondarySurface->Policy) + " mode=" + ToUtf8(startupSecondarySurface->MetricsMode));
+    }
+
+    auto viewOptions{reactNativeWin32App.ReactViewOptions()};
+    viewOptions.ComponentName(L"OpappWindowsHost");
+    viewOptions.InitialProps(CreateLaunchProps(launchSurface, startupInitialOpenSurface));
+
+    AppendLog("WinMain.StartReactNativeApp");
+    reactNativeWin32App.Start();
+    AppendLog("WinMain.StartReactNativeApp.Done");
+    return 0;
+  } catch (winrt::hresult_error const &error) {
+    AppendLog(
+        "WinMain.HResultError code=" + std::to_string(static_cast<int32_t>(error.code().value)) +
+        " message=" + ToUtf8(error.message()));
+    return -1;
+  } catch (std::exception const &error) {
+    AppendLog(std::string("WinMain.StdException message=") + error.what());
+    return -1;
+  } catch (...) {
+    AppendLog("WinMain.UnknownException");
+    return -1;
+  }
 }
+
+
+
+

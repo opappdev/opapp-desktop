@@ -1,0 +1,35 @@
+#pragma once
+
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <winrt/Microsoft.ReactNative.h>
+#include <winrt/Microsoft.UI.Windowing.h>
+
+#include "HostCore.h"
+
+namespace OpappWindowsHost {
+
+winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
+    LaunchSurfaceConfig const &launchSurface,
+    std::optional<AutoOpenSurfaceConfig> const &autoOpenSurface = std::nullopt) noexcept;
+
+void InitializeWindowManager(winrt::Microsoft::ReactNative::ReactNativeHost const &reactNativeHost) noexcept;
+std::optional<std::string> GetCurrentManagedWindowPayload() noexcept;
+bool FocusManagedWindow(std::wstring const &windowId) noexcept;
+bool CloseManagedWindow(std::wstring const &windowId) noexcept;
+std::optional<std::string> OpenManagedWindow(LaunchSurfaceConfig const &launchSurface) noexcept;
+std::optional<std::string> QueueManagedWindowOpen(
+    winrt::Microsoft::ReactNative::IReactDispatcher const &uiDispatcher,
+    LaunchSurfaceConfig const &launchSurface) noexcept;
+std::vector<LaunchSurfaceConfig> LoadRestorableSecondarySurfaces(
+    std::optional<LaunchSurfaceConfig> const &startupSecondarySurface = std::nullopt) noexcept;
+void ConfigureInitialWindow(
+    winrt::Microsoft::ReactNative::ReactNativeWin32App const &reactNativeWin32App,
+    LaunchSurfaceConfig const &launchSurface) noexcept;
+bool ApplySavedPreferencesToCurrentWindow(
+    std::wstring const &currentWindowId,
+    WindowPreferences const &preferences) noexcept;
+
+} // namespace OpappWindowsHost

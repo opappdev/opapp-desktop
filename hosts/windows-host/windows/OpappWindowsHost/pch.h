@@ -28,6 +28,7 @@
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.interop.h>
+#include <winrt/Windows.Graphics.h>
 
 // C RunTime Header Files
 #include <malloc.h>
@@ -36,3 +37,5 @@
 #include <tchar.h>
 
 // Reference additional headers your project requires here
+
+
