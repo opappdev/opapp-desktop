@@ -2,18 +2,37 @@
 #include "HostCore.h"
 
 #include <atomic>
+#include <deque>
+#include <fstream>
+#include <sstream>
 
 namespace OpappWindowsHost {
 namespace {
 
-std::string GetLogPath() {
-  char tempPath[MAX_PATH] = {};
-  auto length = GetTempPathA(MAX_PATH, tempPath);
-  if (length == 0 || length > MAX_PATH) {
-    return "opapp-windows-host.log";
+constexpr unsigned long long kMaxLogBytes = 2ull * 1024ull * 1024ull;
+
+std::string GetPreviousLogPath() {
+  return GetHostLogPath() + ".previous";
+}
+
+void RotateLogIfNeeded() noexcept {
+  WIN32_FILE_ATTRIBUTE_DATA attributes{};
+  auto logPath = GetHostLogPath();
+  if (!GetFileAttributesExA(logPath.c_str(), GetFileExInfoStandard, &attributes)) {
+    return;
   }
 
-  return std::string(tempPath) + "opapp-windows-host.log";
+  ULARGE_INTEGER size{};
+  size.LowPart = attributes.nFileSizeLow;
+  size.HighPart = attributes.nFileSizeHigh;
+
+  if (size.QuadPart <= kMaxLogBytes) {
+    return;
+  }
+
+  auto previousLogPath = GetPreviousLogPath();
+  DeleteFileA(previousLogPath.c_str());
+  MoveFileExA(logPath.c_str(), previousLogPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
 }
 
 } // namespace
@@ -24,6 +43,16 @@ std::string ToUtf8(winrt::hstring const &value) {
 
 std::string ToUtf8(std::wstring const &value) {
   return winrt::to_string(winrt::hstring{value});
+}
+
+std::string GetHostLogPath() noexcept {
+  char tempPath[MAX_PATH] = {};
+  auto length = GetTempPathA(MAX_PATH, tempPath);
+  if (length == 0 || length > MAX_PATH) {
+    return "opapp-windows-host.log";
+  }
+
+  return std::string(tempPath) + "opapp-windows-host.log";
 }
 
 winrt::hstring WindowPolicyName(WindowPolicyId policy) {
@@ -115,19 +144,24 @@ std::wstring GetWindowTitle(LaunchSurfaceConfig const &launchSurface) {
 }
 
 void ResetLog() noexcept {
-  auto logPath = GetLogPath();
+  RotateLogIfNeeded();
+
   HANDLE file = CreateFileA(
-      logPath.c_str(),
+      GetHostLogPath().c_str(),
       GENERIC_WRITE,
       FILE_SHARE_READ | FILE_SHARE_WRITE,
       nullptr,
-      CREATE_ALWAYS,
+      OPEN_ALWAYS,
       FILE_ATTRIBUTE_NORMAL,
       nullptr);
 
   if (file != INVALID_HANDLE_VALUE) {
     CloseHandle(file);
   }
+
+  AppendLog(
+      "HostSession.Start pid=" + std::to_string(GetCurrentProcessId()) +
+      " logPath=" + GetHostLogPath());
 }
 
 void AppendLog(std::string const &message) noexcept {
@@ -147,7 +181,7 @@ void AppendLog(std::string const &message) noexcept {
       timestamp.wMilliseconds);
 
   auto line = std::string(prefix) + message + "\r\n";
-  auto logPath = GetLogPath();
+  auto logPath = GetHostLogPath();
 
   HANDLE file = CreateFileA(
       logPath.c_str(),
@@ -165,6 +199,40 @@ void AppendLog(std::string const &message) noexcept {
   }
 
   OutputDebugStringA(line.c_str());
+}
+
+std::string ReadLogTail(std::size_t maxLines) noexcept {
+  if (maxLines == 0) {
+    return {};
+  }
+
+  std::ifstream stream(GetHostLogPath(), std::ios::in | std::ios::binary);
+  if (!stream.is_open()) {
+    return {};
+  }
+
+  std::deque<std::string> lines;
+  std::string line;
+  while (std::getline(stream, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+
+    lines.push_back(line);
+    if (lines.size() > maxLines) {
+      lines.pop_front();
+    }
+  }
+
+  std::ostringstream buffer;
+  for (std::size_t index = 0; index < lines.size(); ++index) {
+    if (index > 0) {
+      buffer << "\n";
+    }
+    buffer << lines[index];
+  }
+
+  return buffer.str();
 }
 
 std::string BoolString(bool value) {

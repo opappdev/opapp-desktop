@@ -400,10 +400,14 @@ void ApplyAppWindowPlacement(
 winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
     LaunchSurfaceConfig const &launchSurface,
     std::optional<AutoOpenSurfaceConfig> const &autoOpenSurface) noexcept {
+  auto mainDevSmokeScenario =
+      launchSurface.WindowId == L"window.main" ? GetMainDevSmokeScenario() : std::nullopt;
+
   return [windowId = launchSurface.WindowId,
           surfaceId = launchSurface.SurfaceId,
           policy = launchSurface.Policy,
-          autoOpenSurface](winrt::Microsoft::ReactNative::IJSValueWriter const &writer) {
+          autoOpenSurface,
+          mainDevSmokeScenario](winrt::Microsoft::ReactNative::IJSValueWriter const &writer) {
     writer.WriteObjectBegin();
     writer.WritePropertyName(L"windowId");
     writer.WriteString(windowId);
@@ -416,39 +420,48 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
       writer.WritePropertyName(L"initialSessionPayload");
       writer.WriteString(*storedSession);
     }
-    if (autoOpenSurface) {
+
+    if (mainDevSmokeScenario || autoOpenSurface) {
       writer.WritePropertyName(L"initialProps");
       writer.WriteObjectBegin();
-      writer.WritePropertyName(L"autoOpenSurfaceId");
-      writer.WriteString(autoOpenSurface->SurfaceId);
-      writer.WritePropertyName(L"autoOpenWindowPolicy");
-      writer.WriteString(WindowPolicyName(autoOpenSurface->Policy));
-      writer.WritePropertyName(L"autoOpenPresentation");
-      writer.WriteString(autoOpenSurface->Presentation);
 
-      if (
-          autoOpenSurface->SmokeSaveMainWindowMode ||
-          autoOpenSurface->SmokeSaveSettingsWindowMode ||
-          autoOpenSurface->SmokeSaveSettingsPresentation) {
-        writer.WritePropertyName(L"autoOpenInitialProps");
-        writer.WriteObjectBegin();
+      if (mainDevSmokeScenario) {
+        writer.WritePropertyName(L"devSmokeScenario");
+        writer.WriteString(*mainDevSmokeScenario);
+      }
 
-        if (autoOpenSurface->SmokeSaveMainWindowMode) {
-          writer.WritePropertyName(L"smokeSaveMainWindowMode");
-          writer.WriteString(*autoOpenSurface->SmokeSaveMainWindowMode);
+      if (autoOpenSurface) {
+        writer.WritePropertyName(L"autoOpenSurfaceId");
+        writer.WriteString(autoOpenSurface->SurfaceId);
+        writer.WritePropertyName(L"autoOpenWindowPolicy");
+        writer.WriteString(WindowPolicyName(autoOpenSurface->Policy));
+        writer.WritePropertyName(L"autoOpenPresentation");
+        writer.WriteString(autoOpenSurface->Presentation);
+
+        if (
+            autoOpenSurface->SmokeSaveMainWindowMode ||
+            autoOpenSurface->SmokeSaveSettingsWindowMode ||
+            autoOpenSurface->SmokeSaveSettingsPresentation) {
+          writer.WritePropertyName(L"autoOpenInitialProps");
+          writer.WriteObjectBegin();
+
+          if (autoOpenSurface->SmokeSaveMainWindowMode) {
+            writer.WritePropertyName(L"smokeSaveMainWindowMode");
+            writer.WriteString(*autoOpenSurface->SmokeSaveMainWindowMode);
+          }
+
+          if (autoOpenSurface->SmokeSaveSettingsWindowMode) {
+            writer.WritePropertyName(L"smokeSaveSettingsWindowMode");
+            writer.WriteString(*autoOpenSurface->SmokeSaveSettingsWindowMode);
+          }
+
+          if (autoOpenSurface->SmokeSaveSettingsPresentation) {
+            writer.WritePropertyName(L"smokeSaveSettingsPresentation");
+            writer.WriteString(*autoOpenSurface->SmokeSaveSettingsPresentation);
+          }
+
+          writer.WriteObjectEnd();
         }
-
-        if (autoOpenSurface->SmokeSaveSettingsWindowMode) {
-          writer.WritePropertyName(L"smokeSaveSettingsWindowMode");
-          writer.WriteString(*autoOpenSurface->SmokeSaveSettingsWindowMode);
-        }
-
-        if (autoOpenSurface->SmokeSaveSettingsPresentation) {
-          writer.WritePropertyName(L"smokeSaveSettingsPresentation");
-          writer.WriteString(*autoOpenSurface->SmokeSaveSettingsPresentation);
-        }
-
-        writer.WriteObjectEnd();
       }
 
       writer.WriteObjectEnd();

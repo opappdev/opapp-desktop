@@ -154,6 +154,24 @@ struct OpappWindowManagerModule {
     result.Resolve();
   }
 
+  REACT_METHOD(GetDiagnosticsLogPath, L"getDiagnosticsLogPath")
+  void GetDiagnosticsLogPath(
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    result.Resolve(OpappWindowsHost::GetHostLogPath());
+  }
+
+  REACT_METHOD(GetDiagnosticsLogTail, L"getDiagnosticsLogTail")
+  void GetDiagnosticsLogTail(
+      int64_t maxLines,
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    std::size_t resolvedMaxLines = 120;
+    if (maxLines > 0) {
+      resolvedMaxLines = static_cast<std::size_t>(maxLines > 1000 ? 1000 : maxLines);
+    }
+
+    result.Resolve(OpappWindowsHost::ReadLogTail(resolvedMaxLines));
+  }
+
  private:
   winrt::Microsoft::ReactNative::ReactContext m_reactContext;
 };

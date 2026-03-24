@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <map>
 #include <optional>
 #include <string>
@@ -86,8 +87,10 @@ std::optional<ParsedWindowPolicy> ParseWindowPolicy(std::string const &policy);
 std::wstring NormalizeSettingsPresentation(std::wstring presentation);
 WindowSizeMode ResolveWindowSizeMode(WindowPolicyId policy, WindowPreferences const &preferences) noexcept;
 std::wstring GetWindowTitle(LaunchSurfaceConfig const &launchSurface);
+std::string GetHostLogPath() noexcept;
 void ResetLog() noexcept;
 void AppendLog(std::string const &message) noexcept;
+std::string ReadLogTail(std::size_t maxLines = 120) noexcept;
 std::string BoolString(bool value);
 WindowMetrics ResolveWindowMetrics(
     int workAreaX,
@@ -113,5 +116,6 @@ LaunchSurfaceConfig BuildLaunchSurface(
 LaunchSurfaceConfig GetInitialLaunchSurface() noexcept;
 std::optional<LaunchSurfaceConfig> GetSecondaryStartupSurface() noexcept;
 std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept;
+std::optional<std::wstring> GetMainDevSmokeScenario() noexcept;
 
 } // namespace OpappWindowsHost

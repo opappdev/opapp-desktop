@@ -111,6 +111,10 @@ std::optional<LaunchSurfaceConfig> GetSecondaryStartupSurface() noexcept {
   return BuildLaunchSurface(std::move(*surfaceId), policy, L"window.secondary.startup", modeOverride);
 }
 
+std::optional<std::wstring> GetMainDevSmokeScenario() noexcept {
+  return GetStartupOverride(L"main-props", L"dev-smoke-scenario", L"OPAPP_MAIN_DEV_SMOKE_SCENARIO");
+}
+
 std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept {
   auto surfaceId = GetStartupOverride(L"initial-open", L"surface", L"OPAPP_INITIAL_OPEN_SURFACE_ID");
   if (!surfaceId) {
