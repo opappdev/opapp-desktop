@@ -7,6 +7,8 @@
     "lint": "echo \"TODO: configure desktop lint\"",
     "test": "npm run verify:windows",
     "doctor": "echo \"TODO: configure desktop doctor\"",
+    "dev:windows": "node ./tooling/scripts/dev-windows.mjs",
+    "verify:windows:dev": "node ./tooling/scripts/verify-windows-dev.mjs",
     "verify:windows": "node ./tooling/scripts/verify-windows.mjs",
     "verify:windows:surface-model": "node ./tooling/scripts/verify-windows.mjs --include-secondary-window",
     "smoke:windows:release": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=tab-session",
