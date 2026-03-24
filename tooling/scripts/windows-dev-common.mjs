@@ -307,12 +307,13 @@ export async function ensureMetroRunning({reuseIfReady = true, label = 'metro'} 
 }
 
 function parseFrontendDiagnosticLine(line) {
-  if (!line.startsWith(frontendDiagnosticPrefix)) {
+  const prefixIndex = line.indexOf(frontendDiagnosticPrefix);
+  if (prefixIndex === -1) {
     return null;
   }
 
   try {
-    return JSON.parse(line.slice(frontendDiagnosticPrefix.length));
+    return JSON.parse(line.slice(prefixIndex + frontendDiagnosticPrefix.length));
   } catch {
     return null;
   }
@@ -386,4 +387,5 @@ export async function readHostLogTail(maxLines = 40) {
     return '';
   }
 }
+
 
