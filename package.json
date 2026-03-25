@@ -7,6 +7,8 @@
     "lint": "echo \"TODO: configure desktop lint\"",
     "test": "npm run verify:windows",
     "doctor": "echo \"TODO: configure desktop doctor\"",
+    "commit:check": "npm run verify:windows:dev",
+    "commit:check:release": "npm run verify:windows",
     "dev:windows": "node ./tooling/scripts/dev-windows.mjs",
     "verify:windows:dev": "node ./tooling/scripts/verify-windows-dev.mjs",
     "verify:windows": "node ./tooling/scripts/verify-windows.mjs",

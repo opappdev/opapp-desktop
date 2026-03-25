@@ -10,6 +10,16 @@ It owns:
 
 Business structure stays in `opapp-frontend`.
 
+## Git Commit Prep
+
+Before committing desktop changes, run `npm run commit:check` for the
+Metro-backed smoke path. If the change touches native host behavior, packaged
+startup, window/session restore, or bundle staging, also run
+`npm run commit:check:release`.
+
+Keep desktop commits scoped to this repo and use the existing commit subject
+style: `desktop: ...`.
+
 ## Validation
 
 Use `npm run verify:windows` as the default packaged-app validation. It runs the
