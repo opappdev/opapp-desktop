@@ -44,6 +44,11 @@ const defaultScenarios = [
     description: 'saving settings applies the new main window mode to the current window immediately',
     args: ['--scenario=save-main-window-preferences', '--skip-prepare'],
   },
+  {
+    name: 'secondary-window',
+    description: 'startup detached settings window surface-model check',
+    args: ['--scenario=secondary-window'],
+  },
 ];
 
 const secondaryOnlyScenario = {
