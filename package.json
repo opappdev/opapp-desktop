@@ -31,6 +31,7 @@
     "registry:prune": "node ./tooling/scripts/registry-pruner.mjs",
     "ota:prune": "node ./tooling/scripts/registry-pruner.mjs --dir=.ota-cache",
     "watchdog:guard": "node ./tooling/scripts/crash-watchdog.mjs --mode=guard",
-    "watchdog:heartbeat": "node ./tooling/scripts/crash-watchdog.mjs --mode=heartbeat"
+    "watchdog:heartbeat": "node ./tooling/scripts/crash-watchdog.mjs --mode=heartbeat",
+    "smoke:ota": "node ./tooling/scripts/ota-smoke.mjs"
   }
 }

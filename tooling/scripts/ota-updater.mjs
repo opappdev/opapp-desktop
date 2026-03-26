@@ -648,7 +648,9 @@ async function main() {
   );
 }
 
-main().catch(err => {
-  console.error(`[ota-updater] ${err.message}`);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(err => {
+    console.error(`[ota-updater] ${err.message}`);
+    process.exit(1);
+  });
+}

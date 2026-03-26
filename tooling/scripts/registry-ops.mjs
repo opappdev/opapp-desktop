@@ -285,7 +285,9 @@ async function main() {
   console.log(JSON.stringify(result));
 }
 
-main().catch(err => {
-  console.error(`[registry-ops] ${err.message}`);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(err => {
+    console.error(`[registry-ops] ${err.message}`);
+    process.exit(1);
+  });
+}
