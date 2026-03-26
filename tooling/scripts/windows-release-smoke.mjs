@@ -104,6 +104,49 @@ function parseRect(logContents, prefix) {
     mode: match[5] ?? null,
   };
 }
+async function assertStagedManifest() {
+  const manifestPath = path.join(hostBundleRoot, 'bundle-manifest.json');
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  } catch {
+    throw new Error(
+      `Windows release smoke failed: bundle-manifest.json not found at staged path ${manifestPath}. ` +
+      'Ensure the frontend bundle step completed successfully.',
+    );
+  }
+
+  if (manifest.platform !== 'windows') {
+    throw new Error(
+      `Windows release smoke failed: bundle-manifest.json platform is '${manifest.platform}', expected 'windows'.`,
+    );
+  }
+
+  if (!manifest.entryFile) {
+    throw new Error(
+      'Windows release smoke failed: bundle-manifest.json is missing entryFile field.',
+    );
+  }
+
+  const bundlePath = path.join(hostBundleRoot, manifest.entryFile);
+  let bundleFileContent;
+  try {
+    bundleFileContent = await readFile(bundlePath);
+  } catch {
+    throw new Error(
+      `Windows release smoke failed: bundle-manifest.json entryFile '${manifest.entryFile}' not found at ${bundlePath}.`,
+    );
+  }
+
+  if (!bundleFileContent || bundleFileContent.length === 0) {
+    throw new Error(
+      `Windows release smoke failed: staged bundle file '${manifest.entryFile}' is empty.`,
+    );
+  }
+
+  log(`manifest OK: bundleId=${manifest.bundleId} version=${manifest.version} surfaces=${manifest.surfaces?.join(',')}`);
+}
+
 async function assertBundledPolicyRegistry(logContents) {
   const normalized = normalizeLogContents(logContents);
   if (normalized.includes('WindowPolicyRegistrySource=emergency-fallback')) {
@@ -687,6 +730,8 @@ async function preparePackagedApp() {
   await removeIfPresent(hostBundleRoot);
   await mkdir(hostBundleRoot, {recursive: true});
   await cp(frontendBundleRoot, hostBundleRoot, {recursive: true, force: true});
+
+  await assertStagedManifest();
 
   log('building and deploying packaged release app');
   runOrThrow(process.execPath, [
