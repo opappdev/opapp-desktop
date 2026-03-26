@@ -117,5 +117,6 @@ LaunchSurfaceConfig GetInitialLaunchSurface() noexcept;
 std::optional<LaunchSurfaceConfig> GetSecondaryStartupSurface() noexcept;
 std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept;
 std::optional<std::wstring> GetMainDevSmokeScenario() noexcept;
+std::optional<std::wstring> GetOtaRemoteUrl() noexcept;
 
 } // namespace OpappWindowsHost

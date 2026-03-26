@@ -175,6 +175,72 @@ struct LoggingRedBoxHandler
   winrt::Microsoft::ReactNative::IRedBoxHandler m_innerHandler{nullptr};
 };
 
+// Resolves the ota-updater.mjs script path relative to the exe directory.
+//
+// The build output directory sits 5 levels below the opapp-desktop repo root:
+//   Release/ → x64/ → windows/ → windows-host/ → hosts/ → opapp-desktop/
+//
+// Returns nullopt if the computed path does not exist on disk, which prevents
+// spawning when the app is deployed without the development toolchain.
+std::optional<std::wstring> ResolveOtaScriptPath(std::wstring const &appDirectory) noexcept {
+  try {
+    auto scriptPath = std::filesystem::path(appDirectory)
+                          .parent_path()  // x64/
+                          .parent_path()  // windows/
+                          .parent_path()  // windows-host/
+                          .parent_path()  // hosts/
+                          .parent_path()  // opapp-desktop/ (repo root)
+                      / L"tooling" / L"scripts" / L"ota-updater.mjs";
+    if (std::filesystem::exists(scriptPath)) {
+      return scriptPath.wstring();
+    }
+    return std::nullopt;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+// Spawns `node ota-updater.mjs --mode=update --remote=<remoteUrl> --platform=windows`
+// as a fully detached background process (CREATE_NO_WINDOW | DETACHED_PROCESS).
+//
+// WinMain does not wait for the child process to exit.  The staged bundle takes
+// effect on the next application launch (RFC-010 Phase 2).
+void SpawnOtaUpdateProcess(std::wstring const &appDirectory, std::wstring const &remoteUrl) noexcept {
+  AppendLog("OTA.SpawnUpdateProcess remoteUrl=" + ToUtf8(remoteUrl));
+
+  auto scriptPath = ResolveOtaScriptPath(appDirectory);
+  if (!scriptPath) {
+    AppendLog("OTA.SpawnUpdateProcess.ScriptNotFound appDirectory=" + ToUtf8(appDirectory));
+    return;
+  }
+
+  std::wstring cmdLine = std::wstring(L"node.exe \"") + *scriptPath +
+      L"\" --mode=update --remote=\"" + remoteUrl + L"\" --platform=windows";
+
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+  BOOL ok = CreateProcessW(
+      nullptr,
+      cmdLine.data(),
+      nullptr,
+      nullptr,
+      FALSE,
+      CREATE_NO_WINDOW | DETACHED_PROCESS,
+      nullptr,
+      appDirectory.c_str(),
+      &si,
+      &pi);
+
+  if (ok) {
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    AppendLog("OTA.SpawnUpdateProcess.OK pid=" + std::to_string(pi.dwProcessId));
+  } else {
+    AppendLog("OTA.SpawnUpdateProcess.Failed error=" + std::to_string(GetLastError()));
+  }
+}
+
 } // namespace
 
 // A PackageProvider containing any turbo modules you define within this app project
@@ -315,6 +381,15 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     auto viewOptions{reactNativeWin32App.ReactViewOptions()};
     viewOptions.ComponentName(L"OpappWindowsHost");
     viewOptions.InitialProps(CreateLaunchProps(launchSurface, startupInitialOpenSurface));
+
+    // RFC-010 Phase 2: spawn OTA bundle update process in the background if a
+    // remote registry URL is configured via [ota] remote= (launch INI) or the
+    // OPAPP_OTA_REMOTE_URL environment variable.  The subprocess runs silently
+    // (CREATE_NO_WINDOW | DETACHED_PROCESS) and exits on its own; the staged
+    // bundle takes effect on the next application launch.
+    if (auto otaRemoteUrl = GetOtaRemoteUrl()) {
+      SpawnOtaUpdateProcess(std::wstring(appDirectory), *otaRemoteUrl);
+    }
 
     AppendLog("WinMain.StartReactNativeApp");
     reactNativeWin32App.Start();

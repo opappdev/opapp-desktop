@@ -154,4 +154,8 @@ std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept {
   return config;
 }
 
+std::optional<std::wstring> GetOtaRemoteUrl() noexcept {
+  return GetStartupOverride(L"ota", L"remote", L"OPAPP_OTA_REMOTE_URL");
+}
+
 } // namespace OpappWindowsHost
