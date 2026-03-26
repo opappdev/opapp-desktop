@@ -144,7 +144,14 @@ async function assertStagedManifest() {
     );
   }
 
-  log(`manifest OK: bundleId=${manifest.bundleId} version=${manifest.version} surfaces=${manifest.surfaces?.join(',')}`);
+  if (manifest.sourceKind !== 'sibling-staging') {
+    throw new Error(
+      `Windows release smoke failed: bundle-manifest.json sourceKind is '${manifest.sourceKind}', expected 'sibling-staging'. ` +
+      'Staging step must overwrite sourceKind when copying manifest to the host Bundle directory.',
+    );
+  }
+
+  log(`manifest OK: bundleId=${manifest.bundleId} version=${manifest.version} surfaces=${manifest.surfaces?.join(',')} sourceKind=${manifest.sourceKind}`);
 }
 
 async function assertBundledPolicyRegistry(logContents) {
@@ -732,6 +739,12 @@ async function preparePackagedApp() {
   await removeIfPresent(hostBundleRoot);
   await mkdir(hostBundleRoot, {recursive: true});
   await cp(frontendBundleRoot, hostBundleRoot, {recursive: true, force: true});
+
+  const stagedManifestPath = path.join(hostBundleRoot, 'bundle-manifest.json');
+  const stagedManifest = JSON.parse(await readFile(stagedManifestPath, 'utf8'));
+  stagedManifest.sourceKind = 'sibling-staging';
+  await writeFile(stagedManifestPath, JSON.stringify(stagedManifest, null, 2) + '\n', 'utf8');
+  log('patched staged bundle-manifest.json: sourceKind=sibling-staging');
 
   await assertStagedManifest();
 
