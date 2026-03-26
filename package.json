@@ -26,6 +26,7 @@
     "ota:check": "node ./tooling/scripts/ota-updater.mjs --mode=check",
     "ota:download": "node ./tooling/scripts/ota-updater.mjs --mode=download",
     "ota:apply": "node ./tooling/scripts/ota-updater.mjs --mode=apply",
-    "ota:update": "node ./tooling/scripts/ota-updater.mjs --mode=update"
+    "ota:update": "node ./tooling/scripts/ota-updater.mjs --mode=update",
+    "ota:rollback": "node ./tooling/scripts/ota-updater.mjs --mode=rollback"
   }
 }

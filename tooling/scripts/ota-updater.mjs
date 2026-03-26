@@ -11,6 +11,7 @@
  *   node ota-updater.mjs --mode=download --remote=<url> --platform=windows [--version=<ver>] [--bundle-id=<id>] [--force]
  *   node ota-updater.mjs --mode=apply    --platform=windows [--bundle-id=<id>] [--version=<ver>] [--host-bundle-dir=<d>]
  *   node ota-updater.mjs --mode=update   --remote=<url> --platform=windows [--force]
+ *   node ota-updater.mjs --mode=rollback --platform=windows [--host-bundle-dir=<d>]
  *
  * All modes output a single JSON line to stdout for easy integration with
  * CI pipelines and automation scripts.
@@ -24,6 +25,9 @@
  *                  not explicitly provided.
  * --mode=update    Atomically executes check + download + apply.  Exits with
  *                  status 'up-to-date' JSON when no update is available.
+ * --mode=rollback  Restore the pre-apply snapshot from the OTA cache into
+ *                  hostBundleDir, undoing the most recent apply.  Requires a
+ *                  previous snapshot (created automatically by apply).
  *
  * Flags:
  *   --remote=<url>          Remote registry base URL (required for check/download/update).
@@ -75,6 +79,9 @@ const OTA_STATE_FILENAME = 'ota-state.json';
  * @property {string} downloadedAt - ISO 8601 timestamp.
  * @property {string} [stagedAt]   - ISO 8601 timestamp; set after apply.
  * @property {string} [hostBundleDir] - Absolute path used during apply.
+ * @property {{version: string|null, snapshotDir: string, snapshotAt: string}|null} [previousSnapshot]
+ *   Snapshot of hostBundleDir taken immediately before the last apply.
+ *   Consumed (set to undefined) by rollback.
  */
 export async function readOtaState(cacheDir) {
   try {
@@ -190,6 +197,8 @@ export async function applyOtaUpdate({cacheDir, hostBundleDir, platform, bundleI
     version: resolvedVersion,
   });
 
+  const snapshot = await _snapshotCurrentBundle(cacheDir, hostBundleDir, resolvedBundleId, resolvedPlatform);
+
   await mkdir(hostBundleDir, {recursive: true});
   await cp(manifestDir, hostBundleDir, {recursive: true, force: true});
 
@@ -207,14 +216,94 @@ export async function applyOtaUpdate({cacheDir, hostBundleDir, platform, bundleI
     manifestDir,
     stagedAt,
     hostBundleDir,
+    previousSnapshot: snapshot ?? undefined,
   });
 
   return {bundleId: resolvedBundleId, version: resolvedVersion, stagedAt};
 }
 
-// ---------------------------------------------------------------------------
-// Module-private helpers
-// ---------------------------------------------------------------------------
+/**
+ * Restore the pre-apply snapshot from the OTA cache into hostBundleDir,
+ * undoing the most recent apply operation.
+ *
+ * The snapshot is created automatically by applyOtaUpdate() before it
+ * overwrites the host bundle directory.  After rollback the previousSnapshot
+ * entry is cleared from ota-state.json, so a second consecutive rollback will
+ * correctly fail with a "no snapshot" error.
+ *
+ * @param {object} options
+ * @param {string} options.cacheDir - OTA cache directory.
+ * @param {string} [options.hostBundleDir] - Override; read from ota-state.json when omitted.
+ * @param {string} [options.bundleId] - Bundle ID; read from ota-state.json when omitted.
+ * @param {string} [options.platform] - Platform; read from ota-state.json when omitted.
+ * @returns {Promise<{bundleId: string, rolledBackToVersion: string|null, rolledBackAt: string}>}
+ */
+export async function rollbackOtaUpdate({cacheDir, hostBundleDir, bundleId, platform}) {
+  const state = await readOtaState(cacheDir);
+  const snapshot = state?.previousSnapshot;
+
+  if (!snapshot?.snapshotDir) {
+    throw new Error(
+      'OtaUpdater: no previous snapshot found. Run --mode=apply first to create a snapshot.',
+    );
+  }
+
+  const resolvedBundleId = bundleId ?? state?.bundleId;
+  const resolvedPlatform = platform ?? state?.platform;
+  const resolvedHostBundleDir = hostBundleDir ?? state?.hostBundleDir;
+
+  if (!resolvedHostBundleDir) {
+    throw new Error(
+      'OtaUpdater: --host-bundle-dir is required for rollback when ota-state.json has no hostBundleDir.',
+    );
+  }
+
+  await mkdir(resolvedHostBundleDir, {recursive: true});
+  await cp(snapshot.snapshotDir, resolvedHostBundleDir, {recursive: true, force: true});
+
+  const rolledBackAt = new Date().toISOString();
+  await _writeOtaState(cacheDir, {
+    ...state,
+    bundleId: resolvedBundleId,
+    version: snapshot.version,
+    platform: resolvedPlatform,
+    hostBundleDir: resolvedHostBundleDir,
+    stagedAt: rolledBackAt,
+    previousSnapshot: undefined,
+  });
+
+  return {bundleId: resolvedBundleId, rolledBackToVersion: snapshot.version, rolledBackAt};
+}
+
+/**
+ * Snapshot the current contents of hostBundleDir to the OTA cache's previous/
+ * subdirectory before an apply overwrites it.
+ *
+ * Returns null when hostBundleDir does not yet contain a valid bundle-manifest
+ * (e.g., the very first apply), so the caller can safely skip recording a
+ * previousSnapshot.
+ *
+ * @param {string} cacheDir
+ * @param {string} hostBundleDir
+ * @param {string} bundleId
+ * @param {string} platform
+ * @returns {Promise<{version: string|null, snapshotDir: string, snapshotAt: string} | null>}
+ */
+async function _snapshotCurrentBundle(cacheDir, hostBundleDir, bundleId, platform) {
+  const manifestPath = path.join(hostBundleDir, 'bundle-manifest.json');
+  let currentVersion = null;
+  try {
+    const m = JSON.parse(await readFile(manifestPath, 'utf8'));
+    currentVersion = m.version ?? null;
+  } catch {
+    return null;
+  }
+  const snapshotDir = path.join(cacheDir, bundleId, 'previous', platform);
+  const snapshotAt = new Date().toISOString();
+  await mkdir(snapshotDir, {recursive: true});
+  await cp(hostBundleDir, snapshotDir, {recursive: true, force: true});
+  return {version: currentVersion, snapshotDir, snapshotAt};
+}
 
 async function _writeOtaState(cacheDir, state) {
   await mkdir(cacheDir, {recursive: true});
@@ -293,14 +382,25 @@ async function main() {
   const cacheDirArg = _parseArg('cache-dir') ?? DEFAULT_CACHE_DIR;
   const hostBundleDirArg = _parseArg('host-bundle-dir') ?? DEFAULT_HOST_BUNDLE_DIR;
 
-  if (!['check', 'download', 'apply', 'update'].includes(modeArg)) {
+  if (!['check', 'download', 'apply', 'update', 'rollback'].includes(modeArg)) {
     throw new Error(
-      `OtaUpdater: unknown --mode='${modeArg}'. Valid modes: check, download, apply, update.`,
+      `OtaUpdater: unknown --mode='${modeArg}'. Valid modes: check, download, apply, update, rollback.`,
     );
   }
 
   if ((modeArg === 'check' || modeArg === 'download' || modeArg === 'update') && !remoteArg) {
     throw new Error(`OtaUpdater: --remote=<url> is required for --mode=${modeArg}.`);
+  }
+
+  if (modeArg === 'rollback') {
+    const result = await rollbackOtaUpdate({
+      cacheDir: cacheDirArg,
+      hostBundleDir: hostBundleDirArg !== DEFAULT_HOST_BUNDLE_DIR ? hostBundleDirArg : undefined,
+      platform: platformArg !== DEFAULT_PLATFORM ? platformArg : undefined,
+      bundleId: bundleIdArg,
+    });
+    console.log(JSON.stringify(result));
+    return;
   }
 
   if (modeArg === 'check') {
