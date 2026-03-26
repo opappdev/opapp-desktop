@@ -8,6 +8,7 @@
  * in the future without changing the staging pipeline.
  */
 
+import {createHash} from 'node:crypto';
 import {readFile, writeFile, readdir, cp, mkdir} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
@@ -103,6 +104,7 @@ export class SiblingArtifactSource extends ArtifactSource {
       );
     }
 
+    await _verifyBundleChecksum(manifest, bundlePath);
     return {manifest, bundlePath, manifestDir: this.manifestDir};
   }
 }
@@ -226,6 +228,7 @@ export class LocalRegistryArtifactSource extends ArtifactSource {
       );
     }
 
+    await _verifyBundleChecksum(manifest, bundlePath);
     return {manifest, bundlePath, manifestDir};
   }
 }
@@ -433,6 +436,7 @@ export class RemoteArtifactSource extends ArtifactSource {
     }
 
     const bundlePath = path.join(targetDir, manifest.entryFile);
+    await _verifyBundleChecksum(manifest, bundlePath);
     return {manifest, bundlePath, manifestDir: targetDir};
   }
 }
@@ -484,8 +488,36 @@ export async function generateRegistryIndex(registryRoot) {
 }
 
 // ---------------------------------------------------------------------------
-// Module-private helpers for RemoteArtifactSource
+// Module-private helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Verifies the bundle file integrity against the checksum recorded in the
+ * manifest (RFC-009). Only 'sha256' is supported. If the manifest has no
+ * checksum field the function returns immediately (backward-compatible with
+ * bundles built before RFC-009).
+ *
+ * @param {Object} manifest - Parsed bundle-manifest.json.
+ * @param {string} bundlePath - Absolute path to the bundle file to verify.
+ */
+async function _verifyBundleChecksum(manifest, bundlePath) {
+  if (!manifest.checksum) return;
+  const {algorithm, value} = manifest.checksum;
+  if (algorithm !== 'sha256') {
+    throw new Error(
+      `ArtifactSource: unsupported checksum algorithm '${algorithm}' in manifest.`,
+    );
+  }
+  const buffer = await readFile(bundlePath);
+  const computed = createHash('sha256').update(buffer).digest('hex');
+  if (computed !== value) {
+    throw new Error(
+      `ArtifactSource: bundle checksum mismatch for ${bundlePath}.\n` +
+        `  expected: ${value}\n` +
+        `  computed: ${computed}`,
+    );
+  }
+}
 
 async function _fetchRemoteJson(url) {
   let resp;
