@@ -8,7 +8,7 @@
  * in the future without changing the staging pipeline.
  */
 
-import {readFile, readdir, cp, mkdir} from 'node:fs/promises';
+import {readFile, writeFile, readdir, cp, mkdir} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
 
@@ -290,4 +290,226 @@ export async function publishToLocalRegistry(sourceDir, registryRoot) {
   }
 
   return targetDir;
+}
+
+/**
+ * Resolves artifacts from a remote HTTP artifact registry (RFC-008).
+ *
+ * Downloads artifacts from a URL that mirrors the local registry layout (RFC-007):
+ *   <baseUrl>/index.json
+ *   <baseUrl>/<bundleId>/<version>/<platform>/bundle-manifest.json
+ *   <baseUrl>/<bundleId>/<version>/<platform>/<entryFile>
+ *   <baseUrl>/<bundleId>/<version>/<platform>/window-policy-registry.json  (optional)
+ *
+ * Downloaded artifacts are cached to a local directory (same format as
+ * LocalRegistryArtifactSource), so subsequent calls for the same artifact
+ * serve from the cache without network access.
+ *
+ * @example
+ * const source = new RemoteArtifactSource(
+ *   'https://artifacts.example.com',
+ *   '/workspace/.artifact-registry',
+ * );
+ * const {manifest, bundlePath} = await source.resolve({platform: 'windows'});
+ */
+export class RemoteArtifactSource extends ArtifactSource {
+  /**
+   * @param {string} baseUrl - Base URL of the remote artifact registry.
+   * @param {string} cacheDir - Local cache directory (RFC-007 registry format).
+   * @param {object} [options]
+   * @param {boolean} [options.forceRefresh=false] - When true, bypass local cache
+   *   and re-download from remote even if artifacts are already cached.
+   */
+  constructor(baseUrl, cacheDir, options = {}) {
+    super();
+    /** @type {string} */
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+    /** @type {string} */
+    this.cacheDir = cacheDir;
+    /** @type {boolean} */
+    this.forceRefresh = options.forceRefresh ?? false;
+  }
+
+  /**
+   * @param {ArtifactResolveOptions} options
+   * @returns {Promise<ArtifactResolveResult>}
+   */
+  async resolve(options) {
+    const {platform} = options;
+    if (!platform) {
+      throw new Error('RemoteArtifactSource.resolve() requires options.platform.');
+    }
+
+    let {bundleId, version} = options;
+
+    // Auto-resolve bundleId / version from remote index when omitted
+    if (!bundleId || !version) {
+      const indexUrl = `${this.baseUrl}/index.json`;
+      const index = await _fetchRemoteJson(indexUrl);
+      const bundles = index?.bundles ?? {};
+      const bundleIds = Object.keys(bundles);
+
+      if (!bundleId) {
+        if (bundleIds.length === 0) {
+          throw new Error(
+            `RemoteArtifactSource: no bundles in registry index at ${indexUrl}`,
+          );
+        }
+        if (bundleIds.length > 1) {
+          throw new Error(
+            `RemoteArtifactSource: multiple bundles in registry; specify bundleId. ` +
+              `Available: ${bundleIds.join(', ')}`,
+          );
+        }
+        bundleId = bundleIds[0];
+      }
+
+      if (!version) {
+        const bundleInfo = bundles[bundleId];
+        if (!bundleInfo) {
+          throw new Error(
+            `RemoteArtifactSource: bundleId '${bundleId}' not found in registry index at ${indexUrl}`,
+          );
+        }
+        const versions = Array.isArray(bundleInfo.versions) ? bundleInfo.versions : [];
+        if (versions.length === 0) {
+          throw new Error(
+            `RemoteArtifactSource: no versions for bundle '${bundleId}' in registry index at ${indexUrl}`,
+          );
+        }
+        // Consistent with LocalRegistryArtifactSource: lexicographically latest
+        version = [...versions].sort().at(-1);
+      }
+    }
+
+    // Check local cache first (unless forceRefresh)
+    const cachedManifestPath = path.join(
+      this.cacheDir,
+      bundleId,
+      version,
+      platform,
+      'bundle-manifest.json',
+    );
+    if (!this.forceRefresh && existsSync(cachedManifestPath)) {
+      const localSource = new LocalRegistryArtifactSource(this.cacheDir);
+      return localSource.resolve({platform, bundleId, version});
+    }
+
+    // Download from remote
+    const remoteBase = `${this.baseUrl}/${bundleId}/${version}/${platform}`;
+    const targetDir = path.join(this.cacheDir, bundleId, version, platform);
+    await mkdir(targetDir, {recursive: true});
+
+    // Fetch manifest first to discover entryFile
+    const manifest = await _fetchRemoteJson(`${remoteBase}/bundle-manifest.json`);
+    if (!manifest.entryFile) {
+      throw new Error(
+        `RemoteArtifactSource: bundle-manifest.json at ${remoteBase}/bundle-manifest.json ` +
+          'is missing required entryFile field.',
+      );
+    }
+    await writeFile(
+      path.join(targetDir, 'bundle-manifest.json'),
+      JSON.stringify(manifest, null, 2),
+      'utf8',
+    );
+
+    // Download bundle file
+    await _downloadRemoteFile(
+      `${remoteBase}/${manifest.entryFile}`,
+      path.join(targetDir, manifest.entryFile),
+    );
+
+    // Download window-policy-registry.json (optional; 404 is silently ignored)
+    try {
+      await _downloadRemoteFile(
+        `${remoteBase}/window-policy-registry.json`,
+        path.join(targetDir, 'window-policy-registry.json'),
+      );
+    } catch (err) {
+      if (!err.message.includes('HTTP 404')) {
+        throw err;
+      }
+    }
+
+    const bundlePath = path.join(targetDir, manifest.entryFile);
+    return {manifest, bundlePath, manifestDir: targetDir};
+  }
+}
+
+/**
+ * Generates a registry index object from a local artifact registry directory.
+ *
+ * The returned object matches the remote registry index.json format (RFC-008)
+ * and can be serialised and served alongside the registry artifacts:
+ *
+ * @example
+ * const index = await generateRegistryIndex('/workspace/.artifact-registry');
+ * await fs.writeFile('.artifact-registry/index.json', JSON.stringify(index, null, 2), 'utf8');
+ *
+ * @param {string} registryRoot - Absolute path to the artifact registry root.
+ * @returns {Promise<{bundles: Object}>} Registry index structure.
+ */
+export async function generateRegistryIndex(registryRoot) {
+  let bundleDirs;
+  try {
+    bundleDirs = (await readdir(registryRoot, {withFileTypes: true}))
+      .filter(e => e.isDirectory())
+      .map(e => e.name);
+  } catch {
+    throw new Error(
+      `generateRegistryIndex: registry root not found or unreadable: ${registryRoot}`,
+    );
+  }
+
+  const bundles = {};
+  for (const bundleId of bundleDirs) {
+    const bundleIdDir = path.join(registryRoot, bundleId);
+    let versions;
+    try {
+      versions = (await readdir(bundleIdDir, {withFileTypes: true}))
+        .filter(e => e.isDirectory())
+        .map(e => e.name)
+        .sort();
+    } catch {
+      versions = [];
+    }
+    bundles[bundleId] = {
+      latestVersion: versions.at(-1) ?? null,
+      versions,
+    };
+  }
+
+  return {bundles};
+}
+
+// ---------------------------------------------------------------------------
+// Module-private helpers for RemoteArtifactSource
+// ---------------------------------------------------------------------------
+
+async function _fetchRemoteJson(url) {
+  let resp;
+  try {
+    resp = await fetch(url);
+  } catch (err) {
+    throw new Error(`RemoteArtifactSource: network error fetching ${url}: ${err.message}`);
+  }
+  if (!resp.ok) {
+    throw new Error(`RemoteArtifactSource: HTTP ${resp.status} fetching ${url}`);
+  }
+  return resp.json();
+}
+
+async function _downloadRemoteFile(url, destPath) {
+  let resp;
+  try {
+    resp = await fetch(url);
+  } catch (err) {
+    throw new Error(`RemoteArtifactSource: network error downloading ${url}: ${err.message}`);
+  }
+  if (!resp.ok) {
+    throw new Error(`RemoteArtifactSource: HTTP ${resp.status} downloading ${url}`);
+  }
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  await writeFile(destPath, buffer);
 }
