@@ -453,6 +453,9 @@ export class RemoteArtifactSource extends ArtifactSource {
  *
  * @param {string} registryRoot - Absolute path to the artifact registry root.
  * @returns {Promise<{bundles: Object}>} Registry index structure.
+ *   Each bundle entry may include `rolloutPercent` (RFC-014) and/or `channels`
+ *   (RFC-015) when the corresponding sidecar files are present in the bundle
+ *   directory.
  */
 export async function generateRegistryIndex(registryRoot) {
   let bundleDirs;
@@ -493,8 +496,29 @@ export async function generateRegistryIndex(registryRoot) {
       // No rollout.json — treat as 100% (full rollout).
     }
 
+    // RFC-015: read optional channels.json for channel-pinned version mapping.
+    let channels;
+    try {
+      const channelsData = JSON.parse(
+        await readFile(path.join(bundleIdDir, 'channels.json'), 'utf8'),
+      );
+      if (
+        channelsData &&
+        typeof channelsData === 'object' &&
+        !Array.isArray(channelsData)
+      ) {
+        const filtered = Object.fromEntries(
+          Object.entries(channelsData).filter(([, v]) => typeof v === 'string' && v),
+        );
+        if (Object.keys(filtered).length > 0) channels = filtered;
+      }
+    } catch {
+      // No channels.json — single-channel behaviour (backward compatible).
+    }
+
     const entry = {latestVersion: versions.at(-1) ?? null, versions};
     if (rolloutPercent !== undefined) entry.rolloutPercent = rolloutPercent;
+    if (channels !== undefined) entry.channels = channels;
     bundles[bundleId] = entry;
   }
 

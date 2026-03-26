@@ -7,10 +7,10 @@
  * the next application launch uses the updated bundle.
  *
  * Usage:
- *   node ota-updater.mjs --mode=check    --remote=<url> --platform=windows [--current-version=<ver>] [--bundle-id=<id>]
- *   node ota-updater.mjs --mode=download --remote=<url> --platform=windows [--version=<ver>] [--bundle-id=<id>] [--force]
+ *   node ota-updater.mjs --mode=check    --remote=<url> --platform=windows [--current-version=<ver>] [--bundle-id=<id>] [--channel=<name>]
+ *   node ota-updater.mjs --mode=download --remote=<url> --platform=windows [--version=<ver>] [--bundle-id=<id>] [--force] [--channel=<name>]
  *   node ota-updater.mjs --mode=apply    --platform=windows [--bundle-id=<id>] [--version=<ver>] [--host-bundle-dir=<d>]
- *   node ota-updater.mjs --mode=update   --remote=<url> --platform=windows [--force]
+ *   node ota-updater.mjs --mode=update   --remote=<url> --platform=windows [--force] [--channel=<name>]
  *   node ota-updater.mjs --mode=rollback --platform=windows [--host-bundle-dir=<d>]
  *
  * All modes output a single JSON line to stdout for easy integration with
@@ -41,6 +41,9 @@
  *   --device-id=<id>        Override device ID used for staged rollout bucket
  *                           (RFC-014); useful for testing. Persisted in
  *                           <cacheDir>/device-id.json when auto-generated.
+ *   --channel=<name>        Update channel name (RFC-015); e.g. 'stable', 'beta',
+ *                           'nightly'.  Persisted to <cacheDir>/channel.json.
+ *                           Defaults to the persisted channel choice, or 'stable'.
  */
 
 import {cp, mkdir, readFile, writeFile} from 'node:fs/promises';
@@ -101,6 +104,12 @@ export async function readOtaState(cacheDir) {
  * The version comparison uses lexicographic ordering, consistent with
  * LocalRegistryArtifactSource and RemoteArtifactSource (RFC-007 / RFC-008).
  *
+ * When the registry index contains a `channels` map (RFC-015) and a channel is
+ * selected (via the `channel` option or <cacheDir>/channel.json), the version
+ * pinned to that channel is used instead of the overall latest version.  If the
+ * requested channel is absent from the index, the check falls back to the
+ * 'stable' channel entry, then to the overall lexicographically-latest version.
+ *
  * When the registry index contains a `rolloutPercent` value < 100 for the
  * target bundle (RFC-014), a deterministic device-fingerprint bucket check is
  * performed.  If the device is outside the rollout window, `hasUpdate` is
@@ -115,10 +124,17 @@ export async function readOtaState(cacheDir) {
  *   from ota-state.json when omitted.
  * @param {string} [options.deviceId] - Device ID for rollout bucket computation
  *   (RFC-014); auto-generated and persisted when omitted.
- * @returns {Promise<{hasUpdate: boolean, inRollout: boolean, rolloutPercent: number|undefined, deviceId: string, currentVersion: string | null, latestVersion: string, bundleId: string}>}
+ * @param {string} [options.channel] - Update channel name (RFC-015); persisted
+ *   in <cacheDir>/channel.json when explicitly provided.  Defaults to the
+ *   persisted channel, or 'stable' when no channel has been chosen.
+ * @returns {Promise<{hasUpdate: boolean, inRollout: boolean, rolloutPercent: number|undefined, deviceId: string, currentVersion: string | null, latestVersion: string, bundleId: string, channel: string, channels?: Record<string,string>}>}
  */
-export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, currentVersion, deviceId}) {
-  const {bundleId: resolvedBundleId, latestVersion, rolloutPercent} = await _fetchRemoteLatest(remoteBase, bundleId);
+export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, currentVersion, deviceId, channel}) {
+  // RFC-015: resolve and persist channel choice.
+  const resolvedChannel = channel ?? await _getOrCreateChannel(cacheDir);
+  if (channel !== undefined) await _persistChannel(cacheDir, channel);
+
+  const {bundleId: resolvedBundleId, latestVersion, rolloutPercent, channels} = await _fetchRemoteLatest(remoteBase, bundleId, resolvedChannel);
 
   let resolvedCurrentVersion = currentVersion ?? null;
   if (!resolvedCurrentVersion) {
@@ -147,6 +163,8 @@ export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, 
     currentVersion: resolvedCurrentVersion,
     latestVersion,
     bundleId: resolvedBundleId,
+    channel: resolvedChannel,
+    ...(channels ? {channels} : {}),
   };
 }
 
@@ -163,14 +181,27 @@ export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, 
  * @param {string} [options.bundleId] - Bundle ID; auto-resolved when omitted.
  * @param {string} [options.version] - Target version; auto-resolved when omitted.
  * @param {boolean} [options.force=false] - Re-download even if cached.
+ * @param {string} [options.channel] - Update channel name (RFC-015); used to
+ *   resolve the channel-pinned version from the registry index when
+ *   options.version is omitted.
  * @returns {Promise<{bundleId: string, version: string, manifestDir: string}>}
  */
-export async function downloadOtaUpdate({remoteBase, platform, cacheDir, bundleId, version, force = false}) {
-  const source = new RemoteArtifactSource(remoteBase, cacheDir, {forceRefresh: force});
-  const {manifest, manifestDir} = await source.resolve({platform, bundleId, version});
+export async function downloadOtaUpdate({remoteBase, platform, cacheDir, bundleId, version, force = false, channel}) {
+  // RFC-015: if a channel is specified without an explicit version, resolve the
+  // channel-pinned version from the remote registry index before downloading.
+  let targetVersion = version;
+  let targetBundleId = bundleId;
+  if (!targetVersion && channel !== undefined) {
+    const fetched = await _fetchRemoteLatest(remoteBase, bundleId, channel);
+    targetVersion = fetched.latestVersion;
+    if (!targetBundleId) targetBundleId = fetched.bundleId;
+  }
 
-  const resolvedBundleId = manifest.bundleId ?? bundleId;
-  const resolvedVersion = manifest.version ?? version;
+  const source = new RemoteArtifactSource(remoteBase, cacheDir, {forceRefresh: force});
+  const {manifest, manifestDir} = await source.resolve({platform, bundleId: targetBundleId, version: targetVersion});
+
+  const resolvedBundleId = manifest.bundleId ?? targetBundleId;
+  const resolvedVersion = manifest.version ?? targetVersion;
 
   await _writeOtaState(cacheDir, {
     bundleId: resolvedBundleId,
@@ -336,7 +367,7 @@ async function _writeOtaState(cacheDir, state) {
   );
 }
 
-async function _fetchRemoteLatest(remoteBase, bundleId) {
+async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
   const base = remoteBase.replace(/\/$/, '');
   const indexUrl = `${base}/index.json`;
   let resp;
@@ -375,14 +406,39 @@ async function _fetchRemoteLatest(remoteBase, bundleId) {
 
   const versions = Array.isArray(info.versions) ? info.versions : [];
   // Lexicographic sort — consistent with LocalRegistryArtifactSource / RemoteArtifactSource.
-  const latestVersion = [...versions].sort().at(-1);
+  const overallLatest = [...versions].sort().at(-1);
+
+  // RFC-015: channel-aware version resolution.
+  const channelMap =
+    info.channels && typeof info.channels === 'object' && !Array.isArray(info.channels)
+      ? info.channels
+      : {};
+  let latestVersion;
+  if (channel) {
+    if (typeof channelMap[channel] === 'string' && channelMap[channel]) {
+      latestVersion = channelMap[channel];
+    } else if (channel !== 'stable' && typeof channelMap['stable'] === 'string' && channelMap['stable']) {
+      // Requested channel not in index — fall back to stable.
+      latestVersion = channelMap['stable'];
+    } else {
+      latestVersion = overallLatest;
+    }
+  } else {
+    latestVersion = overallLatest;
+  }
+
   if (!latestVersion) {
     throw new Error(
       `OtaUpdater: no versions for '${resolvedBundleId}' in registry index at ${indexUrl}`,
     );
   }
 
-  return {bundleId: resolvedBundleId, latestVersion, rolloutPercent: info.rolloutPercent};
+  return {
+    bundleId: resolvedBundleId,
+    latestVersion,
+    rolloutPercent: info.rolloutPercent,
+    ...(Object.keys(channelMap).length > 0 ? {channels: channelMap} : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -431,6 +487,44 @@ function _computeRolloutBucket(bundleId, deviceId) {
 }
 
 // ---------------------------------------------------------------------------
+// RFC-015: Update channel helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the persisted channel choice from <cacheDir>/channel.json.
+ * Returns 'stable' when the file is absent or contains no valid channel string.
+ *
+ * @param {string} cacheDir
+ * @returns {Promise<string>}
+ */
+async function _getOrCreateChannel(cacheDir) {
+  const channelPath = path.join(cacheDir, 'channel.json');
+  try {
+    const data = JSON.parse(await readFile(channelPath, 'utf8'));
+    if (typeof data.channel === 'string' && data.channel) return data.channel;
+  } catch {
+    // File missing or corrupt — use default.
+  }
+  return 'stable';
+}
+
+/**
+ * Persist the given channel name to <cacheDir>/channel.json.
+ *
+ * @param {string} cacheDir
+ * @param {string} channel
+ */
+async function _persistChannel(cacheDir, channel) {
+  const channelPath = path.join(cacheDir, 'channel.json');
+  await mkdir(cacheDir, {recursive: true});
+  await writeFile(
+    channelPath,
+    JSON.stringify({channel, updatedAt: new Date().toISOString()}, null, 2) + '\n',
+    'utf8',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CLI entry point
 // ---------------------------------------------------------------------------
 
@@ -449,6 +543,7 @@ async function main() {
   const cacheDirArg = _parseArg('cache-dir') ?? DEFAULT_CACHE_DIR;
   const hostBundleDirArg = _parseArg('host-bundle-dir') ?? DEFAULT_HOST_BUNDLE_DIR;
   const deviceIdArg = _parseArg('device-id') ?? undefined;
+  const channelArg = _parseArg('channel') ?? undefined;
 
   if (!['check', 'download', 'apply', 'update', 'rollback'].includes(modeArg)) {
     throw new Error(
@@ -479,6 +574,7 @@ async function main() {
       bundleId: bundleIdArg,
       currentVersion: currentVersionArg,
       deviceId: deviceIdArg,
+      channel: channelArg,
     });
     console.log(JSON.stringify(result));
     return;
@@ -492,6 +588,7 @@ async function main() {
       bundleId: bundleIdArg,
       version: versionArg,
       force: forceFlag,
+      channel: channelArg,
     });
     console.log(JSON.stringify(result));
     return;
@@ -517,6 +614,7 @@ async function main() {
     bundleId: bundleIdArg,
     currentVersion: currentVersionArg,
     deviceId: deviceIdArg,
+    channel: channelArg,
   });
 
   if (!checkResult.hasUpdate) {
