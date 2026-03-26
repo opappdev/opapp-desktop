@@ -12,9 +12,46 @@
 #include "AutolinkedNativeModules.g.h"
 #include "NativeModules.h"
 
+#include <filesystem>
+#include <fstream>
+#include <winrt/Windows.Data.Json.h>
+
 using namespace OpappWindowsHost;
 
 namespace {
+
+// Reads bundle-manifest.json from bundleRoot and returns the entryFile field
+// with the ".bundle" suffix stripped (e.g. "index.windows.bundle" -> "index.windows"),
+// or nullopt if the manifest cannot be read or parsed.
+std::optional<std::wstring> ReadBundleManifestEntryFile(std::wstring const &bundleRoot) noexcept {
+  try {
+    auto manifestPath = std::filesystem::path(bundleRoot) / L"bundle-manifest.json";
+    std::ifstream stream(manifestPath, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+
+    auto jsonObject = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
+    auto entryFileHstr = jsonObject.GetNamedString(L"entryFile");
+    std::wstring entryFile(entryFileHstr.c_str(), entryFileHstr.size());
+
+    constexpr std::wstring_view kBundleSuffix = L".bundle";
+    if (entryFile.size() > kBundleSuffix.size() &&
+        entryFile.substr(entryFile.size() - kBundleSuffix.size()) == kBundleSuffix) {
+      entryFile = entryFile.substr(0, entryFile.size() - kBundleSuffix.size());
+    }
+
+    if (entryFile.empty()) {
+      return std::nullopt;
+    }
+
+    return entryFile;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
 
 void LogRedBoxError(std::string const &phase, winrt::Microsoft::ReactNative::IRedBoxErrorInfo const &info) noexcept {
   AppendLog(phase + ".Message=" + ToUtf8(info.Message()));
@@ -227,8 +264,18 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     settings.PackageProviders().Append(winrt::make<CompReactPackageProvider>());
 
 #if BUNDLE
-    settings.BundleRootPath(std::wstring(appDirectory).append(L"\\Bundle").c_str());
-    settings.JavaScriptBundleFile(L"index.windows");
+    auto bundleRootPath = std::wstring(appDirectory).append(L"\\Bundle");
+    settings.BundleRootPath(bundleRootPath.c_str());
+
+    std::wstring jsBundleFile = L"index.windows";
+    if (auto entryFile = ReadBundleManifestEntryFile(bundleRootPath)) {
+      jsBundleFile = *entryFile;
+      AppendLog("BundleManifestSource=manifest entryFile=" + ToUtf8(jsBundleFile));
+    } else {
+      AppendLog("BundleManifestSource=hardcoded-fallback entryFile=" + ToUtf8(jsBundleFile));
+    }
+
+    settings.JavaScriptBundleFile(jsBundleFile.c_str());
     settings.UseFastRefresh(false);
     AppendLog(
         std::string("Runtime=Bundle root=") + ToUtf8(settings.BundleRootPath()) + " file=" +

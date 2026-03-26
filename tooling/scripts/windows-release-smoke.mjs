@@ -260,6 +260,7 @@ const commonSuccessMarkers = [
   'NativeLogger[1] Running "OpappWindowsHost"',
   '[frontend-companion] render window=window.main surface=companion.main policy=main',
   '[frontend-companion] mounted window=window.main surface=companion.main policy=main',
+  'BundleManifestSource=manifest',
 ];
 
 const defaultPreferences = {
@@ -637,6 +638,7 @@ const failureMarkers = [
   'NativeLogger[3]',
   'SecondaryStartupSurfaceFailed',
   'SecondaryWindowOpenFailed',
+  'BundleManifestSource=hardcoded-fallback',
 ];
 
 function log(message) {
