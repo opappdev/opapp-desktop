@@ -25,6 +25,8 @@ const readinessMarkers = [
 
 const smokeMarkers = [
   '[frontend-challenge-advisor] dev-smoke-start',
+  '[frontend-challenge-advisor] dev-smoke-track-switched track=score-challenge',
+  '[frontend-challenge-advisor] dev-smoke-track-switched track=stellar-wars',
   '[frontend-challenge-advisor] dev-smoke-scrolled-end',
   '[frontend-challenge-advisor] dev-smoke-toggled',
   '[frontend-challenge-advisor] dev-smoke-settings-opened',
