@@ -24,3 +24,6 @@ distribution/artifacts/*
 
 # Local artifact registry (RFC-007)
 .artifact-registry/
+
+# OTA bundle cache (RFC-010)
+.ota-cache/

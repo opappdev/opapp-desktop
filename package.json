@@ -22,6 +22,10 @@
     "verify:windows:portable": "node ./tooling/scripts/verify-windows.mjs --launch=portable",
     "verify:windows:portable:surface-model": "node ./tooling/scripts/verify-windows.mjs --launch=portable --include-secondary-window",
     "smoke:windows:portable": "node ./tooling/scripts/windows-release-smoke.mjs --launch=portable --scenario=tab-session",
-    "smoke:windows:portable:surface-model": "node ./tooling/scripts/windows-release-smoke.mjs --launch=portable --scenario=secondary-window"
+    "smoke:windows:portable:surface-model": "node ./tooling/scripts/windows-release-smoke.mjs --launch=portable --scenario=secondary-window",
+    "ota:check": "node ./tooling/scripts/ota-updater.mjs --mode=check",
+    "ota:download": "node ./tooling/scripts/ota-updater.mjs --mode=download",
+    "ota:apply": "node ./tooling/scripts/ota-updater.mjs --mode=apply",
+    "ota:update": "node ./tooling/scripts/ota-updater.mjs --mode=update"
   }
 }
