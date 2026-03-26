@@ -106,39 +106,17 @@ function parseRect(logContents, prefix) {
   };
 }
 async function assertStagedManifest() {
-  const manifestPath = path.join(hostBundleRoot, 'bundle-manifest.json');
-  let manifest;
+  // Reuse SiblingArtifactSource to validate manifest existence, platform, and
+  // entryFile presence — the same checks that were duplicated here previously.
+  const stagedSource = new SiblingArtifactSource(hostBundleRoot);
+  let manifest, bundlePath;
   try {
-    manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  } catch {
-    throw new Error(
-      `Windows release smoke failed: bundle-manifest.json not found at staged path ${manifestPath}. ` +
-      'Ensure the frontend bundle step completed successfully.',
-    );
+    ({manifest, bundlePath} = await stagedSource.resolve({platform: 'windows'}));
+  } catch (err) {
+    throw new Error(`Windows release smoke failed: ${err.message}`);
   }
 
-  if (manifest.platform !== 'windows') {
-    throw new Error(
-      `Windows release smoke failed: bundle-manifest.json platform is '${manifest.platform}', expected 'windows'.`,
-    );
-  }
-
-  if (!manifest.entryFile) {
-    throw new Error(
-      'Windows release smoke failed: bundle-manifest.json is missing entryFile field.',
-    );
-  }
-
-  const bundlePath = path.join(hostBundleRoot, manifest.entryFile);
-  let bundleFileContent;
-  try {
-    bundleFileContent = await readFile(bundlePath);
-  } catch {
-    throw new Error(
-      `Windows release smoke failed: bundle-manifest.json entryFile '${manifest.entryFile}' not found at ${bundlePath}.`,
-    );
-  }
-
+  const bundleFileContent = await readFile(bundlePath);
   if (!bundleFileContent || bundleFileContent.length === 0) {
     throw new Error(
       `Windows release smoke failed: staged bundle file '${manifest.entryFile}' is empty.`,
