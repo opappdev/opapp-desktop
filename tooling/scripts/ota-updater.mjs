@@ -38,9 +38,13 @@
  *   --force                 Bypass OTA cache; re-download even if already cached.
  *   --cache-dir=<d>         OTA cache directory (default: <repoRoot>/.ota-cache).
  *   --host-bundle-dir=<d>   Override for host bundle directory (apply step).
+ *   --device-id=<id>        Override device ID used for staged rollout bucket
+ *                           (RFC-014); useful for testing. Persisted in
+ *                           <cacheDir>/device-id.json when auto-generated.
  */
 
 import {cp, mkdir, readFile, writeFile} from 'node:fs/promises';
+import {createHash, randomUUID} from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath} from 'node:url';
@@ -97,6 +101,11 @@ export async function readOtaState(cacheDir) {
  * The version comparison uses lexicographic ordering, consistent with
  * LocalRegistryArtifactSource and RemoteArtifactSource (RFC-007 / RFC-008).
  *
+ * When the registry index contains a `rolloutPercent` value < 100 for the
+ * target bundle (RFC-014), a deterministic device-fingerprint bucket check is
+ * performed.  If the device is outside the rollout window, `hasUpdate` is
+ * returned as `false` even when a newer version exists.
+ *
  * @param {object} options
  * @param {string} options.remoteBase - Remote registry base URL.
  * @param {string} options.platform - Target platform identifier.
@@ -104,10 +113,12 @@ export async function readOtaState(cacheDir) {
  * @param {string} [options.bundleId] - Bundle ID; auto-resolved when omitted.
  * @param {string} [options.currentVersion] - Currently active version; read
  *   from ota-state.json when omitted.
- * @returns {Promise<{hasUpdate: boolean, currentVersion: string | null, latestVersion: string, bundleId: string}>}
+ * @param {string} [options.deviceId] - Device ID for rollout bucket computation
+ *   (RFC-014); auto-generated and persisted when omitted.
+ * @returns {Promise<{hasUpdate: boolean, inRollout: boolean, rolloutPercent: number|undefined, deviceId: string, currentVersion: string | null, latestVersion: string, bundleId: string}>}
  */
-export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, currentVersion}) {
-  const {bundleId: resolvedBundleId, latestVersion} = await _fetchRemoteLatest(remoteBase, bundleId);
+export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, currentVersion, deviceId}) {
+  const {bundleId: resolvedBundleId, latestVersion, rolloutPercent} = await _fetchRemoteLatest(remoteBase, bundleId);
 
   let resolvedCurrentVersion = currentVersion ?? null;
   if (!resolvedCurrentVersion) {
@@ -117,11 +128,22 @@ export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, 
     }
   }
 
+  // RFC-014: staged rollout — resolve device ID and compute bucket.
+  const resolvedDeviceId = deviceId ?? await _getOrCreateDeviceId(cacheDir);
+  let inRollout = true;
+  if (typeof rolloutPercent === 'number' && rolloutPercent < 100) {
+    const bucket = _computeRolloutBucket(resolvedBundleId, resolvedDeviceId);
+    inRollout = bucket < rolloutPercent;
+  }
+
   const hasUpdate =
-    !resolvedCurrentVersion || latestVersion > resolvedCurrentVersion;
+    inRollout && (!resolvedCurrentVersion || latestVersion > resolvedCurrentVersion);
 
   return {
     hasUpdate,
+    inRollout,
+    ...(rolloutPercent !== undefined ? {rolloutPercent} : {}),
+    deviceId: resolvedDeviceId,
     currentVersion: resolvedCurrentVersion,
     latestVersion,
     bundleId: resolvedBundleId,
@@ -360,7 +382,52 @@ async function _fetchRemoteLatest(remoteBase, bundleId) {
     );
   }
 
-  return {bundleId: resolvedBundleId, latestVersion};
+  return {bundleId: resolvedBundleId, latestVersion, rolloutPercent: info.rolloutPercent};
+}
+
+// ---------------------------------------------------------------------------
+// RFC-014: Staged rollout helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the persisted device ID from <cacheDir>/device-id.json, or generate
+ * and persist a new UUID v4 if the file does not yet exist.
+ *
+ * @param {string} cacheDir
+ * @returns {Promise<string>}
+ */
+async function _getOrCreateDeviceId(cacheDir) {
+  const deviceIdPath = path.join(cacheDir, 'device-id.json');
+  try {
+    const data = JSON.parse(await readFile(deviceIdPath, 'utf8'));
+    if (typeof data.deviceId === 'string' && data.deviceId) return data.deviceId;
+  } catch {
+    // File missing or corrupt — generate a new one below.
+  }
+  const deviceId = randomUUID();
+  await mkdir(cacheDir, {recursive: true});
+  await writeFile(
+    deviceIdPath,
+    JSON.stringify({deviceId, createdAt: new Date().toISOString()}, null, 2) + '\n',
+    'utf8',
+  );
+  return deviceId;
+}
+
+/**
+ * Compute a deterministic 0–99 rollout bucket for a (bundleId, deviceId) pair.
+ *
+ * Uses the first 4 bytes of SHA-256("<bundleId>:<deviceId>") interpreted as a
+ * big-endian uint32, then takes mod 100.  The same pair always produces the
+ * same bucket, ensuring stable rollout membership as rolloutPercent widens.
+ *
+ * @param {string} bundleId
+ * @param {string} deviceId
+ * @returns {number} Integer in [0, 99].
+ */
+function _computeRolloutBucket(bundleId, deviceId) {
+  const hex = createHash('sha256').update(`${bundleId}:${deviceId}`).digest('hex');
+  return parseInt(hex.slice(0, 8), 16) % 100;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +448,7 @@ async function main() {
   const forceFlag = process.argv.includes('--force');
   const cacheDirArg = _parseArg('cache-dir') ?? DEFAULT_CACHE_DIR;
   const hostBundleDirArg = _parseArg('host-bundle-dir') ?? DEFAULT_HOST_BUNDLE_DIR;
+  const deviceIdArg = _parseArg('device-id') ?? undefined;
 
   if (!['check', 'download', 'apply', 'update', 'rollback'].includes(modeArg)) {
     throw new Error(
@@ -410,6 +478,7 @@ async function main() {
       cacheDir: cacheDirArg,
       bundleId: bundleIdArg,
       currentVersion: currentVersionArg,
+      deviceId: deviceIdArg,
     });
     console.log(JSON.stringify(result));
     return;
@@ -447,6 +516,7 @@ async function main() {
     cacheDir: cacheDirArg,
     bundleId: bundleIdArg,
     currentVersion: currentVersionArg,
+    deviceId: deviceIdArg,
   });
 
   if (!checkResult.hasUpdate) {

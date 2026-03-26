@@ -478,10 +478,24 @@ export async function generateRegistryIndex(registryRoot) {
     } catch {
       versions = [];
     }
-    bundles[bundleId] = {
-      latestVersion: versions.at(-1) ?? null,
-      versions,
-    };
+
+    // RFC-014: read optional rollout.json for staged rollout percentage.
+    let rolloutPercent;
+    try {
+      const rolloutData = JSON.parse(
+        await readFile(path.join(bundleIdDir, 'rollout.json'), 'utf8'),
+      );
+      if (typeof rolloutData.percent === 'number') {
+        const clamped = Math.max(0, Math.min(100, Math.round(rolloutData.percent)));
+        if (clamped < 100) rolloutPercent = clamped;
+      }
+    } catch {
+      // No rollout.json — treat as 100% (full rollout).
+    }
+
+    const entry = {latestVersion: versions.at(-1) ?? null, versions};
+    if (rolloutPercent !== undefined) entry.rolloutPercent = rolloutPercent;
+    bundles[bundleId] = entry;
   }
 
   return {bundles};
