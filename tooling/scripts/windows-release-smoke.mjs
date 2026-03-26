@@ -3,6 +3,7 @@ import {cp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath} from 'node:url';
+import {SiblingArtifactSource} from './artifact-source.mjs';
 
 const scenarioArg = process.argv
   .find(argument => argument.startsWith('--scenario='))
@@ -735,10 +736,18 @@ async function bundleFrontend() {
 async function preparePackagedApp() {
   await bundleFrontend();
 
+  log('resolving artifact from sibling frontend source');
+  const artifactSource = new SiblingArtifactSource(frontendBundleRoot);
+  const {manifest, manifestDir} = await artifactSource.resolve({platform: 'windows'});
+  log(
+    `artifact resolved: bundleId=${manifest.bundleId} version=${manifest.version} ` +
+      `entryFile=${manifest.entryFile} surfaces=${manifest.surfaces?.join(',')}`,
+  );
+
   log('staging frontend bundle into native host project');
   await removeIfPresent(hostBundleRoot);
   await mkdir(hostBundleRoot, {recursive: true});
-  await cp(frontendBundleRoot, hostBundleRoot, {recursive: true, force: true});
+  await cp(manifestDir, hostBundleRoot, {recursive: true, force: true});
 
   const stagedManifestPath = path.join(hostBundleRoot, 'bundle-manifest.json');
   const stagedManifest = JSON.parse(await readFile(stagedManifestPath, 'utf8'));
