@@ -32,6 +32,12 @@
     "ota:prune": "node ./tooling/scripts/registry-pruner.mjs --dir=.ota-cache",
     "watchdog:guard": "node ./tooling/scripts/crash-watchdog.mjs --mode=guard",
     "watchdog:heartbeat": "node ./tooling/scripts/crash-watchdog.mjs --mode=heartbeat",
-    "smoke:ota": "node ./tooling/scripts/ota-smoke.mjs"
+    "smoke:ota": "node ./tooling/scripts/ota-smoke.mjs",
+    "commit:check:infra": "npm run smoke:ota",
+    "registry:rollout:get": "node ./tooling/scripts/registry-ops.mjs rollout --get",
+    "registry:rollout:set": "node ./tooling/scripts/registry-ops.mjs rollout --set",
+    "registry:channel:get": "node ./tooling/scripts/registry-ops.mjs channel --get",
+    "registry:channel:set": "node ./tooling/scripts/registry-ops.mjs channel --set",
+    "registry:channel:unset": "node ./tooling/scripts/registry-ops.mjs channel --unset"
   }
 }
