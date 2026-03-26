@@ -29,6 +29,8 @@
     "ota:update": "node ./tooling/scripts/ota-updater.mjs --mode=update",
     "ota:rollback": "node ./tooling/scripts/ota-updater.mjs --mode=rollback",
     "registry:prune": "node ./tooling/scripts/registry-pruner.mjs",
-    "ota:prune": "node ./tooling/scripts/registry-pruner.mjs --dir=.ota-cache"
+    "ota:prune": "node ./tooling/scripts/registry-pruner.mjs --dir=.ota-cache",
+    "watchdog:guard": "node ./tooling/scripts/crash-watchdog.mjs --mode=guard",
+    "watchdog:heartbeat": "node ./tooling/scripts/crash-watchdog.mjs --mode=heartbeat"
   }
 }

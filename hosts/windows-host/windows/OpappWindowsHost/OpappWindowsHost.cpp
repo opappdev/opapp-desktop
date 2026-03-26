@@ -175,14 +175,16 @@ struct LoggingRedBoxHandler
   winrt::Microsoft::ReactNative::IRedBoxHandler m_innerHandler{nullptr};
 };
 
-// Resolves the ota-updater.mjs script path relative to the exe directory.
+// Resolves a tooling script path relative to the exe directory.
 //
 // The build output directory sits 5 levels below the opapp-desktop repo root:
 //   Release/ → x64/ → windows/ → windows-host/ → hosts/ → opapp-desktop/
 //
 // Returns nullopt if the computed path does not exist on disk, which prevents
 // spawning when the app is deployed without the development toolchain.
-std::optional<std::wstring> ResolveOtaScriptPath(std::wstring const &appDirectory) noexcept {
+std::optional<std::wstring> ResolveToolingScriptPath(
+    std::wstring const &appDirectory,
+    std::wstring const &scriptName) noexcept {
   try {
     auto scriptPath = std::filesystem::path(appDirectory)
                           .parent_path()  // x64/
@@ -190,7 +192,7 @@ std::optional<std::wstring> ResolveOtaScriptPath(std::wstring const &appDirector
                           .parent_path()  // windows-host/
                           .parent_path()  // hosts/
                           .parent_path()  // opapp-desktop/ (repo root)
-                      / L"tooling" / L"scripts" / L"ota-updater.mjs";
+                      / L"tooling" / L"scripts" / scriptName;
     if (std::filesystem::exists(scriptPath)) {
       return scriptPath.wstring();
     }
@@ -198,6 +200,10 @@ std::optional<std::wstring> ResolveOtaScriptPath(std::wstring const &appDirector
   } catch (...) {
     return std::nullopt;
   }
+}
+
+std::optional<std::wstring> ResolveOtaScriptPath(std::wstring const &appDirectory) noexcept {
+  return ResolveToolingScriptPath(appDirectory, L"ota-updater.mjs");
 }
 
 // Spawns `node ota-updater.mjs --mode=update --remote=<remoteUrl> --platform=windows`
@@ -241,6 +247,101 @@ void SpawnOtaUpdateProcess(std::wstring const &appDirectory, std::wstring const 
   }
 }
 
+// Runs `node crash-watchdog.mjs --mode=guard --platform=windows` synchronously,
+// waiting up to 5 seconds for it to exit.
+//
+// Returns the process exit code (0 = proceed normally; 2 = rollback was
+// performed).  Returns 0 on any error or timeout so launch is never blocked
+// by watchdog failures (RFC-013).
+int RunWatchdogGuardSync(std::wstring const &appDirectory) noexcept {
+  AppendLog("Watchdog.Guard.Start");
+
+  auto scriptPath = ResolveToolingScriptPath(appDirectory, L"crash-watchdog.mjs");
+  if (!scriptPath) {
+    AppendLog("Watchdog.Guard.ScriptNotFound appDirectory=" + ToUtf8(appDirectory));
+    return 0;
+  }
+
+  std::wstring cmdLine =
+      std::wstring(L"node.exe \"") + *scriptPath + L"\" --mode=guard --platform=windows";
+
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+  BOOL ok = CreateProcessW(
+      nullptr,
+      cmdLine.data(),
+      nullptr,
+      nullptr,
+      FALSE,
+      CREATE_NO_WINDOW,
+      nullptr,
+      appDirectory.c_str(),
+      &si,
+      &pi);
+
+  if (!ok) {
+    AppendLog("Watchdog.Guard.Failed error=" + std::to_string(GetLastError()));
+    return 0;
+  }
+
+  CloseHandle(pi.hThread);
+
+  // Wait up to 5 seconds; proceed normally on timeout.
+  DWORD waitResult = WaitForSingleObject(pi.hProcess, 5000);
+  int exitCode = 0;
+  if (waitResult == WAIT_OBJECT_0) {
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    exitCode = static_cast<int>(code);
+    AppendLog("Watchdog.Guard.Done exitCode=" + std::to_string(exitCode));
+  } else {
+    AppendLog("Watchdog.Guard.Timeout");
+    TerminateProcess(pi.hProcess, 1);
+  }
+
+  CloseHandle(pi.hProcess);
+  return exitCode;
+}
+
+// Spawns `node crash-watchdog.mjs --mode=heartbeat` as a detached background
+// process.  Called from the InstanceLoaded callback after a successful JS
+// bundle load.  Failure is silently ignored (RFC-013).
+void SpawnWatchdogHeartbeat(std::wstring const &appDirectory) noexcept {
+  AppendLog("Watchdog.Heartbeat.Spawn");
+
+  auto scriptPath = ResolveToolingScriptPath(appDirectory, L"crash-watchdog.mjs");
+  if (!scriptPath) {
+    AppendLog("Watchdog.Heartbeat.ScriptNotFound");
+    return;
+  }
+
+  std::wstring cmdLine = std::wstring(L"node.exe \"") + *scriptPath + L"\" --mode=heartbeat";
+
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+  BOOL ok = CreateProcessW(
+      nullptr,
+      cmdLine.data(),
+      nullptr,
+      nullptr,
+      FALSE,
+      CREATE_NO_WINDOW | DETACHED_PROCESS,
+      nullptr,
+      appDirectory.c_str(),
+      &si,
+      &pi);
+
+  if (ok) {
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    AppendLog("Watchdog.Heartbeat.OK");
+  } else {
+    AppendLog("Watchdog.Heartbeat.Failed error=" + std::to_string(GetLastError()));
+  }
+}
+
 } // namespace
 
 // A PackageProvider containing any turbo modules you define within this app project
@@ -264,6 +365,16 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     WCHAR appDirectory[MAX_PATH];
     GetModuleFileNameW(NULL, appDirectory, MAX_PATH);
     PathCchRemoveFileSpec(appDirectory, MAX_PATH);
+
+    // RFC-013: Run the crash watchdog guard synchronously before loading any
+    // bundle.  If it exits with code 2 a rollback was performed; the current
+    // launch will use the now-restored bundle.  Any failure is silent (0).
+    {
+      auto watchdogExitCode = RunWatchdogGuardSync(std::wstring(appDirectory));
+      if (watchdogExitCode == 2) {
+        AppendLog("Watchdog.RollbackPerformed bundleWillReflectRollback=true");
+      }
+    }
 
 #if BUNDLE
     if (!InitializeWindowPolicyRegistry(appDirectory, true)) {
@@ -293,12 +404,15 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     auto restoredSecondarySurfaces = LoadRestorableSecondarySurfaces(startupSecondarySurface);
     auto startupInitialOpenSurface = GetInitialAutoOpenSurface();
 
+    // Capture the app directory for use in the InstanceLoaded heartbeat callback.
+    std::wstring const appDir(appDirectory);
+
     settings.EnableDefaultCrashHandler(true);
     settings.NativeLogger([](winrt::Microsoft::ReactNative::LogLevel level, winrt::hstring const &message) {
       AppendLog(
           std::string("NativeLogger[") + std::to_string(static_cast<int>(level)) + "] " + ToUtf8(message));
     });
-    settings.InstanceLoaded([settings, startupSecondarySurface, restoredSecondarySurfaces](
+    settings.InstanceLoaded([settings, startupSecondarySurface, restoredSecondarySurfaces, appDir](
                                 auto const &,
                                 winrt::Microsoft::ReactNative::InstanceLoadedEventArgs const &args) {
       AppendLog(std::string("InstanceLoaded failed=") + BoolString(args.Failed()));
@@ -306,6 +420,10 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
       if (args.Failed()) {
         return;
       }
+
+      // RFC-013: JS bundle loaded successfully — send watchdog heartbeat to
+      // reset the crash counter and clear the in-progress marker.
+      SpawnWatchdogHeartbeat(appDir);
 
       if (startupSecondarySurface) {
         if (auto error = QueueManagedWindowOpen(settings.UIDispatcher(), *startupSecondarySurface)) {
