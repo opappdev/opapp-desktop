@@ -9,7 +9,7 @@
  */
 
 import {createHash} from 'node:crypto';
-import {readFile, writeFile, readdir, cp, mkdir} from 'node:fs/promises';
+import {readFile, writeFile, readdir, cp, mkdir, rm} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
 
@@ -487,9 +487,77 @@ export async function generateRegistryIndex(registryRoot) {
   return {bundles};
 }
 
-// ---------------------------------------------------------------------------
-// Module-private helpers
-// ---------------------------------------------------------------------------
+/**
+ * Prune old versions from a local artifact registry directory (RFC-012).
+ *
+ * Keeps the lexicographically latest `keepVersions` versions for each bundle
+ * and removes the rest.  The `previous/` subdirectory created by RFC-011 for
+ * OTA rollback snapshots is always skipped.
+ *
+ * @param {string} registryRoot - Absolute path to the registry root
+ *   (.artifact-registry/ or .ota-cache/).
+ * @param {object} [options]
+ * @param {string} [options.bundleId] - Prune only this bundle; prune all when
+ *   omitted.
+ * @param {number} [options.keepVersions=3] - Number of latest versions to keep
+ *   per bundle.  Pass 0 to remove all versions.
+ * @param {boolean} [options.dryRun=false] - When true, report what would be
+ *   removed without actually deleting anything.
+ * @returns {Promise<Array<{bundleId: string, removedVersions: string[], keptVersions: string[]}>>}
+ */
+export async function pruneLocalRegistry(registryRoot, options = {}) {
+  const {bundleId, keepVersions = 3, dryRun = false} = options;
+
+  let bundleIds;
+  if (bundleId) {
+    bundleIds = [bundleId];
+  } else {
+    let entries;
+    try {
+      entries = await readdir(registryRoot, {withFileTypes: true});
+    } catch {
+      throw new Error(
+        `pruneLocalRegistry: registry root not found or unreadable: ${registryRoot}`,
+      );
+    }
+    bundleIds = entries.filter(e => e.isDirectory()).map(e => e.name);
+  }
+
+  const results = [];
+  for (const bid of bundleIds) {
+    const bundleDir = path.join(registryRoot, bid);
+    let entries;
+    try {
+      entries = await readdir(bundleDir, {withFileTypes: true});
+    } catch {
+      continue;
+    }
+
+    const versionDirs = entries
+      .filter(e => e.isDirectory() && !PRUNE_SKIP_DIRS.includes(e.name))
+      .map(e => e.name)
+      .sort(); // lexicographic ascending — oldest first
+
+    const keep = Math.max(0, keepVersions);
+    const toRemove = versionDirs.slice(0, Math.max(0, versionDirs.length - keep));
+    const toKeep = versionDirs.slice(Math.max(0, versionDirs.length - keep));
+
+    if (!dryRun) {
+      for (const ver of toRemove) {
+        await rm(path.join(bundleDir, ver), {recursive: true, force: true});
+      }
+    }
+
+    results.push({bundleId: bid, removedVersions: toRemove, keptVersions: toKeep});
+  }
+
+  return results;
+}
+
+/** Subdirectory names that are never treated as version directories. */
+const PRUNE_SKIP_DIRS = ['previous'];
+
+
 
 /**
  * Verifies the bundle file integrity against the checksum recorded in the

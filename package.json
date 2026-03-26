@@ -27,6 +27,8 @@
     "ota:download": "node ./tooling/scripts/ota-updater.mjs --mode=download",
     "ota:apply": "node ./tooling/scripts/ota-updater.mjs --mode=apply",
     "ota:update": "node ./tooling/scripts/ota-updater.mjs --mode=update",
-    "ota:rollback": "node ./tooling/scripts/ota-updater.mjs --mode=rollback"
+    "ota:rollback": "node ./tooling/scripts/ota-updater.mjs --mode=rollback",
+    "registry:prune": "node ./tooling/scripts/registry-pruner.mjs",
+    "ota:prune": "node ./tooling/scripts/registry-pruner.mjs --dir=.ota-cache"
   }
 }
