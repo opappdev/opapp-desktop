@@ -46,7 +46,7 @@
  *                           Defaults to the persisted channel choice, or 'stable'.
  */
 
-import {cp, mkdir, readFile, writeFile} from 'node:fs/promises';
+import {cp, mkdir, readFile, rename, rm, writeFile} from 'node:fs/promises';
 import {createHash, randomUUID} from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
@@ -252,13 +252,12 @@ export async function applyOtaUpdate({cacheDir, hostBundleDir, platform, bundleI
 
   const snapshot = await _snapshotCurrentBundle(cacheDir, hostBundleDir, resolvedBundleId, resolvedPlatform);
 
-  await mkdir(hostBundleDir, {recursive: true});
-  await cp(manifestDir, hostBundleDir, {recursive: true, force: true});
-
-  const stagedManifestPath = path.join(hostBundleDir, 'bundle-manifest.json');
-  const stagedManifest = JSON.parse(await readFile(stagedManifestPath, 'utf8'));
-  stagedManifest.sourceKind = 'sibling-staging';
-  await writeFile(stagedManifestPath, JSON.stringify(stagedManifest, null, 2) + '\n', 'utf8');
+  await _replaceDirectoryWithCopy(manifestDir, hostBundleDir, async stagedDir => {
+    const stagedManifestPath = path.join(stagedDir, 'bundle-manifest.json');
+    const stagedManifest = JSON.parse(await readFile(stagedManifestPath, 'utf8'));
+    stagedManifest.sourceKind = 'sibling-staging';
+    await writeFile(stagedManifestPath, JSON.stringify(stagedManifest, null, 2) + '\n', 'utf8');
+  });
 
   const stagedAt = new Date().toISOString();
   await _writeOtaState(cacheDir, {
@@ -311,8 +310,7 @@ export async function rollbackOtaUpdate({cacheDir, hostBundleDir, bundleId, plat
     );
   }
 
-  await mkdir(resolvedHostBundleDir, {recursive: true});
-  await cp(snapshot.snapshotDir, resolvedHostBundleDir, {recursive: true, force: true});
+  await _replaceDirectoryWithCopy(snapshot.snapshotDir, resolvedHostBundleDir);
 
   const rolledBackAt = new Date().toISOString();
   await _writeOtaState(cacheDir, {
@@ -353,9 +351,44 @@ async function _snapshotCurrentBundle(cacheDir, hostBundleDir, bundleId, platfor
   }
   const snapshotDir = path.join(cacheDir, bundleId, 'previous', platform);
   const snapshotAt = new Date().toISOString();
-  await mkdir(snapshotDir, {recursive: true});
-  await cp(hostBundleDir, snapshotDir, {recursive: true, force: true});
+  await _replaceDirectoryWithCopy(hostBundleDir, snapshotDir);
   return {version: currentVersion, snapshotDir, snapshotAt};
+}
+
+/**
+ * Replace the target directory contents with a fresh copy of sourceDir.
+ *
+ * Copies into a sibling temp directory first, optionally mutates the temp copy,
+ * then swaps it into place so stale files never survive across apply / rollback
+ * / snapshot refreshes.
+ *
+ * @param {string} sourceDir
+ * @param {string} targetDir
+ * @param {(tempDir: string) => Promise<void>} [mutateTempDir]
+ */
+async function _replaceDirectoryWithCopy(sourceDir, targetDir, mutateTempDir) {
+  const parentDir = path.dirname(targetDir);
+  const tempDir = path.join(
+    parentDir,
+    `${path.basename(targetDir)}.__ota_tmp__${Date.now()}-${randomUUID()}`,
+  );
+
+  await mkdir(parentDir, {recursive: true});
+
+  try {
+    await rm(tempDir, {recursive: true, force: true});
+    await cp(sourceDir, tempDir, {recursive: true, force: true});
+
+    if (mutateTempDir) {
+      await mutateTempDir(tempDir);
+    }
+
+    await rm(targetDir, {recursive: true, force: true});
+    await rename(tempDir, targetDir);
+  } catch (err) {
+    await rm(tempDir, {recursive: true, force: true}).catch(() => {});
+    throw err;
+  }
 }
 
 async function _writeOtaState(cacheDir, state) {

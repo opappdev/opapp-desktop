@@ -15,6 +15,7 @@
  *   6. rolloutPercent absent (full rollout) → every device inRollout=true
  *   7. Unknown channel falls back to the stable channel entry
  *   8. No channels.json (absent) → RFC-010 backward-compat (overallLatest)
+ *   9. apply / rollback replace directories cleanly without leaving stale files
  *
  * Usage:
  *   node ota-smoke.mjs
@@ -32,7 +33,7 @@ import process from 'node:process';
 import {fileURLToPath} from 'node:url';
 
 import {generateRegistryIndex} from './artifact-source.mjs';
-import {checkForUpdate} from './ota-updater.mjs';
+import {applyOtaUpdate, checkForUpdate, rollbackOtaUpdate} from './ota-updater.mjs';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -97,6 +98,15 @@ async function _createFakeBundle(registryRoot, bundleId, version, platform) {
 async function _writeJson(filePath, data) {
   await mkdir(path.dirname(filePath), {recursive: true});
   await writeFile(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+}
+
+async function _exists(filePath) {
+  try {
+    await readFile(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +363,84 @@ async function main() {
     eq(compatResult.latestVersion, '0.2.0', 'no channels.json → overallLatest (0.2.0)');
     ok(compatResult.inRollout === true, 'no rollout.json → always inRollout=true');
     ok(compatResult.hasUpdate === true, 'backward compat: hasUpdate=true');
+
+    // ── 9. Apply / rollback replace directories cleanly ────────────────────
+    process.stdout.write('\n9. apply / rollback replace directories cleanly\n');
+
+    const applyCacheDir = path.join(tmpBase, 'apply-cache');
+    const hostBundleDir = path.join(tmpBase, 'host-bundle');
+    const v2Dir = path.join(applyCacheDir, BUNDLE_ID, '0.2.0', PLATFORM);
+    const v3Dir = path.join(applyCacheDir, BUNDLE_ID, '0.3.0', PLATFORM);
+
+    await _createFakeBundle(applyCacheDir, BUNDLE_ID, '0.2.0', PLATFORM);
+    await _createFakeBundle(applyCacheDir, BUNDLE_ID, '0.3.0', PLATFORM);
+    await mkdir(hostBundleDir, {recursive: true});
+    await writeFile(
+      path.join(hostBundleDir, 'bundle-manifest.json'),
+      JSON.stringify(
+        {
+          bundleId: BUNDLE_ID,
+          version: '0.1.0',
+          platform: PLATFORM,
+          entryFile: 'bundle.js',
+          sourceKind: 'local-build',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf8',
+    );
+    await writeFile(path.join(hostBundleDir, 'bundle.js'), '// host bundle: 0.1.0\n', 'utf8');
+    await writeFile(path.join(hostBundleDir, 'only-in-v1.txt'), 'v1\n', 'utf8');
+    await writeFile(path.join(v2Dir, 'only-in-v2.txt'), 'v2\n', 'utf8');
+
+    await applyOtaUpdate({
+      cacheDir: applyCacheDir,
+      hostBundleDir,
+      platform: PLATFORM,
+      bundleId: BUNDLE_ID,
+      version: '0.2.0',
+    });
+    ok(
+      !(await _exists(path.join(hostBundleDir, 'only-in-v1.txt'))),
+      'apply removes files that exist only in the previous host bundle',
+    );
+    ok(
+      await _exists(path.join(hostBundleDir, 'only-in-v2.txt')),
+      'apply keeps files that belong to the staged target version',
+    );
+    eq(
+      JSON.parse(await readFile(path.join(hostBundleDir, 'bundle-manifest.json'), 'utf8')).sourceKind,
+      'sibling-staging',
+      'apply rewrites sourceKind on the clean staged copy',
+    );
+
+    await applyOtaUpdate({
+      cacheDir: applyCacheDir,
+      hostBundleDir,
+      platform: PLATFORM,
+      bundleId: BUNDLE_ID,
+      version: '0.3.0',
+    });
+    ok(
+      !(await _exists(path.join(hostBundleDir, 'only-in-v2.txt'))),
+      'second apply removes files that are absent from the newer version',
+    );
+
+    await rollbackOtaUpdate({
+      cacheDir: applyCacheDir,
+      hostBundleDir,
+      bundleId: BUNDLE_ID,
+      platform: PLATFORM,
+    });
+    ok(
+      await _exists(path.join(hostBundleDir, 'only-in-v2.txt')),
+      'rollback restores files from the immediately previous snapshot',
+    );
+    ok(
+      !(await _exists(path.join(hostBundleDir, 'only-in-v1.txt'))),
+      'rollback does not leak files from older snapshots into the restored bundle',
+    );
 
     // ── Summary ───────────────────────────────────────────────────────────
     process.stdout.write(`\n${'─'.repeat(48)}\n`);
