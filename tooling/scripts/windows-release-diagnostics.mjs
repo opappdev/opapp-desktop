@@ -282,6 +282,48 @@ function buildActionHints(classification, probe) {
   return hints;
 }
 
+function formatProbeFailure(name, probe) {
+  const code = probe?.errorCode ?? (probe?.status ?? 'unknown');
+  const detail = truncateOneLine(probe?.errorMessage ?? probe?.stderr ?? '', 160);
+  return `${name} probe failed (${code})${detail ? `: ${detail}` : ''}`;
+}
+
+export function getBlockingReleaseProbeFailure(probe) {
+  if (!probe.cmdExists) {
+    return {
+      code: 'CMD_MISSING',
+      reason: `cmd.exe not found at ${probe.cmdPath}`,
+      classifierHint: `spawnSync ${probe.cmdPath} EPERM`,
+    };
+  }
+
+  if (!probe.cmdProbe.ok) {
+    return {
+      code: probe.cmdProbe.errorCode ?? 'CMD_PROBE_FAILED',
+      reason: formatProbeFailure('cmd', probe.cmdProbe),
+      classifierHint: probe.cmdProbe.errorMessage ?? probe.cmdProbe.stderr ?? probe.cmdProbe.errorCode ?? '',
+    };
+  }
+
+  if (!probe.vswhereExists) {
+    return {
+      code: 'VSWHERE_MISSING',
+      reason: `vswhere.exe not found at ${probe.vswherePath}`,
+      classifierHint: `Unable to find vswhere at ${probe.vswherePath}`,
+    };
+  }
+
+  if (!probe.vswhereProbe.ok) {
+    return {
+      code: probe.vswhereProbe.errorCode ?? 'VSWHERE_PROBE_FAILED',
+      reason: formatProbeFailure('vswhere', probe.vswhereProbe),
+      classifierHint: probe.vswhereProbe.errorMessage ?? probe.vswhereProbe.stderr ?? probe.vswhereProbe.errorCode ?? '',
+    };
+  }
+
+  return null;
+}
+
 export function formatReleaseFailureDiagnostics({
   args,
   classification,

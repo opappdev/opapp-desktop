@@ -8,6 +8,7 @@ import {SiblingArtifactSource} from './artifact-source.mjs';
 import {
   classifyRunWindowsFailure,
   collectReleaseBuildProbe,
+  getBlockingReleaseProbeFailure,
   formatReleaseFailureDiagnostics,
   formatReleaseProbeForLogs,
 } from './windows-release-diagnostics.mjs';
@@ -959,6 +960,27 @@ async function preparePackagedApp() {
   const releaseBuildProbe = collectReleaseBuildProbe();
   for (const line of formatReleaseProbeForLogs(releaseBuildProbe)) {
     log(`release-preflight ${line}`);
+  }
+
+  const preflightBlockingFailure = getBlockingReleaseProbeFailure(releaseBuildProbe);
+  const skipPreflightFailFast = process.env.OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST === '1';
+  if (preflightBlockingFailure && !skipPreflightFailFast) {
+    const classification = classifyRunWindowsFailure(preflightBlockingFailure.classifierHint);
+    throw new Error(
+      formatReleaseFailureDiagnostics({
+        args: [],
+        classification,
+        command: process.execPath,
+        failureSummary: `release preflight blocked execution: ${preflightBlockingFailure.reason}`,
+        probe: releaseBuildProbe,
+        result: {status: null, error: {code: preflightBlockingFailure.code}},
+      }),
+    );
+  }
+  if (preflightBlockingFailure) {
+    log(
+      `release-preflight blocking issue ignored via OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1: ${preflightBlockingFailure.reason}`,
+    );
   }
 
   const releaseArgs = [

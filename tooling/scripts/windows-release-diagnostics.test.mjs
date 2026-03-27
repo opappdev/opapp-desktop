@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   classifyRunWindowsFailure,
+  getBlockingReleaseProbeFailure,
   formatReleaseFailureDiagnostics,
   formatReleaseProbeForLogs,
 } from './windows-release-diagnostics.mjs';
@@ -65,4 +66,28 @@ test('formatReleaseFailureDiagnostics includes classification and actionable hin
   assert(diagnostics.includes('Failure classification: cmd-spawn-eperm'));
   assert(diagnostics.includes('Suggested next actions:'));
   assert(diagnostics.includes('non-sandbox'));
+});
+
+test('getBlockingReleaseProbeFailure reports cmd EPERM as blocking', () => {
+  const blockingFailure = getBlockingReleaseProbeFailure({
+    cmdPath: 'C:\\Windows\\System32\\cmd.exe',
+    cmdExists: true,
+    cmdProbe: {
+      ok: false,
+      status: null,
+      errorCode: 'EPERM',
+      errorMessage: 'spawnSync C:\\WINDOWS\\System32\\cmd.exe EPERM',
+      stderr: '',
+    },
+    minimumVisualStudioVersion: null,
+    visualStudioVersion: null,
+    vswherePath: 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe',
+    vswhereExists: true,
+    vswhereProbe: {ok: true, status: 0},
+    msbuildCandidates: [],
+  });
+
+  assert(blockingFailure);
+  assert.equal(blockingFailure.code, 'EPERM');
+  assert(blockingFailure.reason.includes('cmd probe failed'));
 });
