@@ -53,6 +53,13 @@ function describeHostWaitFailure(result, phase, hostChild) {
   return `Windows dev verify timed out waiting for ${phase}.${spawnModeDetail}`;
 }
 
+function resolveHostCommandOutputPath(hostChild) {
+  const candidatePath = hostChild?.opappOutputCapturePath;
+  return typeof candidatePath === 'string' && candidatePath.length > 0
+    ? candidatePath
+    : hostCommandOutputPath;
+}
+
 async function clearOptionalFile(targetPath) {
   try {
     await unlink(targetPath);
@@ -63,17 +70,21 @@ async function clearOptionalFile(targetPath) {
 
 async function buildHostWaitFailureMessage(result, phase, hostChild, {hostTailLines = 80, commandTailLines = 80} = {}) {
   const hostTail = await readHostLogTail(hostTailLines);
-  const commandTail = await readFileTail(hostCommandOutputPath, commandTailLines);
+  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild);
+  const commandTail = await readFileTail(activeCommandOutputPath, commandTailLines);
   let detail = describeHostWaitFailure(result, phase, hostChild);
   if (hostTail) {
     detail += `\n${hostTail}`;
   }
+  if (hostChild?.opappOutputCaptureRequestedPath && hostChild.opappOutputCaptureRequestedPath !== activeCommandOutputPath) {
+    detail += `\n[host-command-tail remapped ${hostChild.opappOutputCaptureRequestedPath} -> ${activeCommandOutputPath}]`;
+  }
   if (commandTail) {
-    detail += `\n[host-command-tail ${hostCommandOutputPath}]\n${commandTail}`;
+    detail += `\n[host-command-tail ${activeCommandOutputPath}]\n${commandTail}`;
   } else if (hostChild?.opappOutputCaptureFailure) {
-    detail += `\n[host-command-tail unavailable ${hostCommandOutputPath}] ${hostChild.opappOutputCaptureFailure}`;
+    detail += `\n[host-command-tail unavailable ${activeCommandOutputPath}] ${hostChild.opappOutputCaptureFailure}`;
   } else if (hostChild?.opappOutputCaptureMode === 'ignore' && hostChild?.opappOutputCapturePath) {
-    detail += `\n[host-command-tail unavailable ${hostCommandOutputPath}] direct fallback used stdio=ignore`;
+    detail += `\n[host-command-tail unavailable ${activeCommandOutputPath}] direct fallback used stdio=ignore`;
   }
 
   return detail;

@@ -91,7 +91,7 @@ function createDirectChild(
       throw new Error(`missing outputCapturePath for capture-file mode (${command})`);
     }
     fs.mkdirSync(path.dirname(outputCapturePath), {recursive: true});
-    captureFd = fs.openSync(outputCapturePath, 'a');
+    captureFd = fs.openSync(outputCapturePath, 'w');
     stdio = ['ignore', captureFd, captureFd];
   }
 
@@ -125,6 +125,33 @@ function parseCommandTokens(command) {
     .match(/"[^"]*"|[^\s]+/g)
     ?.map(token => token.replace(/^"|"$/g, ''));
   return tokens?.filter(Boolean) ?? [];
+}
+
+export function resolveOutputCaptureCandidates(outputCapturePath, {tmpDir = os.tmpdir()} = {}) {
+  if (!outputCapturePath) {
+    return [];
+  }
+
+  const candidates = [];
+  const seen = new Set();
+  const addCandidate = candidatePath => {
+    if (!candidatePath) {
+      return;
+    }
+    const normalizedPath = path.normalize(candidatePath);
+    const dedupeKey = process.platform === 'win32'
+      ? normalizedPath.toLowerCase()
+      : normalizedPath;
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+    seen.add(dedupeKey);
+    candidates.push(normalizedPath);
+  };
+
+  addCandidate(outputCapturePath);
+  addCandidate(path.join(tmpDir, path.basename(outputCapturePath)));
+  return candidates;
 }
 
 function resolveCorepackScriptPath() {
@@ -214,6 +241,7 @@ async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath 
     }
   }
 
+  const outputCaptureCandidates = resolveOutputCaptureCandidates(outputCapturePath);
   const errors = [];
   for (const attempt of fallbackAttempts) {
     try {
@@ -231,36 +259,51 @@ async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath 
       child.opappOutputCaptureMode = 'pipe';
       if (outputCapturePath) {
         child.opappOutputCapturePath = outputCapturePath;
+        child.opappOutputCaptureRequestedPath = outputCapturePath;
       }
       return child;
     } catch (error) {
       errors.push(`${attempt.command}: ${error instanceof Error ? error.message : String(error)}`);
       if (isRetriableSpawnError(error)) {
-        let captureFileFailure = null;
-        if (outputCapturePath) {
-          try {
-            const child = createDirectChild(attempt.command, attempt.args, {
-              cwd,
-              env,
-              label,
-              stdioMode: 'capture-file',
-              outputCapturePath,
-            });
-            await waitForChildSpawn(child);
-            log(
-              label,
-              `spawn fallback engaged (without cmd.exe, stdio=capture-file): ${attempt.command} ${attempt.args.join(' ')}`.trim(),
-            );
-            child.opappOutputCaptureMode = 'capture-file';
-            child.opappOutputCapturePath = outputCapturePath;
-            return child;
-          } catch (captureError) {
-            captureFileFailure = captureError instanceof Error ? captureError.message : String(captureError);
-            errors.push(`${attempt.command} (stdio=capture-file): ${captureFileFailure}`);
-            log(
-              label,
-              `stdio=capture-file fallback failed for ${attempt.command}: ${captureFileFailure}`,
-            );
+        const captureFileFailures = [];
+        if (outputCaptureCandidates.length > 0) {
+          for (const captureCandidatePath of outputCaptureCandidates) {
+            try {
+              const child = createDirectChild(attempt.command, attempt.args, {
+                cwd,
+                env,
+                label,
+                stdioMode: 'capture-file',
+                outputCapturePath: captureCandidatePath,
+              });
+              await waitForChildSpawn(child);
+              log(
+                label,
+                `spawn fallback engaged (without cmd.exe, stdio=capture-file): ${attempt.command} ${attempt.args.join(' ')}`.trim(),
+              );
+              if (captureCandidatePath !== outputCapturePath) {
+                log(
+                  label,
+                  `capture-file output path fallback: ${outputCapturePath} -> ${captureCandidatePath}`,
+                );
+              }
+              child.opappOutputCaptureMode = 'capture-file';
+              child.opappOutputCapturePath = captureCandidatePath;
+              if (outputCapturePath) {
+                child.opappOutputCaptureRequestedPath = outputCapturePath;
+              }
+              return child;
+            } catch (captureError) {
+              const captureFileFailure = captureError instanceof Error ? captureError.message : String(captureError);
+              captureFileFailures.push(`${captureCandidatePath}: ${captureFileFailure}`);
+              errors.push(
+                `${attempt.command} (stdio=capture-file @ ${captureCandidatePath}): ${captureFileFailure}`,
+              );
+              log(
+                label,
+                `stdio=capture-file fallback failed for ${attempt.command} @ ${captureCandidatePath}: ${captureFileFailure}`,
+              );
+            }
           }
         }
 
@@ -277,11 +320,14 @@ async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath 
             `spawn fallback engaged (without cmd.exe, stdio=ignore): ${attempt.command} ${attempt.args.join(' ')}`.trim(),
           );
           child.opappOutputCaptureMode = 'ignore';
-          if (outputCapturePath) {
-            child.opappOutputCapturePath = outputCapturePath;
+          if (outputCaptureCandidates.length > 0) {
+            child.opappOutputCapturePath = outputCaptureCandidates[0];
           }
-          if (captureFileFailure) {
-            child.opappOutputCaptureFailure = captureFileFailure;
+          if (outputCapturePath) {
+            child.opappOutputCaptureRequestedPath = outputCapturePath;
+          }
+          if (captureFileFailures.length > 0) {
+            child.opappOutputCaptureFailure = captureFileFailures.join(' | ');
           }
           return child;
         } catch (ignoreError) {
