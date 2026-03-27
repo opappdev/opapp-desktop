@@ -5,6 +5,12 @@ import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {SiblingArtifactSource} from './artifact-source.mjs';
+import {
+  classifyRunWindowsFailure,
+  collectReleaseBuildProbe,
+  formatReleaseFailureDiagnostics,
+  formatReleaseProbeForLogs,
+} from './windows-release-diagnostics.mjs';
 
 const scenarioArg = process.argv
   .find(argument => argument.startsWith('--scenario='))
@@ -661,6 +667,14 @@ function runCaptureOrThrow(command, args, options = {}) {
   return (result.stdout ?? '').trim();
 }
 
+function runInherited(command, args, options = {}) {
+  return spawnSync(command, args, {
+    stdio: 'inherit',
+    windowsHide: false,
+    ...options,
+  });
+}
+
 function runCmdOrThrow(args, options = {}) {
   runOrThrow('cmd.exe', ['/d', '/s', '/c', ...args], options);
 }
@@ -942,7 +956,12 @@ async function preparePackagedApp() {
   await assertStagedManifest();
 
   log('building and deploying packaged release app');
-  runOrThrow(process.execPath, [
+  const releaseBuildProbe = collectReleaseBuildProbe();
+  for (const line of formatReleaseProbeForLogs(releaseBuildProbe)) {
+    log(`release-preflight ${line}`);
+  }
+
+  const releaseArgs = [
     cliPath,
     'run-windows',
     '--release',
@@ -950,10 +969,32 @@ async function preparePackagedApp() {
     '--no-launch',
     '--logging',
     '--no-telemetry',
-  ], {
+  ];
+  const releaseResult = runInherited(process.execPath, releaseArgs, {
     cwd: hostRoot,
     env: process.env,
   });
+  if (releaseResult.status !== 0 || releaseResult.error) {
+    const failureSummary = describeSpawnFailure(process.execPath, releaseArgs, releaseResult);
+    const classification = classifyRunWindowsFailure(
+      [
+        failureSummary,
+        releaseResult.error?.message ?? '',
+        releaseBuildProbe.cmdProbe.errorMessage ?? '',
+        releaseBuildProbe.vswhereProbe.errorMessage ?? '',
+      ].join('\n'),
+    );
+    throw new Error(
+      formatReleaseFailureDiagnostics({
+        args: releaseArgs,
+        classification,
+        command: process.execPath,
+        failureSummary,
+        probe: releaseBuildProbe,
+        result: releaseResult,
+      }),
+    );
+  }
 }
 
 function buildLaunchConfig() {
