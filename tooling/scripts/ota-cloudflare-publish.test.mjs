@@ -167,6 +167,7 @@ test('withFileRollback restores sidecar snapshots after failure', async t => {
 
 test('uploadFilesToCloudflare compensates by deleting uploaded keys when upload fails', async () => {
   const calls = [];
+  const compensationEvents = [];
   const executeCommand = async (_command, args) => {
     calls.push(args);
     if (args.includes('put') && args.some(value => String(value).includes('index.json'))) {
@@ -197,6 +198,9 @@ test('uploadFilesToCloudflare compensates by deleting uploaded keys when upload 
       wranglerConfig: null,
       dryRun: false,
       executeCommand,
+      reportCompensationEvent: event => {
+        compensationEvents.push(event);
+      },
     }),
     /simulated index upload failure/,
   );
@@ -209,10 +213,34 @@ test('uploadFilesToCloudflare compensates by deleting uploaded keys when upload 
     ['delete', 'ota-bucket/registry/companion-app/0.2.0/windows/main.hbc'],
     ['delete', 'ota-bucket/registry/companion-app/0.2.0/windows/bundle-manifest.json'],
   ]);
+  assert.deepEqual(compensationEvents, [
+    {
+      phase: 'cleanup-start',
+      uploadError: 'simulated index upload failure',
+      attemptedDeletes: 2,
+    },
+    {
+      phase: 'cleanup-delete',
+      objectKey: 'registry/companion-app/0.2.0/windows/main.hbc',
+      status: 'deleted',
+    },
+    {
+      phase: 'cleanup-delete',
+      objectKey: 'registry/companion-app/0.2.0/windows/bundle-manifest.json',
+      status: 'deleted',
+    },
+    {
+      phase: 'cleanup-summary',
+      attemptedDeletes: 2,
+      cleanedCount: 2,
+      failedCount: 0,
+    },
+  ]);
 });
 
 test('uploadFilesToCloudflare reports cleanup failures when delete compensation fails', async () => {
   const calls = [];
+  const compensationEvents = [];
   const executeCommand = async (_command, args) => {
     calls.push(args);
     if (args[2] === 'put' && args[3] === 'ota-bucket/registry/index.json') {
@@ -242,6 +270,9 @@ test('uploadFilesToCloudflare reports cleanup failures when delete compensation 
       wranglerConfig: null,
       dryRun: false,
       executeCommand,
+      reportCompensationEvent: event => {
+        compensationEvents.push(event);
+      },
     }),
     /upload failed and cleanup was partial/,
   );
@@ -249,10 +280,30 @@ test('uploadFilesToCloudflare reports cleanup failures when delete compensation 
   assert.ok(
     calls.some(args => args[2] === 'delete' && args[3] === 'ota-bucket/registry/companion-app/0.2.0/windows/main.hbc'),
   );
+  assert.deepEqual(compensationEvents, [
+    {
+      phase: 'cleanup-start',
+      uploadError: 'simulated put failure',
+      attemptedDeletes: 1,
+    },
+    {
+      phase: 'cleanup-delete',
+      objectKey: 'registry/companion-app/0.2.0/windows/main.hbc',
+      status: 'failed',
+      message: 'simulated delete failure for ota-bucket/registry/companion-app/0.2.0/windows/main.hbc',
+    },
+    {
+      phase: 'cleanup-summary',
+      attemptedDeletes: 1,
+      cleanedCount: 0,
+      failedCount: 1,
+    },
+  ]);
 });
 
 test('uploadFilesToCloudflare rethrows original upload error when nothing was uploaded', async () => {
   const calls = [];
+  const compensationEvents = [];
   const executeCommand = async (_command, args) => {
     calls.push(args);
     throw new Error('simulated first upload failure');
@@ -272,10 +323,26 @@ test('uploadFilesToCloudflare rethrows original upload error when nothing was up
       wranglerConfig: null,
       dryRun: false,
       executeCommand,
+      reportCompensationEvent: event => {
+        compensationEvents.push(event);
+      },
     }),
     /simulated first upload failure/,
   );
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0][2], 'put');
+  assert.deepEqual(compensationEvents, [
+    {
+      phase: 'cleanup-start',
+      uploadError: 'simulated first upload failure',
+      attemptedDeletes: 0,
+    },
+    {
+      phase: 'cleanup-summary',
+      attemptedDeletes: 0,
+      cleanedCount: 0,
+      failedCount: 0,
+    },
+  ]);
 });

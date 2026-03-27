@@ -332,6 +332,10 @@ function createWranglerArgs({wranglerBin, wranglerConfig, bucket, objectKey, mod
   return wranglerArgs;
 }
 
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function deleteUploadedKeysFromCloudflare({
   uploadedKeys,
   bucket,
@@ -339,6 +343,7 @@ async function deleteUploadedKeysFromCloudflare({
   wranglerConfig,
   dryRun,
   executeCommand,
+  reportCompensationEvent,
 }) {
   const cleanupFailures = [];
   for (const objectKey of [...uploadedKeys].reverse()) {
@@ -351,10 +356,22 @@ async function deleteUploadedKeysFromCloudflare({
         mode: 'delete',
       });
       await executeCommand(wranglerBin, deleteArgs, repoRoot, dryRun);
+      reportCompensationEvent({
+        phase: 'cleanup-delete',
+        objectKey,
+        status: 'deleted',
+      });
     } catch (error) {
+      const message = errorMessage(error);
       cleanupFailures.push({
         objectKey,
-        message: error instanceof Error ? error.message : String(error),
+        message,
+      });
+      reportCompensationEvent({
+        phase: 'cleanup-delete',
+        objectKey,
+        status: 'failed',
+        message,
       });
     }
   }
@@ -369,6 +386,7 @@ export async function uploadFilesToCloudflare({
   wranglerConfig,
   dryRun,
   executeCommand = runCommand,
+  reportCompensationEvent = () => {},
 }) {
   const uploadedKeys = [];
   try {
@@ -386,6 +404,12 @@ export async function uploadFilesToCloudflare({
       uploadedKeys.push(objectKey);
     }
   } catch (uploadError) {
+    const uploadErrorText = errorMessage(uploadError);
+    reportCompensationEvent({
+      phase: 'cleanup-start',
+      uploadError: uploadErrorText,
+      attemptedDeletes: uploadedKeys.length,
+    });
     const cleanupFailures = await deleteUploadedKeysFromCloudflare({
       uploadedKeys,
       bucket,
@@ -393,6 +417,13 @@ export async function uploadFilesToCloudflare({
       wranglerConfig,
       dryRun,
       executeCommand,
+      reportCompensationEvent,
+    });
+    reportCompensationEvent({
+      phase: 'cleanup-summary',
+      attemptedDeletes: uploadedKeys.length,
+      cleanedCount: uploadedKeys.length - cleanupFailures.length,
+      failedCount: cleanupFailures.length,
     });
     if (cleanupFailures.length === 0) {
       throw uploadError;
@@ -402,9 +433,7 @@ export async function uploadFilesToCloudflare({
       .map(failure => `${failure.objectKey}: ${failure.message}`)
       .join('; ');
     throw new Error(
-      `upload failed and cleanup was partial. upload error: ${
-        uploadError instanceof Error ? uploadError.message : String(uploadError)
-      }. cleanup errors: ${cleanupSummary}`,
+      `upload failed and cleanup was partial. upload error: ${uploadErrorText}. cleanup errors: ${cleanupSummary}`,
     );
   }
   return uploadedKeys;
@@ -489,6 +518,15 @@ async function main() {
     },
   ];
 
+  const reportCompensationEvent = event => {
+    console.warn(
+      `[ota-cloudflare-publish] ${JSON.stringify({
+        event: 'upload-compensation',
+        ...event,
+      })}`,
+    );
+  };
+
   const uploadedKeys = skipUpload
     ? uploadFiles.map(file => joinObjectKey(objectPrefix, file.relativeRegistryPath))
     : await uploadFilesToCloudflare({
@@ -498,6 +536,7 @@ async function main() {
         wranglerBin,
         wranglerConfig,
         dryRun,
+        reportCompensationEvent,
       });
 
   console.log(
