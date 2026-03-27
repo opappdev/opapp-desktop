@@ -2,16 +2,23 @@ import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath} from 'node:url';
+import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 
 const includeSecondaryWindowOnly = process.argv.includes('--include-secondary-window');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
 const launchMode = portableFlag ? 'portable' : (launchModeArg === 'portable' ? 'portable' : 'packaged');
+const defaultReadinessTimeoutMs = 25_000;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
 const frontendRoot = path.join(workspaceRoot, 'opapp-frontend');
 const smokeScriptPath = path.join(repoRoot, 'tooling', 'scripts', 'windows-release-smoke.mjs');
+const readinessTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--readiness-ms',
+  defaultReadinessTimeoutMs,
+);
 
 const defaultScenarios = [
   {
@@ -97,7 +104,12 @@ function typecheckFrontend() {
 
 function runWindowsSmoke(scenario) {
   log(`running ${launchMode} Windows smoke: ${scenario.name} (${scenario.description})`);
-  const smokeArgs = [smokeScriptPath, ...scenario.args, `--launch=${launchMode}`];
+  const smokeArgs = [
+    smokeScriptPath,
+    ...scenario.args,
+    `--launch=${launchMode}`,
+    `--readiness-ms=${readinessTimeoutMs}`,
+  ];
   runOrThrow(process.execPath, smokeArgs, {
     cwd: repoRoot,
     env: process.env,
@@ -119,6 +131,7 @@ function main() {
   log(`frontendRoot=${frontendRoot}`);
   log(`includeSecondaryWindowOnly=${includeSecondaryWindowOnly}`);
   log(`launchMode=${launchMode}`);
+  log(`readinessTimeoutMs=${readinessTimeoutMs}`);
 
   typecheckFrontend();
   verifyPackagedScenarios();

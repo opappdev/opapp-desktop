@@ -5,6 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {SiblingArtifactSource} from './artifact-source.mjs';
+import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {
   classifyRunWindowsFailure,
   collectPortableMsbuildFallbackCandidates,
@@ -48,6 +49,12 @@ const packageName = 'OpappWindowsHost';
 const applicationId = 'App';
 const windowPolicyRegistryPath = path.join(frontendRoot, 'contracts', 'windowing', 'src', 'window-policy-registry.json');
 const launchMode = portableFlag ? 'portable' : (launchModeArg === 'portable' ? 'portable' : 'packaged');
+const defaultReadinessTimeoutMs = 25_000;
+const readinessTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--readiness-ms',
+  defaultReadinessTimeoutMs,
+);
 
 let windowPolicyRegistryCache = null;
 
@@ -1224,7 +1231,7 @@ function launchPortableApp() {
 }
 
 async function waitForMarkers() {
-  const deadline = Date.now() + 25_000;
+  const deadline = Date.now() + readinessTimeoutMs;
 
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1261,7 +1268,9 @@ async function waitForMarkers() {
     console.log(tail);
   }
 
-  throw new Error(`Windows release smoke timed out before all success markers appeared for scenario '${scenarioName}'.`);
+  throw new Error(
+    `Windows release smoke timed out before all success markers appeared for scenario '${scenarioName}' within ${readinessTimeoutMs}ms.`,
+  );
 }
 
 async function verifyPersistedSession() {
@@ -1292,6 +1301,7 @@ async function main() {
   log(`scenario=${scenarioName}`);
   log(`scenarioDescription=${scenario.description}`);
   log(`launchMode=${launchMode}`);
+  log(`readinessTimeoutMs=${readinessTimeoutMs}`);
   log(`skipPrepare=${skipPrepare}`);
   log(`resetSessions=${resetSessions}`);
 

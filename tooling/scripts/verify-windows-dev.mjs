@@ -20,6 +20,7 @@ import {
   tempRoot,
   waitForHostLogMarkers,
 } from './windows-dev-common.mjs';
+import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 
 const readinessMarkers = [
   'Runtime=Metro',
@@ -42,24 +43,12 @@ const smokeMarkers = [
 const hostCommandOutputPath = path.join(tempRoot, 'opapp-windows-host.verify-dev.command.log');
 const defaultReadinessTimeoutMs = 120000;
 const defaultSmokeTimeoutMs = 120000;
-
-function parsePositiveIntegerArg(flagName, defaultValue) {
-  const argument = process.argv.find(entry => entry.startsWith(`${flagName}=`));
-  if (!argument) {
-    return defaultValue;
-  }
-
-  const rawValue = argument.slice(flagName.length + 1);
-  const parsedValue = Number(rawValue);
-  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
-    throw new Error(`${flagName} must be a positive number, got "${rawValue}"`);
-  }
-
-  return Math.floor(parsedValue);
-}
-
-const readinessTimeoutMs = parsePositiveIntegerArg('--readiness-ms', defaultReadinessTimeoutMs);
-const smokeTimeoutMs = parsePositiveIntegerArg('--smoke-ms', defaultSmokeTimeoutMs);
+const readinessTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--readiness-ms',
+  defaultReadinessTimeoutMs,
+);
+const smokeTimeoutMs = parsePositiveIntegerArg(process.argv, '--smoke-ms', defaultSmokeTimeoutMs);
 
 function describeHostWaitFailure(result, phase, hostChild, timeoutMs = defaultReadinessTimeoutMs) {
   const spawnModeDetail = hostChild?.opappSpawnMode

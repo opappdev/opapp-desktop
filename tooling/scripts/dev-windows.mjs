@@ -18,6 +18,7 @@ import {
   tempRoot,
   waitForHostLogMarkers,
 } from './windows-dev-common.mjs';
+import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 
 const readinessMarkers = [
   'Runtime=Metro',
@@ -26,23 +27,12 @@ const readinessMarkers = [
 ];
 const hostCommandOutputPath = path.join(tempRoot, 'opapp-windows-host.dev.command.log');
 const defaultReadinessTimeoutMs = 120000;
-
-function parsePositiveIntegerArg(flagName, defaultValue = null) {
-  const argument = process.argv.find(entry => entry.startsWith(`${flagName}=`));
-  if (!argument) {
-    return defaultValue;
-  }
-
-  const rawValue = argument.slice(flagName.length + 1);
-  const parsedValue = Number(rawValue);
-  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
-    throw new Error(`${flagName} must be a positive number, got "${rawValue}"`);
-  }
-  return Math.floor(parsedValue);
-}
-
-const smokeMs = parsePositiveIntegerArg('--smoke-ms', null);
-const readinessTimeoutMs = parsePositiveIntegerArg('--readiness-ms', defaultReadinessTimeoutMs);
+const smokeMs = parsePositiveIntegerArg(process.argv, '--smoke-ms', null);
+const readinessTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--readiness-ms',
+  defaultReadinessTimeoutMs,
+);
 
 let cleanedUp = false;
 let metroChild = null;
