@@ -1,3 +1,5 @@
+import {unlink} from 'node:fs/promises';
+import path from 'node:path';
 import process from 'node:process';
 import {
   clearDevSessions,
@@ -10,10 +12,12 @@ import {
   hostRoot,
   killProcessTree,
   log,
+  readFileTail,
   readHostLogTail,
   spawnCmdAsync,
   writeHostLaunchConfig,
   stopHostProcesses,
+  tempRoot,
   waitForHostLogMarkers,
 } from './windows-dev-common.mjs';
 
@@ -35,6 +39,7 @@ const smokeMarkers = [
   '[frontend-challenge-advisor] dev-smoke-scrolled-top',
   '[frontend-challenge-advisor] dev-smoke-complete',
 ];
+const hostCommandOutputPath = path.join(tempRoot, 'opapp-windows-host.verify-dev.command.log');
 
 function describeHostWaitFailure(result, phase, hostChild) {
   const spawnModeDetail = hostChild?.opappSpawnMode
@@ -48,11 +53,38 @@ function describeHostWaitFailure(result, phase, hostChild) {
   return `Windows dev verify timed out waiting for ${phase}.${spawnModeDetail}`;
 }
 
+async function clearOptionalFile(targetPath) {
+  try {
+    await unlink(targetPath);
+  } catch {
+    // ignore
+  }
+}
+
+async function buildHostWaitFailureMessage(result, phase, hostChild, {hostTailLines = 80, commandTailLines = 80} = {}) {
+  const hostTail = await readHostLogTail(hostTailLines);
+  const commandTail = await readFileTail(hostCommandOutputPath, commandTailLines);
+  let detail = describeHostWaitFailure(result, phase, hostChild);
+  if (hostTail) {
+    detail += `\n${hostTail}`;
+  }
+  if (commandTail) {
+    detail += `\n[host-command-tail ${hostCommandOutputPath}]\n${commandTail}`;
+  } else if (hostChild?.opappOutputCaptureFailure) {
+    detail += `\n[host-command-tail unavailable ${hostCommandOutputPath}] ${hostChild.opappOutputCaptureFailure}`;
+  } else if (hostChild?.opappOutputCaptureMode === 'ignore' && hostChild?.opappOutputCapturePath) {
+    detail += `\n[host-command-tail unavailable ${hostCommandOutputPath}] direct fallback used stdio=ignore`;
+  }
+
+  return detail;
+}
+
 async function main() {
   ensureWorkspaceTemp();
   clearDevSessions();
   clearHostLaunchConfig();
   clearHostLog();
+  await clearOptionalFile(hostCommandOutputPath);
   stopHostProcesses();
   await writeHostLaunchConfig(`[sessions]\npath=${devSessionsPath}\n\n[main-props]\ndev-smoke-scenario=challenge-advisor-basics\n`);
 
@@ -72,6 +104,7 @@ async function main() {
       cwd: hostRoot,
       env: process.env,
       label: 'host',
+      outputCapturePath: hostCommandOutputPath,
     });
     if (hostChild?.opappSpawnMode) {
       log('verify-dev', `Host spawn mode: ${hostChild.opappSpawnMode}`);
@@ -81,17 +114,23 @@ async function main() {
       failFastOnFatalFrontendError: true,
     });
     if (ready.status !== 'matched') {
-      const tail = await readHostLogTail(80);
-      throw new Error(`${describeHostWaitFailure(ready, 'Metro-backed host readiness', hostChild)}\n${tail}`);
+      throw new Error(
+        await buildHostWaitFailureMessage(ready, 'Metro-backed host readiness', hostChild, {
+          hostTailLines: 80,
+          commandTailLines: 120,
+        }),
+      );
     }
 
     const smokeReady = await waitForHostLogMarkers(smokeMarkers, 120000, {
       failFastOnFatalFrontendError: true,
     });
     if (smokeReady.status !== 'matched') {
-      const tail = await readHostLogTail(120);
       throw new Error(
-        `${describeHostWaitFailure(smokeReady, 'challenge-advisor dev smoke completion', hostChild)}\n${tail}`,
+        await buildHostWaitFailureMessage(smokeReady, 'challenge-advisor dev smoke completion', hostChild, {
+          hostTailLines: 120,
+          commandTailLines: 160,
+        }),
       );
     }
 

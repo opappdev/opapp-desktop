@@ -1,3 +1,5 @@
+import {unlink} from 'node:fs/promises';
+import path from 'node:path';
 import process from 'node:process';
 import {
   clearHostLaunchConfig,
@@ -9,9 +11,11 @@ import {
   isMetroReady,
   killProcessTree,
   log,
+  readFileTail,
   readHostLogTail,
   spawnCmdAsync,
   stopHostProcesses,
+  tempRoot,
   waitForHostLogMarkers,
 } from './windows-dev-common.mjs';
 
@@ -20,6 +24,7 @@ const readinessMarkers = [
   'InstanceLoaded failed=false',
   '[frontend-companion] mounted',
 ];
+const hostCommandOutputPath = path.join(tempRoot, 'opapp-windows-host.dev.command.log');
 const smokeMsArg = process.argv.find(argument => argument.startsWith('--smoke-ms='));
 const smokeMs = smokeMsArg ? Number(smokeMsArg.split('=')[1]) : null;
 
@@ -47,18 +52,47 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function describeHostWaitFailure(result, phase) {
+async function clearOptionalFile(targetPath) {
+  try {
+    await unlink(targetPath);
+  } catch {
+    // ignore
+  }
+}
+
+function describeHostWaitFailure(result, phase, hostChild) {
+  const spawnModeDetail = hostChild?.opappSpawnMode
+    ? ` Host spawn mode: ${hostChild.opappSpawnMode}.`
+    : '';
   if (result.status === 'fatal-frontend-error') {
     const detail = `${result.fatalDiagnostic.event}: ${result.fatalDiagnostic.message}`;
-    return `Windows dev host hit a frontend exception while waiting for ${phase}. ${detail}`;
+    return `Windows dev host hit a frontend exception while waiting for ${phase}. ${detail}${spawnModeDetail}`;
   }
 
-  return `Windows dev host did not reach ${phase} within 120s.`;
+  return `Windows dev host did not reach ${phase} within 120s.${spawnModeDetail}`;
+}
+
+async function buildHostWaitFailureMessage(result, phase, hostChild, {hostTailLines = 80, commandTailLines = 120} = {}) {
+  const hostTail = await readHostLogTail(hostTailLines);
+  const commandTail = await readFileTail(hostCommandOutputPath, commandTailLines);
+  let detail = describeHostWaitFailure(result, phase, hostChild);
+  if (hostTail) {
+    detail += `\n${hostTail}`;
+  }
+  if (commandTail) {
+    detail += `\n[host-command-tail ${hostCommandOutputPath}]\n${commandTail}`;
+  } else if (hostChild?.opappOutputCaptureFailure) {
+    detail += `\n[host-command-tail unavailable ${hostCommandOutputPath}] ${hostChild.opappOutputCaptureFailure}`;
+  } else if (hostChild?.opappOutputCaptureMode === 'ignore' && hostChild?.opappOutputCapturePath) {
+    detail += `\n[host-command-tail unavailable ${hostCommandOutputPath}] direct fallback used stdio=ignore`;
+  }
+  return detail;
 }
 
 async function launchHost({label = 'host'} = {}) {
   clearHostLaunchConfig();
   clearHostLog();
+  await clearOptionalFile(hostCommandOutputPath);
   stopHostProcesses();
   if (hostChild?.pid) {
     killProcessTree(hostChild.pid);
@@ -69,14 +103,17 @@ async function launchHost({label = 'host'} = {}) {
     cwd: hostRoot,
     env: process.env,
     label,
+    outputCapturePath: hostCommandOutputPath,
   });
+  if (hostChild?.opappSpawnMode) {
+    log('host', `spawn mode: ${hostChild.opappSpawnMode}`);
+  }
 
   const ready = await waitForHostLogMarkers(readinessMarkers, 120000, {
     failFastOnFatalFrontendError: true,
   });
   if (ready.status !== 'matched') {
-    const tail = await readHostLogTail(80);
-    throw new Error(`${describeHostWaitFailure(ready, 'Metro-backed mounted state')}\n${tail}`);
+    throw new Error(await buildHostWaitFailureMessage(ready, 'Metro-backed mounted state', hostChild));
   }
 
   log('host', 'Windows host reached Metro-backed mounted state');
@@ -106,10 +143,15 @@ async function restartMetroAndHost(reason) {
     log('dev', 'Metro and Windows host restarted successfully.');
   } catch (error) {
     const tail = await readHostLogTail(80);
+    const commandTail = await readFileTail(hostCommandOutputPath, 120);
     cleanup();
     console.error(error instanceof Error ? error.message : String(error));
     if (tail) {
       console.error(tail);
+    }
+    if (commandTail) {
+      console.error(`[host-command-tail ${hostCommandOutputPath}]`);
+      console.error(commandTail);
     }
     process.exit(1);
   } finally {
@@ -178,10 +220,15 @@ async function main() {
 
 main().catch(async error => {
   const tail = await readHostLogTail(80);
+  const commandTail = await readFileTail(hostCommandOutputPath, 120);
   cleanup();
   console.error(error instanceof Error ? error.message : String(error));
   if (tail) {
     console.error(tail);
+  }
+  if (commandTail) {
+    console.error(`[host-command-tail ${hostCommandOutputPath}]`);
+    console.error(commandTail);
   }
   process.exit(1);
 });

@@ -77,21 +77,47 @@ function createCmdChild(command, {cwd, env, label}) {
   return child;
 }
 
-function createDirectChild(command, args, {cwd, env, label, stdioMode = 'pipe'}) {
-  const stdio = stdioMode === 'ignore' ? 'ignore' : ['ignore', 'pipe', 'pipe'];
-  const child = spawn(command, args, {
-    cwd,
-    env,
-    stdio,
-    windowsHide: false,
-  });
-  child.opappSpawnMode = `${command} (stdio=${stdioMode})`;
-
-  if (stdioMode !== 'ignore') {
-    pipeStream(child.stdout, label);
-    pipeStream(child.stderr, label);
+function createDirectChild(
+  command,
+  args,
+  {cwd, env, label, stdioMode = 'pipe', outputCapturePath = null},
+) {
+  let stdio = ['ignore', 'pipe', 'pipe'];
+  let captureFd = null;
+  if (stdioMode === 'ignore') {
+    stdio = 'ignore';
+  } else if (stdioMode === 'capture-file') {
+    if (!outputCapturePath) {
+      throw new Error(`missing outputCapturePath for capture-file mode (${command})`);
+    }
+    fs.mkdirSync(path.dirname(outputCapturePath), {recursive: true});
+    captureFd = fs.openSync(outputCapturePath, 'a');
+    stdio = ['ignore', captureFd, captureFd];
   }
-  return child;
+
+  try {
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      stdio,
+      windowsHide: false,
+    });
+    child.opappSpawnMode = `${command} (stdio=${stdioMode})`;
+
+    if (stdioMode === 'pipe') {
+      pipeStream(child.stdout, label);
+      pipeStream(child.stderr, label);
+    }
+    return child;
+  } finally {
+    if (captureFd !== null) {
+      try {
+        fs.closeSync(captureFd);
+      } catch {
+        // ignore best-effort descriptor cleanup
+      }
+    }
+  }
 }
 
 function parseCommandTokens(command) {
@@ -154,7 +180,7 @@ function isRetriableSpawnError(error) {
   return error?.code === 'EPERM' || message.includes('spawn EPERM');
 }
 
-async function spawnDirectFallback(command, {cwd, env, label}) {
+async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath = null}) {
   const tokens = parseCommandTokens(command);
   if (tokens.length === 0) {
     return null;
@@ -202,10 +228,42 @@ async function spawnDirectFallback(command, {cwd, env, label}) {
         label,
         `spawn fallback engaged (without cmd.exe): ${attempt.command} ${attempt.args.join(' ')}`.trim(),
       );
+      child.opappOutputCaptureMode = 'pipe';
+      if (outputCapturePath) {
+        child.opappOutputCapturePath = outputCapturePath;
+      }
       return child;
     } catch (error) {
       errors.push(`${attempt.command}: ${error instanceof Error ? error.message : String(error)}`);
       if (isRetriableSpawnError(error)) {
+        let captureFileFailure = null;
+        if (outputCapturePath) {
+          try {
+            const child = createDirectChild(attempt.command, attempt.args, {
+              cwd,
+              env,
+              label,
+              stdioMode: 'capture-file',
+              outputCapturePath,
+            });
+            await waitForChildSpawn(child);
+            log(
+              label,
+              `spawn fallback engaged (without cmd.exe, stdio=capture-file): ${attempt.command} ${attempt.args.join(' ')}`.trim(),
+            );
+            child.opappOutputCaptureMode = 'capture-file';
+            child.opappOutputCapturePath = outputCapturePath;
+            return child;
+          } catch (captureError) {
+            captureFileFailure = captureError instanceof Error ? captureError.message : String(captureError);
+            errors.push(`${attempt.command} (stdio=capture-file): ${captureFileFailure}`);
+            log(
+              label,
+              `stdio=capture-file fallback failed for ${attempt.command}: ${captureFileFailure}`,
+            );
+          }
+        }
+
         try {
           const child = createDirectChild(attempt.command, attempt.args, {
             cwd,
@@ -218,6 +276,13 @@ async function spawnDirectFallback(command, {cwd, env, label}) {
             label,
             `spawn fallback engaged (without cmd.exe, stdio=ignore): ${attempt.command} ${attempt.args.join(' ')}`.trim(),
           );
+          child.opappOutputCaptureMode = 'ignore';
+          if (outputCapturePath) {
+            child.opappOutputCapturePath = outputCapturePath;
+          }
+          if (captureFileFailure) {
+            child.opappOutputCaptureFailure = captureFileFailure;
+          }
           return child;
         } catch (ignoreError) {
           errors.push(
@@ -235,7 +300,7 @@ async function spawnDirectFallback(command, {cwd, env, label}) {
 
 export async function spawnCmdAsync(
   command,
-  {cwd, env, label, maxAttempts = 3, retryDelayMs = 1500},
+  {cwd, env, label, maxAttempts = 3, retryDelayMs = 1500, outputCapturePath = null},
 ) {
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -249,7 +314,12 @@ export async function spawnCmdAsync(
         throw error;
       }
       try {
-        const fallbackChild = await spawnDirectFallback(command, {cwd, env, label});
+        const fallbackChild = await spawnDirectFallback(command, {
+          cwd,
+          env,
+          label,
+          outputCapturePath,
+        });
         if (fallbackChild) {
           return fallbackChild;
         }
@@ -576,13 +646,17 @@ export async function waitForHostLogMarkers(
   return outcome;
 }
 
-export async function readHostLogTail(maxLines = 40) {
+export async function readFileTail(filePath, maxLines = 40) {
   try {
-    const content = await fsp.readFile(hostLogPath, 'utf8');
+    const content = await fsp.readFile(filePath, 'utf8');
     return content.split(/\r?\n/).filter(Boolean).slice(-maxLines).join('\n');
   } catch {
     return '';
   }
+}
+
+export async function readHostLogTail(maxLines = 40) {
+  return readFileTail(hostLogPath, maxLines);
 }
 
 
