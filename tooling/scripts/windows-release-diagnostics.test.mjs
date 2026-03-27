@@ -39,11 +39,18 @@ test('formatReleaseProbeForLogs renders concise probe lines', () => {
         exists: true,
       },
     ],
+    localMicrosoftSdkProbe: {
+      path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+      exists: true,
+      accessible: false,
+      errorMessage: 'Access to the path is denied.',
+    },
   });
 
   assert(lines.some(line => line.includes('cmd path=C:\\Windows\\System32\\cmd.exe')));
   assert(lines.some(line => line.includes('vswhere path=')));
   assert(lines.some(line => line.includes('msbuild candidates=1 available=1')));
+  assert(lines.some(line => line.includes('local sdk path=C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs')));
 });
 
 test('formatReleaseProbeForLogs marks msbuild candidates as unknown when vswhere capture is blocked', () => {
@@ -79,6 +86,12 @@ test('formatReleaseFailureDiagnostics includes classification and actionable hin
       vswhereExists: true,
       vswhereProbe: {ok: true, status: 0},
       msbuildCandidates: [],
+      localMicrosoftSdkProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        exists: true,
+        accessible: false,
+        errorMessage: 'Access to the path is denied.',
+      },
     },
     result: {status: 1, error: null},
   });
@@ -86,6 +99,7 @@ test('formatReleaseFailureDiagnostics includes classification and actionable hin
   assert(diagnostics.includes('Failure classification: cmd-spawn-eperm'));
   assert(diagnostics.includes('Suggested next actions:'));
   assert(diagnostics.includes('non-sandbox'));
+  assert(diagnostics.includes('Local Microsoft SDKs path is not readable'));
 });
 
 test('getBlockingReleaseProbeFailure reports cmd EPERM as blocking', () => {

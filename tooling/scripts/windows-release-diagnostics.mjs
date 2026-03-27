@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {existsSync} from 'node:fs';
+import {existsSync, readdirSync} from 'node:fs';
 import path from 'node:path';
 
 function normalizeText(value) {
@@ -112,10 +112,52 @@ function parseVswhereOutput(rawOutput) {
   }
 }
 
+function probePathAccess(pathValue, {
+  exists = existsSync,
+  readDir = readdirSync,
+} = {}) {
+  const targetPath = normalizeText(pathValue);
+  if (!targetPath) {
+    return {
+      path: null,
+      exists: false,
+      accessible: false,
+      errorMessage: null,
+    };
+  }
+
+  if (!exists(targetPath)) {
+    return {
+      path: targetPath,
+      exists: false,
+      accessible: false,
+      errorMessage: null,
+    };
+  }
+
+  try {
+    readDir(targetPath);
+    return {
+      path: targetPath,
+      exists: true,
+      accessible: true,
+      errorMessage: null,
+    };
+  } catch (error) {
+    return {
+      path: targetPath,
+      exists: true,
+      accessible: false,
+      errorMessage: truncateOneLine(error?.message ?? String(error), 160),
+    };
+  }
+}
+
 export function collectReleaseBuildProbe({
   env = process.env,
   spawn = spawnSync,
   exists = existsSync,
+  readDir = readdirSync,
 } = {}) {
   const systemRoot = normalizeText(env.SystemRoot) ?? normalizeText(env.WINDIR) ?? 'C:\\Windows';
   const cmdPath = path.join(systemRoot, 'System32', 'cmd.exe');
@@ -194,6 +236,17 @@ export function collectReleaseBuildProbe({
     };
   });
 
+  const localAppDataPath =
+    normalizeText(env.LOCALAPPDATA) ??
+    (normalizeText(env.USERPROFILE) ? path.join(normalizeText(env.USERPROFILE), 'AppData', 'Local') : null);
+  const localMicrosoftSdkProbe = probePathAccess(
+    localAppDataPath ? path.join(localAppDataPath, 'Microsoft SDKs') : null,
+    {
+      exists,
+      readDir,
+    },
+  );
+
   return {
     cmdPath,
     cmdExists,
@@ -206,6 +259,7 @@ export function collectReleaseBuildProbe({
     vswhereProbe,
     msbuildCandidatesUnknown,
     msbuildCandidates,
+    localMicrosoftSdkProbe,
   };
 }
 
@@ -399,6 +453,13 @@ export function formatReleaseProbeForLogs(probe) {
     `env VisualStudioVersion=${probe.visualStudioVersion ?? '<unset>'} MinimumVisualStudioVersion=${probe.minimumVisualStudioVersion ?? '<unset>'}`,
   ];
 
+  if (probe.localMicrosoftSdkProbe?.path) {
+    lines.push(
+      `local sdk path=${probe.localMicrosoftSdkProbe.path} exists=${toYesNo(probe.localMicrosoftSdkProbe.exists)} ` +
+        `accessible=${toYesNo(probe.localMicrosoftSdkProbe.accessible)}`,
+    );
+  }
+
   if (probe.msbuildCandidatesUnknown) {
     lines.push('msbuild candidates=<unknown (vswhere output capture blocked)>');
     return lines;
@@ -467,6 +528,12 @@ function buildActionHints(classification, probe) {
     hints.push('Direct vswhere probe succeeded but found no installation satisfying `Microsoft.Component.MSBuild`.');
   } else if (!probe.msbuildCandidates.some(candidate => candidate.exists)) {
     hints.push('Visual Studio installs were detected, but expected `MSBuild/Current/Bin/amd64/msbuild.exe` paths are missing.');
+  }
+
+  if (probe.localMicrosoftSdkProbe?.exists && !probe.localMicrosoftSdkProbe.accessible) {
+    hints.push(
+      `Local Microsoft SDKs path is not readable (${probe.localMicrosoftSdkProbe.path}): ${probe.localMicrosoftSdkProbe.errorMessage ?? 'access denied'}.`,
+    );
   }
 
   return hints;
