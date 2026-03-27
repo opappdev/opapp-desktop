@@ -8,6 +8,7 @@ import {
   formatReleaseFailureDiagnostics,
   formatReleaseProbeForLogs,
   getBlockingReleaseProbeFailure,
+  getPortableMsbuildFallbackBlocker,
   refineReleaseFailureClassification,
 } from './windows-release-diagnostics.mjs';
 
@@ -126,6 +127,35 @@ test('getBlockingReleaseProbeFailure reports cmd EPERM as blocking', () => {
   assert(blockingFailure);
   assert.equal(blockingFailure.code, 'EPERM');
   assert(blockingFailure.reason.includes('cmd probe failed'));
+});
+
+test('getPortableMsbuildFallbackBlocker reports unreadable local sdk path', () => {
+  const blocker = getPortableMsbuildFallbackBlocker({
+    localMicrosoftSdkProbe: {
+      path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+      exists: true,
+      accessible: false,
+      errorMessage: 'Access to the path is denied.',
+    },
+  });
+
+  assert.equal(
+    blocker,
+    'local Microsoft SDKs path is not readable (C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs): Access to the path is denied.',
+  );
+});
+
+test('getPortableMsbuildFallbackBlocker returns null when local sdk path is accessible', () => {
+  const blocker = getPortableMsbuildFallbackBlocker({
+    localMicrosoftSdkProbe: {
+      path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+      exists: true,
+      accessible: true,
+      errorMessage: null,
+    },
+  });
+
+  assert.equal(blocker, null);
 });
 
 test('refineReleaseFailureClassification upgrades unknown release failure to cmd-spawn-eperm with blocked capture signal', () => {

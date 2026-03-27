@@ -11,6 +11,7 @@ import {
   collectPortableMsbuildFallbackProfiles,
   collectReleaseBuildProbe,
   getBlockingReleaseProbeFailure,
+  getPortableMsbuildFallbackBlocker,
   formatReleaseFailureDiagnostics,
   formatReleaseProbeForLogs,
   refineReleaseFailureClassification,
@@ -1104,16 +1105,22 @@ async function preparePackagedApp() {
     let fallbackFailureSummary = null;
 
     if (shouldTryPortableMsbuildFallback(classification)) {
-      log(
-        'run-windows --release failed with cmd-spawn-eperm; attempting portable msbuild fallback.',
-      );
-      try {
-        await runPortableMsbuildFallbackOrThrow(releaseBuildProbe);
-        return;
-      } catch (fallbackError) {
-        fallbackFailureSummary =
-          fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-        log(`portable msbuild fallback failed: ${fallbackFailureSummary}`);
+      const portableFallbackBlocker = getPortableMsbuildFallbackBlocker(releaseBuildProbe);
+      if (portableFallbackBlocker) {
+        fallbackFailureSummary = `skipped: ${portableFallbackBlocker}`;
+        log(`portable msbuild fallback skipped: ${portableFallbackBlocker}`);
+      } else {
+        log(
+          'run-windows --release failed with cmd-spawn-eperm; attempting portable msbuild fallback.',
+        );
+        try {
+          await runPortableMsbuildFallbackOrThrow(releaseBuildProbe);
+          return;
+        } catch (fallbackError) {
+          fallbackFailureSummary =
+            fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          log(`portable msbuild fallback failed: ${fallbackFailureSummary}`);
+        }
       }
     }
 

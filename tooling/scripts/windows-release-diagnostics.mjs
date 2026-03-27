@@ -581,6 +581,17 @@ export function getBlockingReleaseProbeFailure(probe) {
   return null;
 }
 
+export function getPortableMsbuildFallbackBlocker(probe) {
+  if (probe.localMicrosoftSdkProbe?.exists && !probe.localMicrosoftSdkProbe.accessible) {
+    return (
+      `local Microsoft SDKs path is not readable (${probe.localMicrosoftSdkProbe.path}): ` +
+      `${probe.localMicrosoftSdkProbe.errorMessage ?? 'access denied'}`
+    );
+  }
+
+  return null;
+}
+
 export function formatReleaseFailureDiagnostics({
   args,
   classification,
