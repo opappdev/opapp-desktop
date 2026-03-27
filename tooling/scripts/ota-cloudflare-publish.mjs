@@ -174,21 +174,63 @@ async function writeJsonFile(filePath, value) {
   await writeFile(filePath, JSON.stringify(value, null, 2) + '\n', 'utf8');
 }
 
-async function upsertBundleSidecars(registryRoot, bundleId, channel, version, rolloutPercent) {
+async function readFileSnapshot(filePath) {
+  try {
+    return {
+      exists: true,
+      content: await readFile(filePath, 'utf8'),
+    };
+  } catch {
+    return {
+      exists: false,
+      content: null,
+    };
+  }
+}
+
+async function restoreFileSnapshot(filePath, snapshot) {
+  if (snapshot.exists) {
+    await mkdir(path.dirname(filePath), {recursive: true});
+    await writeFile(filePath, snapshot.content ?? '', 'utf8');
+    return;
+  }
+  await rm(filePath, {force: true, recursive: true});
+}
+
+export async function withFileRollback(filePaths, callback) {
+  const uniquePaths = [...new Set(filePaths.map(filePath => path.resolve(filePath)))];
+  const snapshots = new Map();
+  for (const filePath of uniquePaths) {
+    snapshots.set(filePath, await readFileSnapshot(filePath));
+  }
+
+  try {
+    return await callback();
+  } catch (error) {
+    for (const filePath of uniquePaths) {
+      await restoreFileSnapshot(filePath, snapshots.get(filePath));
+    }
+    throw error;
+  }
+}
+
+export async function upsertBundleSidecars(registryRoot, bundleId, channel, version, rolloutPercent) {
   const bundleRoot = path.join(registryRoot, bundleId);
   await mkdir(bundleRoot, {recursive: true});
 
   const channelsPath = path.join(bundleRoot, 'channels.json');
-  const currentChannels = asObject(await readJsonIfExists(channelsPath));
-  currentChannels[channel] = version;
-  await writeJsonFile(channelsPath, currentChannels);
-
   const rolloutPath = path.join(bundleRoot, 'rollout.json');
-  if (rolloutPercent >= 100) {
-    await rm(rolloutPath, {force: true});
-  } else {
-    await writeJsonFile(rolloutPath, {percent: rolloutPercent, updatedAt: new Date().toISOString()});
-  }
+  await withFileRollback([channelsPath, rolloutPath], async () => {
+    const currentChannels = asObject(await readJsonIfExists(channelsPath));
+    currentChannels[channel] = version;
+    await writeJsonFile(channelsPath, currentChannels);
+
+    if (rolloutPercent >= 100) {
+      await rm(rolloutPath, {force: true, recursive: true});
+    } else {
+      await writeJsonFile(rolloutPath, {percent: rolloutPercent, updatedAt: new Date().toISOString()});
+    }
+  });
 }
 
 async function ensureRegistryArtifact(registryRoot, bundleId, version, platform) {
