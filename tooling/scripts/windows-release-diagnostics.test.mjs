@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   classifyRunWindowsFailure,
+  collectReleaseBuildProbe,
   collectPortableMsbuildFallbackCandidates,
   collectPortableMsbuildFallbackProfiles,
   formatReleaseFailureDiagnostics,
@@ -51,6 +52,7 @@ test('formatReleaseProbeForLogs renders concise probe lines', () => {
   assert(lines.some(line => line.includes('vswhere path=')));
   assert(lines.some(line => line.includes('msbuild candidates=1 available=1')));
   assert(lines.some(line => line.includes('local sdk path=C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs')));
+  assert(lines.some(line => line.includes('accessible=no')));
 });
 
 test('formatReleaseProbeForLogs marks msbuild candidates as unknown when vswhere capture is blocked', () => {
@@ -215,4 +217,47 @@ test('collectPortableMsbuildFallbackProfiles allows disabling no-restore retry v
     profiles.map(profile => profile.id),
     ['restore-build'],
   );
+});
+
+test('collectReleaseBuildProbe marks local sdk path inaccessible when directory enumeration fails', () => {
+  const probe = collectReleaseBuildProbe({
+    env: {
+      SystemRoot: 'C:\\Windows',
+      ProgramFiles: 'C:\\Program Files',
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+      LOCALAPPDATA: 'C:\\Users\\ArrayZoneYour\\AppData\\Local',
+    },
+    spawn: (command, _args, options) => {
+      const normalized = String(command).toLowerCase();
+      if (normalized.endsWith('cmd.exe')) {
+        return {status: 0, error: null, stdout: '', stderr: ''};
+      }
+      if (normalized.endsWith('vswhere.exe')) {
+        if (Array.isArray(options?.stdio) && options.stdio[1] === 'pipe') {
+          return {status: null, error: {code: 'EPERM', message: 'capture blocked'}, stdout: '', stderr: ''};
+        }
+        return {status: 0, error: null, stdout: '', stderr: ''};
+      }
+      return {status: 0, error: null, stdout: '', stderr: ''};
+    },
+    exists: targetPath => {
+      const normalized = String(targetPath).toLowerCase();
+      return (
+        normalized.endsWith('cmd.exe') ||
+        normalized.endsWith('vswhere.exe') ||
+        normalized.includes('microsoft sdks')
+      );
+    },
+    readDir: () => {
+      throw new Error('Access is denied.');
+    },
+  });
+
+  assert.equal(
+    probe.localMicrosoftSdkProbe.path,
+    'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+  );
+  assert.equal(probe.localMicrosoftSdkProbe.exists, true);
+  assert.equal(probe.localMicrosoftSdkProbe.accessible, false);
+  assert(probe.localMicrosoftSdkProbe.errorMessage.includes('Access is denied'));
 });
