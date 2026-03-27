@@ -998,7 +998,7 @@ async function preparePackagedApp() {
   });
   if (releaseResult.status !== 0 || releaseResult.error) {
     const failureSummary = describeSpawnFailure(process.execPath, releaseArgs, releaseResult);
-    const classification = classifyRunWindowsFailure(
+    let classification = classifyRunWindowsFailure(
       [
         failureSummary,
         releaseResult.error?.message ?? '',
@@ -1006,6 +1006,9 @@ async function preparePackagedApp() {
         releaseBuildProbe.vswhereProbe.errorMessage ?? '',
       ].join('\n'),
     );
+    if (classification.code === 'unknown' && releaseResult.status === 4294967295) {
+      classification = classifyRunWindowsFailure('spawnSync process EPERM');
+    }
     throw new Error(
       formatReleaseFailureDiagnostics({
         args: releaseArgs,

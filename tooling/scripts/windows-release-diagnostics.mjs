@@ -29,6 +29,9 @@ function probeStatusSummary(probe) {
 
   const status = probe.status ?? 'null';
   if (probe.ok) {
+    if (probe.captureBlocked) {
+      return `ok(status=${status}, capture=blocked)`;
+    }
     return `ok(status=${status})`;
   }
 
@@ -47,20 +50,56 @@ function toYesNo(value) {
   return value ? 'yes' : 'no';
 }
 
-function runProbe(spawn, command, args) {
-  const result = spawn(command, args, {
+function runProbe(spawn, command, args, {captureOutput = false} = {}) {
+  const captureOptions = {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
+    windowsHide: false,
+  };
+  const basicOptions = {
+    stdio: 'ignore',
+    windowsHide: false,
+  };
+
+  if (!captureOutput) {
+    const result = spawn(command, args, basicOptions);
+    return {
+      ok: result.status === 0 && !result.error,
+      status: result.status,
+      errorCode: result.error?.code ?? null,
+      errorMessage: result.error?.message ?? null,
+      stdout: '',
+      stderr: '',
+      captureBlocked: false,
+    };
+  }
+
+  const captureResult = spawn(command, args, captureOptions);
+  if (captureResult.error?.code === 'EPERM') {
+    const fallbackResult = spawn(command, args, basicOptions);
+    return {
+      ok: fallbackResult.status === 0 && !fallbackResult.error,
+      status: fallbackResult.status,
+      errorCode: fallbackResult.error?.code ?? null,
+      errorMessage:
+        fallbackResult.error?.message ??
+        (fallbackResult.status === 0
+          ? 'Output capture blocked by environment; fallback probe without pipe succeeded.'
+          : captureResult.error.message),
+      stdout: '',
+      stderr: '',
+      captureBlocked: true,
+    };
+  }
 
   return {
-    ok: result.status === 0 && !result.error,
-    status: result.status,
-    errorCode: result.error?.code ?? null,
-    errorMessage: result.error?.message ?? null,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+    ok: captureResult.status === 0 && !captureResult.error,
+    status: captureResult.status,
+    errorCode: captureResult.error?.code ?? null,
+    errorMessage: captureResult.error?.message ?? null,
+    stdout: captureResult.stdout ?? '',
+    stderr: captureResult.stderr ?? '',
+    captureBlocked: false,
   };
 }
 
@@ -86,7 +125,7 @@ export function collectReleaseBuildProbe({
 
   const cmdExists = exists(cmdPath);
   const cmdProbe = cmdExists
-    ? runProbe(spawn, cmdPath, ['/d', '/s', '/c', 'echo', 'opapp-cmd-probe'])
+    ? runProbe(spawn, cmdPath, ['/c', 'ver'])
     : {
         ok: false,
         status: null,
@@ -94,20 +133,26 @@ export function collectReleaseBuildProbe({
         errorMessage: `cmd.exe not found at ${cmdPath}`,
         stdout: '',
         stderr: '',
+        captureBlocked: false,
       };
 
   const vswhereExists = exists(vswherePath);
   let vswhereProbe = vswhereExists
-    ? runProbe(spawn, vswherePath, [
-        '-products',
-        '*',
-        '-requires',
-        'Microsoft.Component.MSBuild',
-        '-latest',
-        '-format',
-        'json',
-        '-utf8',
-      ])
+    ? runProbe(
+        spawn,
+        vswherePath,
+        [
+          '-products',
+          '*',
+          '-requires',
+          'Microsoft.Component.MSBuild',
+          '-latest',
+          '-format',
+          'json',
+          '-utf8',
+        ],
+        {captureOutput: true},
+      )
     : {
         ok: false,
         status: null,
@@ -115,20 +160,25 @@ export function collectReleaseBuildProbe({
         errorMessage: `vswhere.exe not found at ${vswherePath}`,
         stdout: '',
         stderr: '',
+        captureBlocked: false,
       };
 
   let vswhereInstalls = [];
   if (vswhereProbe.ok) {
-    const parsed = parseVswhereOutput(vswhereProbe.stdout);
-    if (parsed) {
-      vswhereInstalls = parsed;
+    if (vswhereProbe.captureBlocked) {
+      vswhereInstalls = [];
     } else {
-      vswhereProbe = {
-        ...vswhereProbe,
-        ok: false,
-        errorCode: 'PARSE_ERROR',
-        errorMessage: 'vswhere returned non-JSON output',
-      };
+      const parsed = parseVswhereOutput(vswhereProbe.stdout);
+      if (parsed) {
+        vswhereInstalls = parsed;
+      } else {
+        vswhereProbe = {
+          ...vswhereProbe,
+          ok: false,
+          errorCode: 'PARSE_ERROR',
+          errorMessage: 'vswhere returned non-JSON output',
+        };
+      }
     }
   }
 
@@ -273,6 +323,8 @@ function buildActionHints(classification, probe) {
     hints.push(
       `Direct vswhere probe failed (${probe.vswhereProbe.errorCode ?? probe.vswhereProbe.status ?? 'unknown'}): ${truncateOneLine(probe.vswhereProbe.errorMessage ?? probe.vswhereProbe.stderr, 160)}`,
     );
+  } else if (probe.vswhereProbe.captureBlocked) {
+    hints.push('Direct vswhere command succeeded, but structured output capture is blocked in this environment.');
   } else if (probe.msbuildCandidates.length === 0) {
     hints.push('Direct vswhere probe succeeded but found no installation satisfying `Microsoft.Component.MSBuild`.');
   } else if (!probe.msbuildCandidates.some(candidate => candidate.exists)) {
