@@ -660,10 +660,30 @@ function getFatalFrontendDiagnostic(content) {
   return null;
 }
 
+export function classifyDeterministicCommandFailure(outputText) {
+  const normalizedOutput = String(outputText ?? '');
+  const hasSpawnMarker = /\bspawn(?:Sync)?\b/i.test(normalizedOutput);
+  if (!hasSpawnMarker) {
+    return null;
+  }
+
+  const hasCmdAndEperm =
+    /\bcmd(?:\.exe)?\b[^\r\n]*\bEPERM\b/i.test(normalizedOutput) ||
+    /\bEPERM\b[^\r\n]*\bcmd(?:\.exe)?\b/i.test(normalizedOutput);
+  if (!hasCmdAndEperm) {
+    return null;
+  }
+
+  return {
+    code: 'cmd-spawn-eperm',
+    summary: 'nested cmd spawn rejected (EPERM)',
+  };
+}
+
 export async function waitForHostLogMarkers(
   markers,
   timeoutMs = 60000,
-  {failFastOnFatalFrontendError = false} = {},
+  {failFastOnFatalFrontendError = false, failFastCheck = null} = {},
 ) {
   let outcome = {status: 'timeout'};
 
@@ -684,6 +704,18 @@ export async function waitForHostLogMarkers(
       }
     } catch {
       // ignore transient log-read failures while the host is still starting
+    }
+
+    if (typeof failFastCheck === 'function') {
+      try {
+        const externalFailure = await failFastCheck();
+        if (externalFailure) {
+          outcome = {status: 'external-failure', externalFailure};
+          return true;
+        }
+      } catch {
+        // ignore transient fail-fast checker errors
+      }
     }
 
     return false;

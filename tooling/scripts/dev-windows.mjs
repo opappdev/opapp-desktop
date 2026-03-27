@@ -2,6 +2,7 @@ import {unlink} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {
+  classifyDeterministicCommandFailure,
   clearHostLaunchConfig,
   clearHostLog,
   describeMetroOutcome,
@@ -70,6 +71,19 @@ function describeHostWaitFailure(result, phase, hostChild, timeoutMs = defaultRe
   const spawnModeDetail = hostChild?.opappSpawnMode
     ? ` Host spawn mode: ${hostChild.opappSpawnMode}.`
     : '';
+  if (result.status === 'external-failure') {
+    const code = result.externalFailure?.code ?? 'unknown';
+    const summary = result.externalFailure?.summary ?? 'external fail-fast trigger';
+    const commandOutputPath = result.externalFailure?.commandOutputPath
+      ? ` command log=${result.externalFailure.commandOutputPath}.`
+      : '';
+    return (
+      `Windows dev host detected deterministic command failure while waiting for ${phase}: ` +
+      `${code} (${summary}). Aborting early instead of waiting ${timeoutMs}ms.` +
+      `${spawnModeDetail}${commandOutputPath}`
+    );
+  }
+
   if (result.status === 'fatal-frontend-error') {
     const detail = `${result.fatalDiagnostic.event}: ${result.fatalDiagnostic.message}`;
     return `Windows dev host hit a frontend exception while waiting for ${phase}. ${detail}${spawnModeDetail}`;
@@ -83,6 +97,20 @@ function resolveHostCommandOutputPath(hostChild) {
   return typeof candidatePath === 'string' && candidatePath.length > 0
     ? candidatePath
     : hostCommandOutputPath;
+}
+
+async function detectDeterministicCommandFailure(hostChild) {
+  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild);
+  const commandTail = await readFileTail(activeCommandOutputPath, 80);
+  const classification = classifyDeterministicCommandFailure(commandTail);
+  if (!classification) {
+    return null;
+  }
+
+  return {
+    ...classification,
+    commandOutputPath: activeCommandOutputPath,
+  };
 }
 
 async function buildHostWaitFailureMessage(
@@ -133,6 +161,7 @@ async function launchHost({label = 'host'} = {}) {
 
   const ready = await waitForHostLogMarkers(readinessMarkers, readinessTimeoutMs, {
     failFastOnFatalFrontendError: true,
+    failFastCheck: () => detectDeterministicCommandFailure(hostChild),
   });
   if (ready.status !== 'matched') {
     throw new Error(
