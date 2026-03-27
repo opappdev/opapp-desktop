@@ -7,6 +7,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {SiblingArtifactSource} from './artifact-source.mjs';
 import {
   classifyRunWindowsFailure,
+  collectPortableMsbuildFallbackCandidates,
   collectReleaseBuildProbe,
   getBlockingReleaseProbeFailure,
   formatReleaseFailureDiagnostics,
@@ -33,6 +34,8 @@ const hostRoot = path.join(repoRoot, 'hosts', 'windows-host');
 const hostBundleRoot = path.join(hostRoot, 'windows', 'OpappWindowsHost', 'Bundle');
 const portableReleaseRoot = path.join(hostRoot, 'windows', 'x64', 'Release');
 const portableExePath = path.join(portableReleaseRoot, 'OpappWindowsHost.exe');
+const windowsSolutionRoot = path.join(hostRoot, 'windows');
+const windowsSolutionPath = path.join(windowsSolutionRoot, 'OpappWindowsHost.sln');
 const tempRoot = process.env.TEMP || process.env.TMP || path.join(workspaceRoot, '.tmp');
 const logPath = path.join(tempRoot, 'opapp-windows-host.log');
 const launchConfigPath = path.join(tempRoot, 'opapp-windows-host.launch.ini');
@@ -957,6 +960,70 @@ async function bundleFrontend() {
   });
 }
 
+function shouldTryPortableMsbuildFallback(classification) {
+  return (
+    launchMode === 'portable' &&
+    classification.code === 'cmd-spawn-eperm' &&
+    process.env.OPAPP_WINDOWS_RELEASE_ENABLE_MSBUILD_FALLBACK !== '0'
+  );
+}
+
+function describeMsbuildFailure(msbuildPath, result) {
+  const status = result.status ?? 'null';
+  const code = result.error?.code;
+  const message = result.error?.message;
+  return `${msbuildPath} failed (status=${status}${code ? `, code=${code}` : ''}${message ? `, message=${message}` : ''})`;
+}
+
+async function runPortableMsbuildFallbackOrThrow(releaseBuildProbe) {
+  if (!existsSync(windowsSolutionPath)) {
+    throw new Error(`portable msbuild fallback unavailable: missing solution at ${windowsSolutionPath}`);
+  }
+
+  const msbuildCandidates = collectPortableMsbuildFallbackCandidates({
+    probe: releaseBuildProbe,
+  });
+  if (msbuildCandidates.length === 0) {
+    throw new Error(
+      'portable msbuild fallback unavailable: no accessible msbuild.exe candidate discovered ' +
+        '(set OPAPP_WINDOWS_MSBUILD_PATH to override)',
+    );
+  }
+
+  const msbuildArgs = [
+    windowsSolutionPath,
+    '/restore',
+    '/t:Build',
+    '/p:Configuration=Release',
+    '/p:Platform=x64',
+    '/p:AppxBundle=Never',
+    '/p:UapAppxPackageBuildMode=SideLoadOnly',
+    '/m',
+  ];
+  const failures = [];
+
+  for (const msbuildPath of msbuildCandidates) {
+    log(`portable-fallback trying msbuild candidate: ${msbuildPath}`);
+    const result = runInherited(msbuildPath, msbuildArgs, {
+      cwd: windowsSolutionRoot,
+      env: process.env,
+    });
+    if (result.status === 0 && !result.error) {
+      if (!(await fileExists(portableExePath))) {
+        throw new Error(
+          `portable msbuild fallback built successfully with ${msbuildPath} but did not produce ${portableExePath}`,
+        );
+      }
+      log(`portable-fallback build succeeded via ${msbuildPath}`);
+      return;
+    }
+
+    failures.push(describeMsbuildFailure(msbuildPath, result));
+  }
+
+  throw new Error(`portable msbuild fallback failed: ${failures.join('; ')}`);
+}
+
 async function preparePackagedApp() {
   await bundleFrontend();
 
@@ -1037,12 +1104,31 @@ async function preparePackagedApp() {
       probe: releaseBuildProbe,
       result: releaseResult,
     });
+    let fallbackFailureSummary = null;
+
+    if (shouldTryPortableMsbuildFallback(classification)) {
+      log(
+        'run-windows --release failed with cmd-spawn-eperm; attempting portable msbuild fallback.',
+      );
+      try {
+        await runPortableMsbuildFallbackOrThrow(releaseBuildProbe);
+        return;
+      } catch (fallbackError) {
+        fallbackFailureSummary =
+          fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        log(`portable msbuild fallback failed: ${fallbackFailureSummary}`);
+      }
+    }
+
+    const failureSummaryWithFallback = fallbackFailureSummary
+      ? `${failureSummary}; portable msbuild fallback: ${fallbackFailureSummary}`
+      : failureSummary;
     throw new Error(
       formatReleaseFailureDiagnostics({
         args: releaseArgs,
         classification,
         command: process.execPath,
-        failureSummary,
+        failureSummary: failureSummaryWithFallback,
         probe: releaseBuildProbe,
         result: releaseResult,
       }),

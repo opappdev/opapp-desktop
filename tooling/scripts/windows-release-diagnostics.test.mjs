@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   classifyRunWindowsFailure,
+  collectPortableMsbuildFallbackCandidates,
   formatReleaseFailureDiagnostics,
   formatReleaseProbeForLogs,
   getBlockingReleaseProbeFailure,
@@ -136,4 +137,47 @@ test('refineReleaseFailureClassification falls back to process-spawn-eperm witho
   });
 
   assert.equal(classification.code, 'process-spawn-eperm');
+});
+
+test('collectPortableMsbuildFallbackCandidates prioritizes env override and deduplicates probe matches', () => {
+  const existingPaths = new Set([
+    'D:\\Tooling\\msbuild.exe',
+    'C:\\VS\\MSBuild\\Current\\Bin\\amd64\\msbuild.exe',
+  ]);
+  const candidates = collectPortableMsbuildFallbackCandidates({
+    env: {
+      OPAPP_WINDOWS_MSBUILD_PATH: 'D:\\Tooling\\msbuild.exe',
+      ProgramFiles: 'C:\\Program Files',
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+    },
+    exists: candidatePath => existingPaths.has(candidatePath),
+    probe: {
+      msbuildCandidates: [
+        {exists: true, msbuildPath: 'C:\\VS\\MSBuild\\Current\\Bin\\amd64\\msbuild.exe'},
+        {exists: true, msbuildPath: 'C:\\VS\\MSBuild\\Current\\Bin\\amd64\\msbuild.exe'},
+        {exists: false, msbuildPath: 'C:\\VS\\Missing\\msbuild.exe'},
+      ],
+    },
+  });
+
+  assert.deepEqual(candidates, [
+    'D:\\Tooling\\msbuild.exe',
+    'C:\\VS\\MSBuild\\Current\\Bin\\amd64\\msbuild.exe',
+  ]);
+});
+
+test('collectPortableMsbuildFallbackCandidates scans conventional VS install paths when probe output is unavailable', () => {
+  const existingPath = 'C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\amd64\\msbuild.exe';
+  const candidates = collectPortableMsbuildFallbackCandidates({
+    env: {
+      ProgramFiles: 'C:\\Program Files',
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+    },
+    exists: candidatePath => candidatePath === existingPath,
+    probe: {
+      msbuildCandidates: [],
+    },
+  });
+
+  assert.deepEqual(candidates, [existingPath]);
 });

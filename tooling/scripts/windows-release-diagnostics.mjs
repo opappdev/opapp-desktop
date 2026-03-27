@@ -209,6 +209,78 @@ export function collectReleaseBuildProbe({
   };
 }
 
+function addPortableMsbuildFallbackCandidate(candidates, seen, candidatePath, exists) {
+  const normalizedPath = normalizeText(candidatePath);
+  if (!normalizedPath) {
+    return;
+  }
+  if (seen.has(normalizedPath)) {
+    return;
+  }
+  if (!exists(normalizedPath)) {
+    return;
+  }
+  seen.add(normalizedPath);
+  candidates.push(normalizedPath);
+}
+
+export function collectPortableMsbuildFallbackCandidates({
+  probe,
+  env = process.env,
+  exists = existsSync,
+} = {}) {
+  const candidates = [];
+  const seen = new Set();
+
+  addPortableMsbuildFallbackCandidate(
+    candidates,
+    seen,
+    normalizeText(env.OPAPP_WINDOWS_MSBUILD_PATH),
+    exists,
+  );
+
+  if (Array.isArray(probe?.msbuildCandidates)) {
+    for (const candidate of probe.msbuildCandidates) {
+      if (!candidate?.exists) {
+        continue;
+      }
+      addPortableMsbuildFallbackCandidate(candidates, seen, candidate.msbuildPath, exists);
+    }
+  }
+
+  const programFileRoots = [
+    normalizeText(env.ProgramFiles),
+    normalizeText(env['ProgramFiles(x86)']),
+  ].filter(Boolean);
+  const visualStudioYears = ['2022', '2019'];
+  const visualStudioEditions = ['BuildTools', 'Community', 'Professional', 'Enterprise', 'Preview'];
+
+  for (const root of programFileRoots) {
+    for (const year of visualStudioYears) {
+      for (const edition of visualStudioEditions) {
+        addPortableMsbuildFallbackCandidate(
+          candidates,
+          seen,
+          path.join(
+            root,
+            'Microsoft Visual Studio',
+            year,
+            edition,
+            'MSBuild',
+            'Current',
+            'Bin',
+            'amd64',
+            'msbuild.exe',
+          ),
+          exists,
+        );
+      }
+    }
+  }
+
+  return candidates;
+}
+
 const FAILURE_CLASSIFIERS = [
   {
     code: 'cmd-spawn-eperm',
@@ -323,6 +395,9 @@ function buildActionHints(classification, probe) {
       'Compare direct cmd execution with Node child-process execution; if only the nested path fails, this is likely an environment policy issue rather than project config.',
     );
     hints.push('Re-run `npm run verify:windows:portable` on a non-sandbox machine to confirm release-chain health.');
+    hints.push(
+      'For portable checks, use direct msbuild fallback by setting OPAPP_WINDOWS_MSBUILD_PATH when auto-discovery misses your Visual Studio install.',
+    );
   } else if (classification.code === 'process-spawn-eperm') {
     hints.push('A child process was blocked with EPERM before release build completion, which strongly suggests host/sandbox policy restrictions.');
     hints.push('Retry from a machine/session with fewer execution constraints to verify whether this is environmental.');
