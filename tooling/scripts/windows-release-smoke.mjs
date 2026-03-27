@@ -1,4 +1,5 @@
 import {spawnSync} from 'node:child_process';
+import {existsSync} from 'node:fs';
 import {cp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -701,6 +702,104 @@ function describeSpawnFailure(command, args, result) {
   }`;
 }
 
+function runDirectCapture(command, args, options = {}) {
+  return spawnSync(command, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: false,
+    ...options,
+  });
+}
+
+function isCmdWrapper(command, args) {
+  return command.toLowerCase() === 'cmd.exe' && args.length >= 4 && args[0] === '/d' && args[1] === '/s' && args[2] === '/c';
+}
+
+function getDirectCommandFromCmdArgs(command, args) {
+  if (!isCmdWrapper(command, args)) {
+    return null;
+  }
+  const [directCommand, ...directArgs] = args.slice(3);
+  if (!directCommand) {
+    return null;
+  }
+  return {directCommand, directArgs};
+}
+
+function resolveCorepackScriptPath() {
+  const execDir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(execDir, 'node_modules', 'corepack', 'dist', 'corepack.js'),
+    path.join(execDir, '..', 'node_modules', 'corepack', 'dist', 'corepack.js'),
+  ];
+  return candidates.find(candidate => existsSync(candidate)) ?? null;
+}
+
+function isCompanionBundleCommand(directArgs) {
+  return directArgs[0] === 'pnpm' && directArgs[1] === 'bundle:companion:windows';
+}
+
+function runDirectFallbackOrThrow(command, args, options = {}) {
+  const extracted = getDirectCommandFromCmdArgs(command, args);
+  if (!extracted) {
+    throw new Error(describeSpawnFailure(command, args, runDirectCapture(command, args, options)));
+  }
+
+  const {directCommand, directArgs} = extracted;
+  const failures = [];
+  const directResult = runDirectCapture(directCommand, directArgs, options);
+  flushCapturedResult(directResult);
+  if (directResult.status === 0) {
+    return;
+  }
+  failures.push(describeSpawnFailure(directCommand, directArgs, directResult));
+
+  if (process.platform === 'win32' && !directCommand.toLowerCase().endsWith('.cmd')) {
+    const cmdCommand = `${directCommand}.cmd`;
+    const cmdResult = runDirectCapture(cmdCommand, directArgs, options);
+    flushCapturedResult(cmdResult);
+    if (cmdResult.status === 0) {
+      return;
+    }
+    failures.push(describeSpawnFailure(cmdCommand, directArgs, cmdResult));
+  }
+
+  const normalizedDirectCommand = directCommand.toLowerCase().replace(/\.cmd$/, '');
+  if (normalizedDirectCommand === 'corepack') {
+    const corepackScriptPath = resolveCorepackScriptPath();
+    if (corepackScriptPath) {
+      const nodeArgs = [corepackScriptPath, ...directArgs];
+      const nodeResult = runDirectCapture(process.execPath, nodeArgs, options);
+      flushCapturedResult(nodeResult);
+      if (nodeResult.status === 0) {
+        return;
+      }
+      failures.push(describeSpawnFailure(process.execPath, nodeArgs, nodeResult));
+    } else {
+      failures.push('corepack Node.js fallback script not found');
+    }
+
+    if (isCompanionBundleCommand(directArgs)) {
+      const bundleScriptPath = path.join(frontendRoot, 'tooling', 'scripts', 'bundle-companion-windows.mjs');
+      if (existsSync(bundleScriptPath)) {
+        const bundleResult = runDirectCapture(process.execPath, [bundleScriptPath], {
+          ...options,
+          cwd: frontendRoot,
+        });
+        flushCapturedResult(bundleResult);
+        if (bundleResult.status === 0) {
+          return;
+        }
+        failures.push(describeSpawnFailure(process.execPath, [bundleScriptPath], bundleResult));
+      } else {
+        failures.push('companion bundle fallback script not found');
+      }
+    }
+  }
+
+  throw new Error(failures.join('; fallback '));
+}
+
 function sleep(ms) {
   return new Promise(resolve => {
     setTimeout(resolve, ms);
@@ -709,15 +808,20 @@ function sleep(ms) {
 
 async function runBundleCommandWithRetry(args, options = {}) {
   const maxAttempts = 3;
+  let finalRetriableFailure = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const result = runCmdCapture(args, options);
     flushCapturedResult(result);
     if (result.status === 0) {
       return;
     }
-    const shouldRetry = attempt < maxAttempts && isRetriableBundleFailure(result);
-    if (!shouldRetry) {
+    const retriableFailure = isRetriableBundleFailure(result);
+    if (!retriableFailure) {
       throw new Error(describeSpawnFailure('cmd.exe', ['/d', '/s', '/c', ...args], result));
+    }
+    if (attempt >= maxAttempts) {
+      finalRetriableFailure = result;
+      break;
     }
 
     log(
@@ -725,6 +829,14 @@ async function runBundleCommandWithRetry(args, options = {}) {
     );
     await sleep(1500);
   }
+
+  if (finalRetriableFailure) {
+    log('bundle retries exhausted; attempting direct command fallback outside cmd.exe wrapper.');
+    runDirectFallbackOrThrow('cmd.exe', ['/d', '/s', '/c', ...args], options);
+    return;
+  }
+
+  throw new Error('bundle retries exhausted without a retriable failure snapshot.');
 }
 
 async function fileExists(targetPath) {
