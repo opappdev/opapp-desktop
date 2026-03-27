@@ -33,7 +33,7 @@ import process from 'node:process';
 import {fileURLToPath} from 'node:url';
 
 import {generateRegistryIndex} from './artifact-source.mjs';
-import {applyOtaUpdate, checkForUpdate, rollbackOtaUpdate} from './ota-updater.mjs';
+import {applyOtaUpdate, checkForUpdate, downloadOtaUpdate, readOtaState, rollbackOtaUpdate} from './ota-updater.mjs';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -440,6 +440,86 @@ async function main() {
     ok(
       !(await _exists(path.join(hostBundleDir, 'only-in-v1.txt'))),
       'rollback does not leak files from older snapshots into the restored bundle',
+    );
+
+    // ── 10. download → apply → rollback (full HTTP end-to-end) ────────────
+    process.stdout.write('\n10. download \u2192 apply \u2192 rollback (full HTTP end-to-end)\n');
+
+    // The registry still has BUNDLE_ID@0.1.0 and @0.2.0 with no channels/rollout
+    // (state from section 8). Use a fresh cache and host dir for isolation.
+    const dlCacheDir = path.join(tmpBase, 'dl-cache');
+    const dlHostDir = path.join(tmpBase, 'dl-host');
+
+    // Simulate a host that already has version 0.1.0 installed.
+    await mkdir(dlHostDir, {recursive: true});
+    await writeFile(
+      path.join(dlHostDir, 'bundle-manifest.json'),
+      JSON.stringify(
+        {bundleId: BUNDLE_ID, version: '0.1.0', platform: PLATFORM, entryFile: 'bundle.js', sourceKind: 'sibling-staging'},
+        null,
+        2,
+      ) + '\n',
+      'utf8',
+    );
+    await writeFile(path.join(dlHostDir, 'bundle.js'), '// host 0.1.0\n', 'utf8');
+    await writeFile(path.join(dlHostDir, 'only-in-v1.txt'), 'v1\n', 'utf8');
+
+    // download: pull latest from the local HTTP server into dlCacheDir
+    const dlResult = await downloadOtaUpdate({
+      remoteBase: baseUrl,
+      platform: PLATFORM,
+      cacheDir: dlCacheDir,
+      bundleId: BUNDLE_ID,
+    });
+    eq(dlResult.bundleId, BUNDLE_ID, 'download: bundleId matches');
+    eq(dlResult.version, '0.2.0', 'download: resolves to latest version 0.2.0');
+    ok(
+      await _exists(path.join(dlCacheDir, BUNDLE_ID, '0.2.0', PLATFORM, 'bundle-manifest.json')),
+      'download: bundle-manifest.json written to local cache',
+    );
+    ok(
+      await _exists(path.join(dlCacheDir, BUNDLE_ID, '0.2.0', PLATFORM, 'bundle.js')),
+      'download: bundle.js written to local cache',
+    );
+
+    // ota-state.json should record the downloaded version
+    const dlState = await readOtaState(dlCacheDir);
+    eq(dlState?.bundleId, BUNDLE_ID, 'download: ota-state records bundleId');
+    eq(dlState?.version, '0.2.0', 'download: ota-state records version 0.2.0');
+
+    // apply: stage the downloaded bundle into the host dir
+    const dlApplyResult = await applyOtaUpdate({
+      cacheDir: dlCacheDir,
+      hostBundleDir: dlHostDir,
+      platform: PLATFORM,
+    });
+    eq(dlApplyResult.version, '0.2.0', 'apply (post-download): version = 0.2.0');
+    ok(
+      !(await _exists(path.join(dlHostDir, 'only-in-v1.txt'))),
+      'apply (post-download): stale v0.1.0 file removed from host dir',
+    );
+    eq(
+      JSON.parse(await readFile(path.join(dlHostDir, 'bundle-manifest.json'), 'utf8')).sourceKind,
+      'sibling-staging',
+      'apply (post-download): sourceKind = sibling-staging',
+    );
+
+    // rollback: restore the pre-apply snapshot (v0.1.0)
+    const dlRbResult = await rollbackOtaUpdate({
+      cacheDir: dlCacheDir,
+      hostBundleDir: dlHostDir,
+      bundleId: BUNDLE_ID,
+      platform: PLATFORM,
+    });
+    eq(dlRbResult.rolledBackToVersion, '0.1.0', 'rollback (post-download-apply): restores to 0.1.0');
+    ok(
+      await _exists(path.join(dlHostDir, 'only-in-v1.txt')),
+      'rollback (post-download-apply): v0.1.0 file restored',
+    );
+    eq(
+      JSON.parse(await readFile(path.join(dlHostDir, 'bundle-manifest.json'), 'utf8')).version,
+      '0.1.0',
+      'rollback (post-download-apply): bundle-manifest.json version reverts to 0.1.0',
     );
 
     // ── Summary ───────────────────────────────────────────────────────────
