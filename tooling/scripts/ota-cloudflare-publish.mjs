@@ -317,27 +317,95 @@ async function runCommand(command, args, cwd, dryRun) {
   });
 }
 
-async function uploadFilesToCloudflare({
+function createWranglerArgs({wranglerBin, wranglerConfig, bucket, objectKey, mode, localPath}) {
+  const wranglerArgs = [];
+  if (wranglerBin === defaultWranglerBin) {
+    wranglerArgs.push('wrangler');
+  }
+  wranglerArgs.push('r2', 'object', mode, `${bucket}/${objectKey}`);
+  if (mode === 'put') {
+    wranglerArgs.push('--file', localPath);
+  }
+  if (wranglerConfig) {
+    wranglerArgs.push('--config', wranglerConfig);
+  }
+  return wranglerArgs;
+}
+
+async function deleteUploadedKeysFromCloudflare({
+  uploadedKeys,
+  bucket,
+  wranglerBin,
+  wranglerConfig,
+  dryRun,
+  executeCommand,
+}) {
+  const cleanupFailures = [];
+  for (const objectKey of [...uploadedKeys].reverse()) {
+    try {
+      const deleteArgs = createWranglerArgs({
+        wranglerBin,
+        wranglerConfig,
+        bucket,
+        objectKey,
+        mode: 'delete',
+      });
+      await executeCommand(wranglerBin, deleteArgs, repoRoot, dryRun);
+    } catch (error) {
+      cleanupFailures.push({
+        objectKey,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return cleanupFailures;
+}
+
+export async function uploadFilesToCloudflare({
   files,
   bucket,
   objectPrefix,
   wranglerBin,
   wranglerConfig,
   dryRun,
+  executeCommand = runCommand,
 }) {
   const uploadedKeys = [];
-  for (const file of files) {
-    const objectKey = joinObjectKey(objectPrefix, file.relativeRegistryPath);
-    const wranglerArgs = [];
-    if (wranglerBin === defaultWranglerBin) {
-      wranglerArgs.push('wrangler');
+  try {
+    for (const file of files) {
+      const objectKey = joinObjectKey(objectPrefix, file.relativeRegistryPath);
+      const wranglerArgs = createWranglerArgs({
+        wranglerBin,
+        wranglerConfig,
+        bucket,
+        objectKey,
+        mode: 'put',
+        localPath: file.localPath,
+      });
+      await executeCommand(wranglerBin, wranglerArgs, repoRoot, dryRun);
+      uploadedKeys.push(objectKey);
     }
-    wranglerArgs.push('r2', 'object', 'put', `${bucket}/${objectKey}`, '--file', file.localPath);
-    if (wranglerConfig) {
-      wranglerArgs.push('--config', wranglerConfig);
+  } catch (uploadError) {
+    const cleanupFailures = await deleteUploadedKeysFromCloudflare({
+      uploadedKeys,
+      bucket,
+      wranglerBin,
+      wranglerConfig,
+      dryRun,
+      executeCommand,
+    });
+    if (cleanupFailures.length === 0) {
+      throw uploadError;
     }
-    await runCommand(wranglerBin, wranglerArgs, repoRoot, dryRun);
-    uploadedKeys.push(objectKey);
+
+    const cleanupSummary = cleanupFailures
+      .map(failure => `${failure.objectKey}: ${failure.message}`)
+      .join('; ');
+    throw new Error(
+      `upload failed and cleanup was partial. upload error: ${
+        uploadError instanceof Error ? uploadError.message : String(uploadError)
+      }. cleanup errors: ${cleanupSummary}`,
+    );
   }
   return uploadedKeys;
 }

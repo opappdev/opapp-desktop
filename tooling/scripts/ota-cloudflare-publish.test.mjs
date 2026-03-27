@@ -6,6 +6,7 @@ import {access, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
 import {
   applyBundlePublishOverrides,
   mergeRegistryIndexes,
+  uploadFilesToCloudflare,
   upsertBundleSidecars,
   withFileRollback,
 } from './ota-cloudflare-publish.mjs';
@@ -162,4 +163,90 @@ test('withFileRollback restores sidecar snapshots after failure', async t => {
   const restoredRollout = JSON.parse(await readFile(rolloutPath, 'utf8'));
   assert.deepEqual(restoredChannels, {stable: '0.1.0'});
   assert.deepEqual(restoredRollout, {percent: 20});
+});
+
+test('uploadFilesToCloudflare compensates by deleting uploaded keys when upload fails', async () => {
+  const calls = [];
+  const executeCommand = async (_command, args) => {
+    calls.push(args);
+    if (args.includes('put') && args.some(value => String(value).includes('index.json'))) {
+      throw new Error('simulated index upload failure');
+    }
+    return {code: 0};
+  };
+
+  await assert.rejects(
+    uploadFilesToCloudflare({
+      files: [
+        {
+          localPath: 'C:/tmp/bundle-manifest.json',
+          relativeRegistryPath: 'companion-app/0.2.0/windows/bundle-manifest.json',
+        },
+        {
+          localPath: 'C:/tmp/main.hbc',
+          relativeRegistryPath: 'companion-app/0.2.0/windows/main.hbc',
+        },
+        {
+          localPath: 'C:/tmp/index.json',
+          relativeRegistryPath: 'index.json',
+        },
+      ],
+      bucket: 'ota-bucket',
+      objectPrefix: 'registry',
+      wranglerBin: 'wrangler',
+      wranglerConfig: null,
+      dryRun: false,
+      executeCommand,
+    }),
+    /simulated index upload failure/,
+  );
+
+  const commandTuples = calls.map(args => [args[2], args[3]]);
+  assert.deepEqual(commandTuples, [
+    ['put', 'ota-bucket/registry/companion-app/0.2.0/windows/bundle-manifest.json'],
+    ['put', 'ota-bucket/registry/companion-app/0.2.0/windows/main.hbc'],
+    ['put', 'ota-bucket/registry/index.json'],
+    ['delete', 'ota-bucket/registry/companion-app/0.2.0/windows/main.hbc'],
+    ['delete', 'ota-bucket/registry/companion-app/0.2.0/windows/bundle-manifest.json'],
+  ]);
+});
+
+test('uploadFilesToCloudflare reports cleanup failures when delete compensation fails', async () => {
+  const calls = [];
+  const executeCommand = async (_command, args) => {
+    calls.push(args);
+    if (args[2] === 'put' && args[3] === 'ota-bucket/registry/index.json') {
+      throw new Error('simulated put failure');
+    }
+    if (args[2] === 'delete') {
+      throw new Error(`simulated delete failure for ${args[3]}`);
+    }
+    return {code: 0};
+  };
+
+  await assert.rejects(
+    uploadFilesToCloudflare({
+      files: [
+        {
+          localPath: 'C:/tmp/main.hbc',
+          relativeRegistryPath: 'companion-app/0.2.0/windows/main.hbc',
+        },
+        {
+          localPath: 'C:/tmp/index.json',
+          relativeRegistryPath: 'index.json',
+        },
+      ],
+      bucket: 'ota-bucket',
+      objectPrefix: 'registry',
+      wranglerBin: 'wrangler',
+      wranglerConfig: null,
+      dryRun: false,
+      executeCommand,
+    }),
+    /upload failed and cleanup was partial/,
+  );
+
+  assert.ok(
+    calls.some(args => args[2] === 'delete' && args[3] === 'ota-bucket/registry/companion-app/0.2.0/windows/main.hbc'),
+  );
 });
