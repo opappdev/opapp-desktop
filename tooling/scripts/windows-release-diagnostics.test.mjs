@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   classifyRunWindowsFailure,
   collectPortableMsbuildFallbackCandidates,
+  collectPortableMsbuildFallbackProfiles,
   formatReleaseFailureDiagnostics,
   formatReleaseProbeForLogs,
   getBlockingReleaseProbeFailure,
@@ -180,4 +181,24 @@ test('collectPortableMsbuildFallbackCandidates scans conventional VS install pat
   });
 
   assert.deepEqual(candidates, [existingPath]);
+});
+
+test('collectPortableMsbuildFallbackProfiles defaults to restore + no-restore retry strategies', () => {
+  const profiles = collectPortableMsbuildFallbackProfiles({env: {}});
+  assert.deepEqual(
+    profiles.map(profile => profile.id),
+    ['restore-build', 'no-restore-host-target'],
+  );
+  assert(profiles[0].args.includes('/restore'));
+  assert(profiles[1].args.includes('/p:Restore=false'));
+});
+
+test('collectPortableMsbuildFallbackProfiles allows disabling no-restore retry via env', () => {
+  const profiles = collectPortableMsbuildFallbackProfiles({
+    env: {OPAPP_WINDOWS_MSBUILD_FALLBACK_TRY_NO_RESTORE: '0'},
+  });
+  assert.deepEqual(
+    profiles.map(profile => profile.id),
+    ['restore-build'],
+  );
 });

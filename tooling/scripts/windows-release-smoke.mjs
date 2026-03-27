@@ -8,6 +8,7 @@ import {SiblingArtifactSource} from './artifact-source.mjs';
 import {
   classifyRunWindowsFailure,
   collectPortableMsbuildFallbackCandidates,
+  collectPortableMsbuildFallbackProfiles,
   collectReleaseBuildProbe,
   getBlockingReleaseProbeFailure,
   formatReleaseFailureDiagnostics,
@@ -968,11 +969,11 @@ function shouldTryPortableMsbuildFallback(classification) {
   );
 }
 
-function describeMsbuildFailure(msbuildPath, result) {
+function describeMsbuildFailure(profileId, msbuildPath, result) {
   const status = result.status ?? 'null';
   const code = result.error?.code;
   const message = result.error?.message;
-  return `${msbuildPath} failed (status=${status}${code ? `, code=${code}` : ''}${message ? `, message=${message}` : ''})`;
+  return `[${profileId}] ${msbuildPath} failed (status=${status}${code ? `, code=${code}` : ''}${message ? `, message=${message}` : ''})`;
 }
 
 async function runPortableMsbuildFallbackOrThrow(releaseBuildProbe) {
@@ -990,35 +991,31 @@ async function runPortableMsbuildFallbackOrThrow(releaseBuildProbe) {
     );
   }
 
-  const msbuildArgs = [
-    windowsSolutionPath,
-    '/restore',
-    '/t:Build',
-    '/p:Configuration=Release',
-    '/p:Platform=x64',
-    '/p:AppxBundle=Never',
-    '/p:UapAppxPackageBuildMode=SideLoadOnly',
-    '/m',
-  ];
+  const msbuildProfiles = collectPortableMsbuildFallbackProfiles();
   const failures = [];
 
-  for (const msbuildPath of msbuildCandidates) {
-    log(`portable-fallback trying msbuild candidate: ${msbuildPath}`);
-    const result = runInherited(msbuildPath, msbuildArgs, {
-      cwd: windowsSolutionRoot,
-      env: process.env,
-    });
-    if (result.status === 0 && !result.error) {
-      if (!(await fileExists(portableExePath))) {
-        throw new Error(
-          `portable msbuild fallback built successfully with ${msbuildPath} but did not produce ${portableExePath}`,
-        );
-      }
-      log(`portable-fallback build succeeded via ${msbuildPath}`);
-      return;
-    }
+  for (const profile of msbuildProfiles) {
+    log(`portable-fallback strategy=${profile.id}: ${profile.description}`);
+    const msbuildArgs = [windowsSolutionPath, ...profile.args];
 
-    failures.push(describeMsbuildFailure(msbuildPath, result));
+    for (const msbuildPath of msbuildCandidates) {
+      log(`portable-fallback trying strategy=${profile.id} msbuild candidate: ${msbuildPath}`);
+      const result = runInherited(msbuildPath, msbuildArgs, {
+        cwd: windowsSolutionRoot,
+        env: process.env,
+      });
+      if (result.status === 0 && !result.error) {
+        if (!(await fileExists(portableExePath))) {
+          throw new Error(
+            `portable msbuild fallback built successfully with ${msbuildPath} but did not produce ${portableExePath}`,
+          );
+        }
+        log(`portable-fallback build succeeded via ${msbuildPath} strategy=${profile.id}`);
+        return;
+      }
+
+      failures.push(describeMsbuildFailure(profile.id, msbuildPath, result));
+    }
   }
 
   throw new Error(`portable msbuild fallback failed: ${failures.join('; ')}`);

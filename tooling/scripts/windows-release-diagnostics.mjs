@@ -281,6 +281,44 @@ export function collectPortableMsbuildFallbackCandidates({
   return candidates;
 }
 
+export function collectPortableMsbuildFallbackProfiles({
+  env = process.env,
+} = {}) {
+  const profiles = [
+    {
+      id: 'restore-build',
+      description: 'solution build with restore',
+      args: [
+        '/restore',
+        '/t:Build',
+        '/p:Configuration=Release',
+        '/p:Platform=x64',
+        '/p:AppxBundle=Never',
+        '/p:UapAppxPackageBuildMode=SideLoadOnly',
+        '/m',
+      ],
+    },
+  ];
+
+  if (normalizeText(env.OPAPP_WINDOWS_MSBUILD_FALLBACK_TRY_NO_RESTORE) !== '0') {
+    profiles.push({
+      id: 'no-restore-host-target',
+      description: 'host-target build without restore',
+      args: [
+        '/t:OpappWindowsHost',
+        '/p:Restore=false',
+        '/p:Configuration=Release',
+        '/p:Platform=x64',
+        '/p:AppxBundle=Never',
+        '/p:UapAppxPackageBuildMode=SideLoadOnly',
+        '/m',
+      ],
+    });
+  }
+
+  return profiles;
+}
+
 const FAILURE_CLASSIFIERS = [
   {
     code: 'cmd-spawn-eperm',
