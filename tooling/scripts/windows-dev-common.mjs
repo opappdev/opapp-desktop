@@ -70,10 +70,63 @@ function createCmdChild(command, {cwd, env, label}) {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: false,
   });
+  child.opappSpawnMode = 'cmd.exe (stdio=pipe)';
 
   pipeStream(child.stdout, label);
   pipeStream(child.stderr, label);
   return child;
+}
+
+function createDirectChild(command, args, {cwd, env, label, stdioMode = 'pipe'}) {
+  const stdio = stdioMode === 'ignore' ? 'ignore' : ['ignore', 'pipe', 'pipe'];
+  const child = spawn(command, args, {
+    cwd,
+    env,
+    stdio,
+    windowsHide: false,
+  });
+  child.opappSpawnMode = `${command} (stdio=${stdioMode})`;
+
+  if (stdioMode !== 'ignore') {
+    pipeStream(child.stdout, label);
+    pipeStream(child.stderr, label);
+  }
+  return child;
+}
+
+function parseCommandTokens(command) {
+  const tokens = String(command ?? '')
+    .match(/"[^"]*"|[^\s]+/g)
+    ?.map(token => token.replace(/^"|"$/g, ''));
+  return tokens?.filter(Boolean) ?? [];
+}
+
+function resolveCorepackScriptPath() {
+  const execDir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(execDir, 'node_modules', 'corepack', 'dist', 'corepack.js'),
+    path.join(execDir, '..', 'node_modules', 'corepack', 'dist', 'corepack.js'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function resolveNpmCliScriptPath() {
+  const execDir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(execDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    path.join(execDir, '..', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function waitForChildSpawn(child) {
@@ -101,20 +154,113 @@ function isRetriableSpawnError(error) {
   return error?.code === 'EPERM' || message.includes('spawn EPERM');
 }
 
+async function spawnDirectFallback(command, {cwd, env, label}) {
+  const tokens = parseCommandTokens(command);
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const [baseCommand, ...baseArgs] = tokens;
+  const fallbackAttempts = [{command: baseCommand, args: baseArgs}];
+  const normalizedBaseCommand = baseCommand.toLowerCase();
+
+  if (process.platform === 'win32' && !normalizedBaseCommand.endsWith('.cmd')) {
+    fallbackAttempts.push({command: `${baseCommand}.cmd`, args: baseArgs});
+  }
+
+  if (normalizedBaseCommand === 'corepack' || normalizedBaseCommand === 'corepack.cmd') {
+    const corepackScriptPath = resolveCorepackScriptPath();
+    if (corepackScriptPath) {
+      fallbackAttempts.push({
+        command: process.execPath,
+        args: [corepackScriptPath, ...baseArgs],
+      });
+    }
+  }
+
+  if (normalizedBaseCommand === 'npm' || normalizedBaseCommand === 'npm.cmd') {
+    const npmCliScriptPath = resolveNpmCliScriptPath();
+    if (npmCliScriptPath) {
+      fallbackAttempts.push({
+        command: process.execPath,
+        args: [npmCliScriptPath, ...baseArgs],
+      });
+    }
+  }
+
+  const errors = [];
+  for (const attempt of fallbackAttempts) {
+    try {
+      const child = createDirectChild(attempt.command, attempt.args, {
+        cwd,
+        env,
+        label,
+        stdioMode: 'pipe',
+      });
+      await waitForChildSpawn(child);
+      log(
+        label,
+        `spawn fallback engaged (without cmd.exe): ${attempt.command} ${attempt.args.join(' ')}`.trim(),
+      );
+      return child;
+    } catch (error) {
+      errors.push(`${attempt.command}: ${error instanceof Error ? error.message : String(error)}`);
+      if (isRetriableSpawnError(error)) {
+        try {
+          const child = createDirectChild(attempt.command, attempt.args, {
+            cwd,
+            env,
+            label,
+            stdioMode: 'ignore',
+          });
+          await waitForChildSpawn(child);
+          log(
+            label,
+            `spawn fallback engaged (without cmd.exe, stdio=ignore): ${attempt.command} ${attempt.args.join(' ')}`.trim(),
+          );
+          return child;
+        } catch (ignoreError) {
+          errors.push(
+            `${attempt.command} (stdio=ignore): ${ignoreError instanceof Error ? ignoreError.message : String(ignoreError)}`,
+          );
+        }
+      }
+    }
+  }
+
+  throw new Error(
+    `direct spawn fallback failed for "${command}": ${errors.join('; ')}`,
+  );
+}
+
 export async function spawnCmdAsync(
   command,
   {cwd, env, label, maxAttempts = 3, retryDelayMs = 1500},
 ) {
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const child = createCmdChild(command, {cwd, env, label});
     try {
+      const child = createCmdChild(command, {cwd, env, label});
       await waitForChildSpawn(child);
       return child;
     } catch (error) {
       lastError = error;
-      if (!isRetriableSpawnError(error) || attempt >= maxAttempts) {
+      if (!isRetriableSpawnError(error)) {
         throw error;
+      }
+      try {
+        const fallbackChild = await spawnDirectFallback(command, {cwd, env, label});
+        if (fallbackChild) {
+          return fallbackChild;
+        }
+      } catch (fallbackError) {
+        lastError = fallbackError;
+        if (!isRetriableSpawnError(fallbackError)) {
+          throw fallbackError;
+        }
+      }
+      if (attempt >= maxAttempts) {
+        throw lastError;
       }
       log(label, `spawn EPERM on attempt ${attempt}/${maxAttempts}; retrying in ${retryDelayMs}ms`);
       await sleep(retryDelayMs);
