@@ -250,3 +250,32 @@ test('uploadFilesToCloudflare reports cleanup failures when delete compensation 
     calls.some(args => args[2] === 'delete' && args[3] === 'ota-bucket/registry/companion-app/0.2.0/windows/main.hbc'),
   );
 });
+
+test('uploadFilesToCloudflare rethrows original upload error when nothing was uploaded', async () => {
+  const calls = [];
+  const executeCommand = async (_command, args) => {
+    calls.push(args);
+    throw new Error('simulated first upload failure');
+  };
+
+  await assert.rejects(
+    uploadFilesToCloudflare({
+      files: [
+        {
+          localPath: 'C:/tmp/bundle-manifest.json',
+          relativeRegistryPath: 'companion-app/0.2.0/windows/bundle-manifest.json',
+        },
+      ],
+      bucket: 'ota-bucket',
+      objectPrefix: 'registry',
+      wranglerBin: 'wrangler',
+      wranglerConfig: null,
+      dryRun: false,
+      executeCommand,
+    }),
+    /simulated first upload failure/,
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][2], 'put');
+});

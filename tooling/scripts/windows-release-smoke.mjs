@@ -663,6 +663,70 @@ function runCmdOrThrow(args, options = {}) {
   runOrThrow('cmd.exe', ['/d', '/s', '/c', ...args], options);
 }
 
+function runCmdCapture(args, options = {}) {
+  return spawnSync('cmd.exe', ['/d', '/s', '/c', ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: false,
+    ...options,
+  });
+}
+
+function flushCapturedResult(result) {
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+}
+
+function isRetriableBundleFailure(result) {
+  if (result.error?.code === 'EPERM') {
+    return true;
+  }
+  const mergedOutput = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+  return (
+    mergedOutput.includes('spawn EPERM') ||
+    mergedOutput.includes('Failed to construct transformer') ||
+    mergedOutput.includes("Cannot read properties of undefined (reading 'end')")
+  );
+}
+
+function describeSpawnFailure(command, args, result) {
+  const stderr = (result.stderr ?? '').trim();
+  const errorMessage = result.error ? ` error=${result.error.message}` : '';
+  return `${command} ${args.join(' ')} failed with exit code ${result.status ?? 1}${errorMessage}${
+    stderr ? `: ${stderr}` : ''
+  }`;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function runBundleCommandWithRetry(args, options = {}) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = runCmdCapture(args, options);
+    flushCapturedResult(result);
+    if (result.status === 0) {
+      return;
+    }
+    const shouldRetry = attempt < maxAttempts && isRetriableBundleFailure(result);
+    if (!shouldRetry) {
+      throw new Error(describeSpawnFailure('cmd.exe', ['/d', '/s', '/c', ...args], result));
+    }
+
+    log(
+      `bundle attempt ${attempt}/${maxAttempts} hit transient spawn issue; retrying in 1500ms.`,
+    );
+    await sleep(1500);
+  }
+}
+
 async function fileExists(targetPath) {
   try {
     await readFile(targetPath);
@@ -705,7 +769,7 @@ async function bundleFrontend() {
     npm_config_cache: path.join(workspaceRoot, '.npm-cache'),
   };
 
-  runCmdOrThrow(['corepack', 'pnpm', 'bundle:companion:windows'], {
+  await runBundleCommandWithRetry(['corepack', 'pnpm', 'bundle:companion:windows'], {
     cwd: frontendRoot,
     env,
   });

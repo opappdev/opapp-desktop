@@ -60,6 +60,10 @@ function pipeStream(stream, label) {
 }
 
 export function spawnCmd(command, {cwd, env, label}) {
+  return createCmdChild(command, {cwd, env, label});
+}
+
+function createCmdChild(command, {cwd, env, label}) {
   const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
     cwd,
     env,
@@ -70,6 +74,53 @@ export function spawnCmd(command, {cwd, env, label}) {
   pipeStream(child.stdout, label);
   pipeStream(child.stderr, label);
   return child;
+}
+
+function waitForChildSpawn(child) {
+  return new Promise((resolve, reject) => {
+    const onSpawn = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = error => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      child.off('spawn', onSpawn);
+      child.off('error', onError);
+    };
+
+    child.once('spawn', onSpawn);
+    child.once('error', onError);
+  });
+}
+
+function isRetriableSpawnError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return error?.code === 'EPERM' || message.includes('spawn EPERM');
+}
+
+export async function spawnCmdAsync(
+  command,
+  {cwd, env, label, maxAttempts = 3, retryDelayMs = 1500},
+) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const child = createCmdChild(command, {cwd, env, label});
+    try {
+      await waitForChildSpawn(child);
+      return child;
+    } catch (error) {
+      lastError = error;
+      if (!isRetriableSpawnError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+      log(label, `spawn EPERM on attempt ${attempt}/${maxAttempts}; retrying in ${retryDelayMs}ms`);
+      await sleep(retryDelayMs);
+    }
+  }
+  throw lastError ?? new Error(`failed to spawn command: ${command}`);
 }
 
 export function killProcessTree(pid) {
@@ -268,7 +319,7 @@ export async function ensureMetroRunning({reuseIfReady = true, label = 'metro'} 
     }
 
     const killedPids = await killPortOwners(metroPort, {label});
-    const child = spawnCmd('corepack pnpm start:companion:windows', {
+    const child = await spawnCmdAsync('corepack pnpm start:companion:windows', {
       cwd: frontendRoot,
       env: buildFrontendEnv(),
       label,
@@ -287,7 +338,7 @@ export async function ensureMetroRunning({reuseIfReady = true, label = 'metro'} 
     return outcome;
   }
 
-  const child = spawnCmd('corepack pnpm start:companion:windows', {
+  const child = await spawnCmdAsync('corepack pnpm start:companion:windows', {
     cwd: frontendRoot,
     env: buildFrontendEnv(),
     label,

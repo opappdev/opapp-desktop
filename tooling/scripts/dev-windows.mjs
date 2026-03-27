@@ -10,7 +10,7 @@ import {
   killProcessTree,
   log,
   readHostLogTail,
-  spawnCmd,
+  spawnCmdAsync,
   stopHostProcesses,
   waitForHostLogMarkers,
 } from './windows-dev-common.mjs';
@@ -65,7 +65,7 @@ async function launchHost({label = 'host'} = {}) {
   }
 
   log('host', 'launching Windows host against Metro-backed bundle');
-  hostChild = spawnCmd('npm run windows', {
+  hostChild = await spawnCmdAsync('npm run windows', {
     cwd: hostRoot,
     env: process.env,
     label,
