@@ -3,7 +3,7 @@ import {existsSync} from 'node:fs';
 import {cp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {SiblingArtifactSource} from './artifact-source.mjs';
 
 const scenarioArg = process.argv
@@ -19,6 +19,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
 const frontendRoot = path.join(workspaceRoot, 'opapp-frontend');
+const frontendBundleScriptPath = path.join(frontendRoot, 'tooling', 'scripts', 'bundle-companion-windows.mjs');
 const frontendBundleRoot = path.join(frontendRoot, '.dist', 'bundles', 'companion-app', 'windows');
 const hostRoot = path.join(repoRoot, 'hosts', 'windows-host');
 const hostBundleRoot = path.join(hostRoot, 'windows', 'OpappWindowsHost', 'Bundle');
@@ -739,7 +740,27 @@ function isCompanionBundleCommand(directArgs) {
   return directArgs[0] === 'pnpm' && directArgs[1] === 'bundle:companion:windows';
 }
 
-function runDirectFallbackOrThrow(command, args, options = {}) {
+function companionBundleCommandRequestsResetCache(directArgs) {
+  return directArgs.includes('--reset-cache');
+}
+
+async function runCompanionBundleInProcessOrThrow(directArgs) {
+  if (!existsSync(frontendBundleScriptPath)) {
+    throw new Error('companion bundle fallback script not found');
+  }
+
+  const bundleScriptUrl = pathToFileURL(frontendBundleScriptPath).href;
+  const bundleModule = await import(bundleScriptUrl);
+  if (typeof bundleModule.bundleCompanionWindows !== 'function') {
+    throw new Error('companion bundle fallback script is missing bundleCompanionWindows export');
+  }
+
+  await bundleModule.bundleCompanionWindows({
+    resetCache: companionBundleCommandRequestsResetCache(directArgs),
+  });
+}
+
+async function runDirectFallbackOrThrow(command, args, options = {}) {
   const extracted = getDirectCommandFromCmdArgs(command, args);
   if (!extracted) {
     throw new Error(describeSpawnFailure(command, args, runDirectCapture(command, args, options)));
@@ -780,9 +801,8 @@ function runDirectFallbackOrThrow(command, args, options = {}) {
     }
 
     if (isCompanionBundleCommand(directArgs)) {
-      const bundleScriptPath = path.join(frontendRoot, 'tooling', 'scripts', 'bundle-companion-windows.mjs');
-      if (existsSync(bundleScriptPath)) {
-        const bundleResult = runDirectCapture(process.execPath, [bundleScriptPath], {
+      if (existsSync(frontendBundleScriptPath)) {
+        const bundleResult = runDirectCapture(process.execPath, [frontendBundleScriptPath], {
           ...options,
           cwd: frontendRoot,
         });
@@ -790,9 +810,19 @@ function runDirectFallbackOrThrow(command, args, options = {}) {
         if (bundleResult.status === 0) {
           return;
         }
-        failures.push(describeSpawnFailure(process.execPath, [bundleScriptPath], bundleResult));
+        failures.push(describeSpawnFailure(process.execPath, [frontendBundleScriptPath], bundleResult));
       } else {
         failures.push('companion bundle fallback script not found');
+      }
+
+      try {
+        log('attempting in-process companion bundle fallback.');
+        await runCompanionBundleInProcessOrThrow(directArgs);
+        return;
+      } catch (error) {
+        failures.push(
+          `in-process companion bundle fallback failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
   }
@@ -832,7 +862,7 @@ async function runBundleCommandWithRetry(args, options = {}) {
 
   if (finalRetriableFailure) {
     log('bundle retries exhausted; attempting direct command fallback outside cmd.exe wrapper.');
-    runDirectFallbackOrThrow('cmd.exe', ['/d', '/s', '/c', ...args], options);
+    await runDirectFallbackOrThrow('cmd.exe', ['/d', '/s', '/c', ...args], options);
     return;
   }
 
