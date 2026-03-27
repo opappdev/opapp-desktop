@@ -43,3 +43,28 @@ surface model behavior through the direct-run release directory artifact.
 
 All smoke entrypoints clean up the launched Windows host process before
 returning.
+
+## OTA Cloudflare Publish (Windows First)
+
+Use `npm run ota:publish:cloudflare -- ...` to publish a built bundle through
+the Cloudflare-backed OTA path while keeping runtime protocol unchanged
+(`index.json`, `bundles`, `versions`, `latestVersion`, `channels`,
+`rolloutPercent`).
+
+Required flags:
+
+- `--bundle-id`
+- `--platform`
+- `--version`
+- `--remote-base`
+- `--channel`
+- `--rollout-percent`
+- `--cloudflare-bucket`
+
+Optional flags:
+
+- `--source-dir` (publish build output into local registry before upload)
+- `--registry-dir`
+- `--cloudflare-prefix` (defaults to URL path in `--remote-base`)
+- `--wrangler-bin` / `--wrangler-config`
+- `--skip-upload` / `--dry-run`

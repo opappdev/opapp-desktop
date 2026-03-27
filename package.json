@@ -38,6 +38,8 @@
     "registry:rollout:set": "node ./tooling/scripts/registry-ops.mjs rollout --set",
     "registry:channel:get": "node ./tooling/scripts/registry-ops.mjs channel --get",
     "registry:channel:set": "node ./tooling/scripts/registry-ops.mjs channel --set",
-    "registry:channel:unset": "node ./tooling/scripts/registry-ops.mjs channel --unset"
+    "registry:channel:unset": "node ./tooling/scripts/registry-ops.mjs channel --unset",
+    "ota:publish:cloudflare": "node ./tooling/scripts/ota-cloudflare-publish.mjs",
+    "test:ota:publish": "node --test ./tooling/scripts/ota-cloudflare-publish.test.mjs"
   }
 }
