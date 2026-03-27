@@ -40,8 +40,28 @@ const smokeMarkers = [
   '[frontend-challenge-advisor] dev-smoke-complete',
 ];
 const hostCommandOutputPath = path.join(tempRoot, 'opapp-windows-host.verify-dev.command.log');
+const defaultReadinessTimeoutMs = 120000;
+const defaultSmokeTimeoutMs = 120000;
 
-function describeHostWaitFailure(result, phase, hostChild) {
+function parsePositiveIntegerArg(flagName, defaultValue) {
+  const argument = process.argv.find(entry => entry.startsWith(`${flagName}=`));
+  if (!argument) {
+    return defaultValue;
+  }
+
+  const rawValue = argument.slice(flagName.length + 1);
+  const parsedValue = Number(rawValue);
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    throw new Error(`${flagName} must be a positive number, got "${rawValue}"`);
+  }
+
+  return Math.floor(parsedValue);
+}
+
+const readinessTimeoutMs = parsePositiveIntegerArg('--readiness-ms', defaultReadinessTimeoutMs);
+const smokeTimeoutMs = parsePositiveIntegerArg('--smoke-ms', defaultSmokeTimeoutMs);
+
+function describeHostWaitFailure(result, phase, hostChild, timeoutMs = defaultReadinessTimeoutMs) {
   const spawnModeDetail = hostChild?.opappSpawnMode
     ? ` Host spawn mode: ${hostChild.opappSpawnMode}.`
     : '';
@@ -50,7 +70,7 @@ function describeHostWaitFailure(result, phase, hostChild) {
     return `Windows dev verify hit a frontend exception while waiting for ${phase}. ${detail}${spawnModeDetail}`;
   }
 
-  return `Windows dev verify timed out waiting for ${phase}.${spawnModeDetail}`;
+  return `Windows dev verify timed out waiting for ${phase} within ${timeoutMs}ms.${spawnModeDetail}`;
 }
 
 function resolveHostCommandOutputPath(hostChild) {
@@ -68,11 +88,16 @@ async function clearOptionalFile(targetPath) {
   }
 }
 
-async function buildHostWaitFailureMessage(result, phase, hostChild, {hostTailLines = 80, commandTailLines = 80} = {}) {
+async function buildHostWaitFailureMessage(
+  result,
+  phase,
+  hostChild,
+  {hostTailLines = 80, commandTailLines = 80, timeoutMs = defaultReadinessTimeoutMs} = {},
+) {
   const hostTail = await readHostLogTail(hostTailLines);
   const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild);
   const commandTail = await readFileTail(activeCommandOutputPath, commandTailLines);
-  let detail = describeHostWaitFailure(result, phase, hostChild);
+  let detail = describeHostWaitFailure(result, phase, hostChild, timeoutMs);
   if (hostTail) {
     detail += `\n${hostTail}`;
   }
@@ -121,7 +146,7 @@ async function main() {
       log('verify-dev', `Host spawn mode: ${hostChild.opappSpawnMode}`);
     }
 
-    const ready = await waitForHostLogMarkers(readinessMarkers, 120000, {
+    const ready = await waitForHostLogMarkers(readinessMarkers, readinessTimeoutMs, {
       failFastOnFatalFrontendError: true,
     });
     if (ready.status !== 'matched') {
@@ -129,11 +154,12 @@ async function main() {
         await buildHostWaitFailureMessage(ready, 'Metro-backed host readiness', hostChild, {
           hostTailLines: 80,
           commandTailLines: 120,
+          timeoutMs: readinessTimeoutMs,
         }),
       );
     }
 
-    const smokeReady = await waitForHostLogMarkers(smokeMarkers, 120000, {
+    const smokeReady = await waitForHostLogMarkers(smokeMarkers, smokeTimeoutMs, {
       failFastOnFatalFrontendError: true,
     });
     if (smokeReady.status !== 'matched') {
@@ -141,6 +167,7 @@ async function main() {
         await buildHostWaitFailureMessage(smokeReady, 'challenge-advisor dev smoke completion', hostChild, {
           hostTailLines: 120,
           commandTailLines: 160,
+          timeoutMs: smokeTimeoutMs,
         }),
       );
     }
