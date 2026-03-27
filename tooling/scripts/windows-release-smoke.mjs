@@ -11,6 +11,7 @@ import {
   getBlockingReleaseProbeFailure,
   formatReleaseFailureDiagnostics,
   formatReleaseProbeForLogs,
+  refineReleaseFailureClassification,
 } from './windows-release-diagnostics.mjs';
 
 const scenarioArg = process.argv
@@ -676,6 +677,30 @@ function runInherited(command, args, options = {}) {
   });
 }
 
+function runInheritedWithCaptureFallback(command, args, options = {}) {
+  const captureResult = runDirectCapture(command, args, options);
+  if (captureResult.error?.code === 'EPERM') {
+    log(
+      `output capture blocked for ${command}; retrying with inherited stdio.`,
+    );
+    const fallbackResult = runInherited(command, args, options);
+    return {
+      ...fallbackResult,
+      captureBlocked: true,
+      capturedOutput: '',
+      stderr: '',
+      stdout: '',
+    };
+  }
+
+  flushCapturedResult(captureResult);
+  return {
+    ...captureResult,
+    captureBlocked: false,
+    capturedOutput: `${captureResult.stdout ?? ''}\n${captureResult.stderr ?? ''}`,
+  };
+}
+
 function runCmdOrThrow(args, options = {}) {
   runOrThrow('cmd.exe', ['/d', '/s', '/c', ...args], options);
 }
@@ -992,23 +1017,26 @@ async function preparePackagedApp() {
     '--logging',
     '--no-telemetry',
   ];
-  const releaseResult = runInherited(process.execPath, releaseArgs, {
+  const releaseResult = runInheritedWithCaptureFallback(process.execPath, releaseArgs, {
     cwd: hostRoot,
     env: process.env,
   });
   if (releaseResult.status !== 0 || releaseResult.error) {
     const failureSummary = describeSpawnFailure(process.execPath, releaseArgs, releaseResult);
-    let classification = classifyRunWindowsFailure(
+    const initialClassification = classifyRunWindowsFailure(
       [
         failureSummary,
+        releaseResult.capturedOutput ?? '',
         releaseResult.error?.message ?? '',
         releaseBuildProbe.cmdProbe.errorMessage ?? '',
         releaseBuildProbe.vswhereProbe.errorMessage ?? '',
       ].join('\n'),
     );
-    if (classification.code === 'unknown' && releaseResult.status === 4294967295) {
-      classification = classifyRunWindowsFailure('spawnSync process EPERM');
-    }
+    const classification = refineReleaseFailureClassification({
+      classification: initialClassification,
+      probe: releaseBuildProbe,
+      result: releaseResult,
+    });
     throw new Error(
       formatReleaseFailureDiagnostics({
         args: releaseArgs,

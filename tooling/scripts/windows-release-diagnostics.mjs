@@ -164,24 +164,21 @@ export function collectReleaseBuildProbe({
       };
 
   let vswhereInstalls = [];
-  if (vswhereProbe.ok) {
-    if (vswhereProbe.captureBlocked) {
-      vswhereInstalls = [];
+  if (vswhereProbe.ok && !vswhereProbe.captureBlocked) {
+    const parsed = parseVswhereOutput(vswhereProbe.stdout);
+    if (parsed) {
+      vswhereInstalls = parsed;
     } else {
-      const parsed = parseVswhereOutput(vswhereProbe.stdout);
-      if (parsed) {
-        vswhereInstalls = parsed;
-      } else {
-        vswhereProbe = {
-          ...vswhereProbe,
-          ok: false,
-          errorCode: 'PARSE_ERROR',
-          errorMessage: 'vswhere returned non-JSON output',
-        };
-      }
+      vswhereProbe = {
+        ...vswhereProbe,
+        ok: false,
+        errorCode: 'PARSE_ERROR',
+        errorMessage: 'vswhere returned non-JSON output',
+      };
     }
   }
 
+  const msbuildCandidatesUnknown = vswhereProbe.ok && vswhereProbe.captureBlocked;
   const msbuildCandidates = vswhereInstalls.map(install => {
     const installationPath = normalizeText(install.installationPath);
     const msbuildPath = installationPath
@@ -207,6 +204,7 @@ export function collectReleaseBuildProbe({
     vswherePath,
     vswhereExists,
     vswhereProbe,
+    msbuildCandidatesUnknown,
     msbuildCandidates,
   };
 }
@@ -262,12 +260,39 @@ export function classifyRunWindowsFailure(outputText) {
   };
 }
 
+export function refineReleaseFailureClassification({
+  classification,
+  probe,
+  result,
+}) {
+  if (classification.code !== 'unknown') {
+    return classification;
+  }
+
+  if (result.status !== 4294967295) {
+    return classification;
+  }
+
+  const cmdProbeHealthy = probe.cmdExists && probe.cmdProbe.ok;
+  const vswhereCaptureBlocked = probe.vswhereProbe.ok && probe.vswhereProbe.captureBlocked;
+  if (cmdProbeHealthy && vswhereCaptureBlocked) {
+    return classifyRunWindowsFailure('spawnSync C:\\WINDOWS\\system32\\cmd.exe EPERM');
+  }
+
+  return classifyRunWindowsFailure('spawnSync process EPERM');
+}
+
 export function formatReleaseProbeForLogs(probe) {
   const lines = [
     `cmd path=${probe.cmdPath} exists=${toYesNo(probe.cmdExists)} probe=${probeStatusSummary(probe.cmdProbe)}`,
     `vswhere path=${probe.vswherePath} exists=${toYesNo(probe.vswhereExists)} probe=${probeStatusSummary(probe.vswhereProbe)}`,
     `env VisualStudioVersion=${probe.visualStudioVersion ?? '<unset>'} MinimumVisualStudioVersion=${probe.minimumVisualStudioVersion ?? '<unset>'}`,
   ];
+
+  if (probe.msbuildCandidatesUnknown) {
+    lines.push('msbuild candidates=<unknown (vswhere output capture blocked)>');
+    return lines;
+  }
 
   if (!probe.msbuildCandidates || probe.msbuildCandidates.length === 0) {
     lines.push('msbuild candidates=<none>');
