@@ -115,6 +115,7 @@
     <ClCompile Include="LaunchConfig.cpp" />
     <ClCompile Include="WindowManager.cpp" />
     <ClCompile Include="WindowManagerModule.cpp" />
+    <ClCompile Include="FilesystemModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
