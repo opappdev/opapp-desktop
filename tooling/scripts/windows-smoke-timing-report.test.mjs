@@ -338,6 +338,23 @@ test('formatSuggestedDefaultsTextReport emits a compact defaults summary', () =>
   assert.match(output, /smokeMs=18000/);
 });
 
+test('buildSerializedReport supports defaults-only text mode', () => {
+  const report = generateTimingReport({
+    launchMode: 'packaged',
+    logContents: sampleLog,
+  });
+  const output = buildSerializedReport({
+    defaultsOnly: true,
+    inputPaths: ['logs/packaged.log'],
+    outputJson: false,
+    report,
+  });
+
+  assert.match(output, /suggested timeout defaults/);
+  assert.match(output, /defaults launch=packaged/);
+  assert.doesNotMatch(output, /per-scenario recommendations/);
+});
+
 test('buildSuggestedTimeoutDefaults falls back to launch=all aggregate when per-launch data is missing', () => {
   const defaults = buildSuggestedTimeoutDefaults({
     launchMode: 'all',
