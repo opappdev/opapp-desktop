@@ -23,6 +23,7 @@
     "smoke:windows:validate": "node ./tooling/scripts/windows-release-smoke.mjs --validate-only --scenario=tab-session",
     "smoke:windows:preflight": "node ./tooling/scripts/windows-release-smoke.mjs --preflight-only",
     "smoke:windows:release": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=tab-session",
+    "report:windows:timing": "node ./tooling/scripts/windows-smoke-timing-report.mjs",
     "smoke:windows:bootstrap-main-compact": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=main-window-bootstrap-compact",
     "smoke:windows:current-window": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=settings-default-current-window",
     "smoke:windows:settings-default-new-window": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=settings-default-new-window",
