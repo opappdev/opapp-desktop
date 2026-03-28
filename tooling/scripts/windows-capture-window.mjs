@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {mkdir} from 'node:fs/promises';
+import {mkdir, readFile} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath} from 'node:url';
@@ -25,6 +25,7 @@ function printUsage() {
   node ./tooling/scripts/windows-capture-window.mjs [selector] [options]
 
 Selector:
+  --selector-file=<path>          read selector JSON from a file
   --foreground                    capture the current foreground top-level window
   --handle=<decimal|0xhex>        capture a specific top-level window handle
   --process-name=<name>           match process name (case-insensitive)
@@ -33,10 +34,11 @@ Selector:
   --class-name=<name>             match window class name (case-insensitive)
 
 Options:
+  --options-file=<path>           read capture options JSON from a file
   --list                          list matching visible windows instead of capturing
   --activate                      restore + foreground the target window before capture
   --delay-ms=<ms>                 wait after activation (default: 400)
-  --backend=auto|copy-screen|wgc  capture backend (default: auto; window => wgc)
+  --backend=auto|copy-screen|wgc  capture backend (default: auto; client/window => wgc)
   --region=client|window|monitor  capture client area, full window, or owning monitor (default: client)
   --format=png|jpg                output image format (default: png)
   --timeout-ms=<ms>               WGC frame wait timeout when backend=wgc (default: 5000)
@@ -44,28 +46,30 @@ Options:
   --out=<absolute-or-relative>    explicit output path
   --inspect                       validate PNG opacity/content after capture
   --no-inspect                    skip PNG inspection
+  --validate-only                 validate selector/options without capturing
   --json                          print machine-readable JSON only
   --help                          show this help
 
 Examples:
   npm run capture:windows:window -- --process-name=HeavenBurnsRed --region=window
+  npm run capture:windows:window -- --process-name=HeavenBurnsRed --region=client
   npm run capture:windows:window -- --foreground --region=window --format=jpg
   npm run capture:windows:window -- --process-name=HeavenBurnsRed --region=monitor --activate
   npm run capture:windows:window -- --process-name=HeavenBurnsRed --list
 `);
 }
 
-function readValueArg(flagName) {
+function readValueArg(flagName, fallbackValue = null) {
   const argument = process.argv.find(entry => entry.startsWith(`${flagName}=`));
   if (!argument) {
-    return null;
+    return fallbackValue;
   }
 
   return argument.slice(flagName.length + 1).trim() || null;
 }
 
-function readEnumArg(flagName, supportedValues, defaultValue) {
-  const rawValue = readValueArg(flagName);
+function readEnumArg(flagName, supportedValues, defaultValue, fallbackValue = null) {
+  const rawValue = readValueArg(flagName, fallbackValue);
   if (!rawValue) {
     return defaultValue;
   }
@@ -79,8 +83,8 @@ function readEnumArg(flagName, supportedValues, defaultValue) {
   return rawValue;
 }
 
-function readHandleArg() {
-  const rawValue = readValueArg('--handle');
+function readHandleArg(fallbackValue = null) {
+  const rawValue = readValueArg('--handle', fallbackValue == null ? null : String(fallbackValue));
   if (!rawValue) {
     return null;
   }
@@ -111,19 +115,19 @@ function buildDefaultOutputPath({processName, titleExact, titleContains, format}
     date.getFullYear(),
     `${date.getMonth() + 1}`.padStart(2, '0'),
     `${date.getDate()}`.padStart(2, '0'),
-  ].join('') + `-${`${date.getHours()}`.padStart(2, '0')}${`${date.getMinutes()}`.padStart(2, '0')}${`${date.getSeconds()}`.padStart(2, '0')}`;
+  ].join('') + `-${`${date.getHours()}`.padStart(2, '0')}${`${date.getMinutes()}`.padStart(2, '0')}${`${date.getSeconds()}`.padStart(2, '0')}${`${date.getMilliseconds()}`.padStart(3, '0')}`;
   const hint = processName || titleExact || titleContains || 'foreground-window';
   return path.join(defaultOutputDir, `${sanitizeFileStem(hint)}-${timestamp}.${format}`);
 }
 
-function buildSelectorOrThrow() {
+function buildSelectorOrThrow(selectorDefaults = {}) {
   const selector = {
-    foreground: process.argv.includes('--foreground'),
-    handle: readHandleArg(),
-    processName: readValueArg('--process-name'),
-    titleContains: readValueArg('--title-contains'),
-    titleExact: readValueArg('--title-exact'),
-    className: readValueArg('--class-name'),
+    foreground: process.argv.includes('--foreground') || selectorDefaults.foreground === true,
+    handle: readHandleArg(selectorDefaults.handle),
+    processName: readValueArg('--process-name', selectorDefaults.processName ?? null),
+    titleContains: readValueArg('--title-contains', selectorDefaults.titleContains ?? null),
+    titleExact: readValueArg('--title-exact', selectorDefaults.titleExact ?? null),
+    className: readValueArg('--class-name', selectorDefaults.className ?? null),
   };
 
   if (
@@ -432,6 +436,48 @@ function normalizeOutputPath(outputPath) {
   return path.resolve(process.cwd(), outputPath);
 }
 
+async function readJsonObjectFileArg(flagName) {
+  const filePath = normalizeOutputPath(readValueArg(flagName));
+  if (!filePath) {
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile(filePath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `${flagName} must point to a readable JSON object file. ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${flagName} must point to a JSON object.`);
+  }
+
+  return parsed;
+}
+
+function readPositiveIntegerWithFallback(flagName, defaultValue, fallbackValue = null) {
+  const rawValue = readValueArg(flagName);
+  if (rawValue != null) {
+    return parsePositiveIntegerArg(process.argv, flagName, defaultValue);
+  }
+
+  if (fallbackValue == null) {
+    return defaultValue;
+  }
+
+  const parsedFallback = Number(fallbackValue);
+  if (!Number.isFinite(parsedFallback) || parsedFallback <= 0) {
+    throw new Error(`${flagName} must be a positive number, got "${fallbackValue}".`);
+  }
+
+  return Math.floor(parsedFallback);
+}
+
 function parseJsonOutputOrThrow(stdout, context) {
   const trimmed = stdout.trim();
   if (!trimmed) {
@@ -481,7 +527,15 @@ function runPowerShellCaptureOrThrow(payload) {
   return parseJsonOutputOrThrow(result.stdout, 'Windows window capture');
 }
 
-function runWgcCaptureOrThrow({handle, outputPath, format, timeoutMs, includeCursor}) {
+function runWgcCaptureOrThrow({
+  handle,
+  outputPath,
+  format,
+  timeoutMs,
+  includeCursor,
+  windowRect,
+  clientRect,
+}) {
   const args = [
     'run',
     '--project',
@@ -492,6 +546,8 @@ function runWgcCaptureOrThrow({handle, outputPath, format, timeoutMs, includeCur
     `--format=${format}`,
     `--timeout-ms=${timeoutMs}`,
   ];
+  appendRectArgs(args, 'window', windowRect);
+  appendRectArgs(args, 'client', clientRect);
   if (includeCursor) {
     args.push('--include-cursor');
   }
@@ -517,6 +573,40 @@ function runWgcCaptureOrThrow({handle, outputPath, format, timeoutMs, includeCur
   return parseJsonOutputOrThrow(result.stdout, 'Windows.Graphics.Capture helper');
 }
 
+function appendRectArgs(args, prefix, rect) {
+  if (!rect) {
+    return;
+  }
+
+  args.push(`--${prefix}-left=${rect.left}`);
+  args.push(`--${prefix}-top=${rect.top}`);
+  args.push(`--${prefix}-right=${rect.right}`);
+  args.push(`--${prefix}-bottom=${rect.bottom}`);
+}
+
+function buildWgcArgs({handle, outputPath, format, timeoutMs, includeCursor, region, selectedWindow}) {
+  const args = {
+    handle,
+    outputPath,
+    format,
+    timeoutMs,
+    includeCursor,
+  };
+
+  if (region === 'client') {
+    if (!selectedWindow?.windowRect || !selectedWindow?.clientRect) {
+      throw new Error(
+        'WGC client-area capture requires both windowRect and clientRect metadata.',
+      );
+    }
+
+    args.windowRect = selectedWindow.windowRect;
+    args.clientRect = selectedWindow.clientRect;
+  }
+
+  return args;
+}
+
 function formatRect(rect) {
   if (!rect) {
     return '<unavailable>';
@@ -531,30 +621,53 @@ async function main() {
     return;
   }
 
+  const selectorDefaults = (await readJsonObjectFileArg('--selector-file')) ?? {};
+  const optionsDefaults = (await readJsonObjectFileArg('--options-file')) ?? {};
   const listOnly = process.argv.includes('--list');
   const jsonOnly = process.argv.includes('--json');
-  const activate = process.argv.includes('--activate');
-  const format = readEnumArg('--format', ['png', 'jpg'], 'png');
-  const region = readEnumArg('--region', ['client', 'window', 'monitor'], 'client');
-  const requestedBackend = readEnumArg('--backend', ['auto', 'copy-screen', 'wgc'], 'auto');
-  const selector = buildSelectorOrThrow();
-  const activationDelayMs = parsePositiveIntegerArg(process.argv, '--delay-ms', 400);
-  const timeoutMs = parsePositiveIntegerArg(process.argv, '--timeout-ms', 5000);
-  const includeCursor = process.argv.includes('--include-cursor');
-  const inspectRequested = process.argv.includes('--inspect');
-  const inspectSkipped = process.argv.includes('--no-inspect');
+  const validateOnly = process.argv.includes('--validate-only');
+  const activate = process.argv.includes('--activate') || optionsDefaults.activate === true;
+  const format = readEnumArg('--format', ['png', 'jpg'], 'png', optionsDefaults.format ?? null);
+  const region = readEnumArg(
+    '--region',
+    ['client', 'window', 'monitor'],
+    'client',
+    optionsDefaults.region ?? null,
+  );
+  const requestedBackend = readEnumArg(
+    '--backend',
+    ['auto', 'copy-screen', 'wgc'],
+    'auto',
+    optionsDefaults.backend ?? null,
+  );
+  const selector = buildSelectorOrThrow(selectorDefaults);
+  const activationDelayMs = readPositiveIntegerWithFallback(
+    '--delay-ms',
+    400,
+    optionsDefaults.activationDelayMs ?? null,
+  );
+  const timeoutMs = readPositiveIntegerWithFallback(
+    '--timeout-ms',
+    5000,
+    optionsDefaults.timeoutMs ?? null,
+  );
+  const includeCursor = process.argv.includes('--include-cursor') || optionsDefaults.includeCursor === true;
+  const inspectRequested = process.argv.includes('--inspect') || optionsDefaults.inspect === true;
+  const inspectSkipped = process.argv.includes('--no-inspect') || optionsDefaults.inspect === false;
   const inspectPng = !listOnly && format === 'png' && (inspectRequested || !inspectSkipped);
   const backend = requestedBackend === 'auto'
-    ? (region === 'window' ? 'wgc' : 'copy-screen')
+    ? (region === 'monitor' ? 'copy-screen' : 'wgc')
     : requestedBackend;
 
-  if (!listOnly && backend === 'wgc' && region !== 'window') {
+  if (!listOnly && backend === 'wgc' && region === 'monitor') {
     throw new Error(
-      'The WGC backend currently supports only --region=window. Use --backend=copy-screen for client or monitor captures.',
+      'The WGC backend currently supports only --region=window or --region=client. Use --backend=copy-screen for monitor captures.',
     );
   }
 
-  const explicitOutputPath = normalizeOutputPath(readValueArg('--out'));
+  const explicitOutputPath = normalizeOutputPath(
+    readValueArg('--out', optionsDefaults.outputPath ?? null),
+  );
   const outputPath = listOnly
     ? null
     : explicitOutputPath ??
@@ -565,8 +678,33 @@ async function main() {
         format,
       });
 
-  if (outputPath) {
+  if (outputPath && !validateOnly) {
     await mkdir(path.dirname(outputPath), {recursive: true});
+  }
+
+  if (validateOnly) {
+    const validationResult = {
+      selector,
+      listOnly,
+      activate,
+      activationDelayMs,
+      region,
+      format,
+      requestedBackend,
+      backend,
+      timeoutMs,
+      includeCursor,
+      inspectPng,
+      outputPath,
+    };
+
+    if (jsonOnly) {
+      console.log(JSON.stringify(validationResult, null, 2));
+      return;
+    }
+
+    console.log(`Validated selector for backend=${backend} region=${region}`);
+    return;
   }
 
   const payload = {
@@ -609,13 +747,17 @@ async function main() {
   }
 
   const helperResult = backend === 'wgc'
-    ? runWgcCaptureOrThrow({
-        handle: selectionResult.selectedWindow.handleHex,
-        outputPath,
-        format,
-        timeoutMs,
-        includeCursor,
-      })
+    ? runWgcCaptureOrThrow(
+        buildWgcArgs({
+          handle: selectionResult.selectedWindow.handleHex,
+          outputPath,
+          format,
+          timeoutMs,
+          includeCursor,
+          region,
+          selectedWindow: selectionResult.selectedWindow,
+        }),
+      )
     : null;
 
   const parsed = backend === 'wgc'
@@ -628,8 +770,18 @@ async function main() {
         backend,
         requestedBackend,
         captureSize: {
+          width: helperResult.outputWidth,
+          height: helperResult.outputHeight,
+        },
+        sourceItemSize: {
           width: helperResult.itemWidth,
           height: helperResult.itemHeight,
+        },
+        cropBounds: {
+          left: helperResult.cropLeft,
+          top: helperResult.cropTop,
+          width: helperResult.cropWidth,
+          height: helperResult.cropHeight,
         },
       }
     : {
@@ -683,6 +835,15 @@ async function main() {
   console.log(`Capture rect: ${formatRect(parsed.captureRect)}`);
   if (parsed.captureSize) {
     console.log(`Capture size: ${parsed.captureSize.width}x${parsed.captureSize.height}`);
+  }
+  if (
+    parsed.sourceItemSize &&
+    (parsed.sourceItemSize.width !== parsed.captureSize?.width ||
+      parsed.sourceItemSize.height !== parsed.captureSize?.height)
+  ) {
+    console.log(
+      `Source item size: ${parsed.sourceItemSize.width}x${parsed.sourceItemSize.height}`,
+    );
   }
   console.log(`Output: ${parsed.outputPath}`);
   if (inspectionStats) {

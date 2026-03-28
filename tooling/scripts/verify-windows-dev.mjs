@@ -158,6 +158,86 @@ const defaultScenarios = [
     successSummary:
       'Metro-backed Windows host completed view-shot dev smoke.',
   },
+  {
+    name: 'window-capture-current-window',
+    description:
+      'Metro-backed auto-open window-capture lab runs foreground WGC smoke in the current window',
+    smokeMarkers: [
+      'InitialOpenSurface surface=companion.window-capture policy=tool presentation=current-window',
+      '[frontend-companion] auto-open window=window.main surface=companion.window-capture presentation=current-window',
+      '[frontend-companion] render window=window.main surface=companion.window-capture policy=tool',
+      '[frontend-companion] mounted window=window.main surface=companion.window-capture policy=tool',
+      '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.window-capture',
+      '[frontend-window-capture] dev-smoke-start',
+      '[frontend-window-capture] dev-smoke-list count=',
+      '[frontend-window-capture] dev-smoke-capture-window backend=wgc size=',
+      '[frontend-window-capture] dev-smoke-capture-client backend=wgc crop=',
+      '[frontend-window-capture] dev-smoke-complete',
+    ],
+    launchConfig: {
+      initialOpen: {
+        surface: 'companion.window-capture',
+        policy: 'tool',
+        presentation: 'current-window',
+      },
+      initialOpenProps: {
+        'dev-smoke-scenario': 'window-capture-basics',
+      },
+    },
+    async verifyLog(logContents) {
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-window-capture\] dev-smoke-list count=\d+ handle=0x[0-9a-f]+ process=/i,
+        'window-capture dev smoke did not list a foreground window.',
+      );
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-window-capture\] dev-smoke-capture-window backend=wgc size=\d+x\d+ path=.*OPApp[\\/]+window-capture[\\/]+/i,
+        'window-capture dev smoke did not produce a WGC window capture under the managed host directory.',
+      );
+      const windowCapturePath = extractLoggedPath(
+        logContents,
+        /\[frontend-window-capture\] dev-smoke-capture-window backend=wgc size=\d+x\d+ path=([^\r\n]+)/i,
+        'window-capture dev smoke did not emit the window capture path.',
+      );
+      try {
+        const inspectionStats = assertPngCaptureLooksOpaque(
+          windowCapturePath,
+          'Windows dev verify window-capture window capture',
+        );
+        log(
+          'verify-dev',
+          `window-capture window OK: path=${windowCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
+        );
+      } finally {
+        await clearOptionalFile(windowCapturePath);
+      }
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-window-capture\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=.*OPApp[\\/]+window-capture[\\/]+/i,
+        'window-capture dev smoke did not produce a WGC client capture under the managed host directory.',
+      );
+      const clientCapturePath = extractLoggedPath(
+        logContents,
+        /\[frontend-window-capture\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=([^\r\n]+)/i,
+        'window-capture dev smoke did not emit the client capture path.',
+      );
+      try {
+        const inspectionStats = assertPngCaptureLooksOpaque(
+          clientCapturePath,
+          'Windows dev verify window-capture client capture',
+        );
+        log(
+          'verify-dev',
+          `window-capture client OK: path=${clientCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
+        );
+      } finally {
+        await clearOptionalFile(clientCapturePath);
+      }
+    },
+    successSummary:
+      'Metro-backed Windows host completed window-capture dev smoke.',
+  },
 ];
 
 const scenarioByName = new Map(defaultScenarios.map(scenario => [scenario.name, scenario]));

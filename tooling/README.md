@@ -7,10 +7,24 @@ Key OTA publishing entrypoint:
 - `scripts/ota-cloudflare-publish.mjs`: Windows-first Cloudflare publish flow
   (`bundle -> local registry -> index merge -> upload`).
 
+Window capture entrypoints:
+
+- `scripts/windows-capture-window.mjs`: top-level window capture CLI.
+  `--region=window` and `--region=client` default to the
+  `Windows.Graphics.Capture` helper path; `monitor` stays on desktop pixel copy.
+- `dotnet/window-capture-wgc/`: WGC helper project plus the current
+  `Vortice.Direct3D11` Windows SDK evaluation note.
+- `npm run test:windows-capture:options`: validate the CLI's backend-selection
+  defaults and monitor-path guardrails without launching a real capture.
+
 Windows verification entrypoints:
 
 - `npm run verify:windows`: full packaged validation.
 - `npm run verify:windows:portable`: full portable validation.
+- `npm run verify:windows:dev:window-capture`: Metro-backed `OpappWindowCapture`
+  scenario that opens the lab surface and validates WGC window/client capture.
+- `npm run smoke:windows:window-capture`: packaged `OpappWindowCapture`
+  scenario with the same end-to-end assertions.
 - `npm run verify:windows:ci-fast-fail`: validate-only packaged quick gate for CI.
 - `npm run verify:windows:portable:ci-fast-fail`: validate-only portable quick gate for CI.
 - `npm run verify:windows:preflight`: packaged preflight probe via verify entrypoint.

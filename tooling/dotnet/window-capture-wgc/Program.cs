@@ -32,12 +32,20 @@ internal static class Program
     private static readonly Guid GraphicsCaptureItemGuid =
         new("79C3F95B-31F7-4EC2-A464-632EF5D30760");
 
+    private sealed record ScreenRect(int Left, int Top, int Right, int Bottom)
+    {
+        public int Width => Right - Left;
+        public int Height => Bottom - Top;
+    }
+
     private sealed record CaptureOptions(
         long Handle,
         string OutputPath,
         string Format,
         int TimeoutMs,
-        bool IncludeCursor);
+        bool IncludeCursor,
+        ScreenRect? WindowRect,
+        ScreenRect? ClientRect);
 
     public static async Task<int> Main(string[] args)
     {
@@ -68,13 +76,17 @@ internal static class Program
 
         var timeoutMs = ParsePositiveInt(ReadOptionalArg(args, "--timeout-ms"), 5000, "--timeout-ms");
         var includeCursor = args.Contains("--include-cursor", StringComparer.OrdinalIgnoreCase);
+        var windowRect = ParseOptionalScreenRect(args, "window");
+        var clientRect = ParseOptionalScreenRect(args, "client");
 
         return new CaptureOptions(
             Handle: handle,
             OutputPath: Path.GetFullPath(outputPath),
             Format: format is "jpeg" ? "jpg" : format,
             TimeoutMs: timeoutMs,
-            IncludeCursor: includeCursor);
+            IncludeCursor: includeCursor,
+            WindowRect: windowRect,
+            ClientRect: clientRect);
     }
 
     private static async Task<object> CaptureWindowAsync(CaptureOptions options)
@@ -162,7 +174,11 @@ internal static class Program
             }
 
             using var softwareBitmap = await frameTask.Task;
-            await SaveBitmapAsync(softwareBitmap, options.OutputPath, options.Format);
+            var cropBounds = ResolveCropBounds(
+                options,
+                softwareBitmap.PixelWidth,
+                softwareBitmap.PixelHeight);
+            await SaveBitmapAsync(softwareBitmap, options.OutputPath, options.Format, cropBounds);
 
             return new
             {
@@ -170,6 +186,14 @@ internal static class Program
                 format = options.Format,
                 itemWidth = captureItem.Size.Width,
                 itemHeight = captureItem.Size.Height,
+                bitmapWidth = softwareBitmap.PixelWidth,
+                bitmapHeight = softwareBitmap.PixelHeight,
+                outputWidth = cropBounds is BitmapBounds outputBounds ? (int)outputBounds.Width : softwareBitmap.PixelWidth,
+                outputHeight = cropBounds is BitmapBounds outputHeightBounds ? (int)outputHeightBounds.Height : softwareBitmap.PixelHeight,
+                cropLeft = cropBounds is BitmapBounds cropLeftBounds ? (int)cropLeftBounds.X : 0,
+                cropTop = cropBounds is BitmapBounds cropTopBounds ? (int)cropTopBounds.Y : 0,
+                cropWidth = cropBounds is BitmapBounds cropWidthBounds ? (int)cropWidthBounds.Width : softwareBitmap.PixelWidth,
+                cropHeight = cropBounds is BitmapBounds cropHeightBounds ? (int)cropHeightBounds.Height : softwareBitmap.PixelHeight,
                 includeCursor = options.IncludeCursor,
             };
         }
@@ -182,13 +206,18 @@ internal static class Program
     private static async Task SaveBitmapAsync(
         SoftwareBitmap bitmap,
         string outputPath,
-        string format)
+        string format,
+        BitmapBounds? cropBounds)
     {
         using var stream = new InMemoryRandomAccessStream();
         var encoderId = format == "jpg"
             ? BitmapEncoder.JpegEncoderId
             : BitmapEncoder.PngEncoderId;
         var encoder = await BitmapEncoder.CreateAsync(encoderId, stream);
+        if (cropBounds is BitmapBounds bounds)
+        {
+            encoder.BitmapTransform.Bounds = bounds;
+        }
         encoder.SetSoftwareBitmap(bitmap);
         await encoder.FlushAsync();
 
@@ -220,6 +249,79 @@ internal static class Program
         return value.Length == 0 ? null : value;
     }
 
+    private static ScreenRect? ParseOptionalScreenRect(string[] args, string rectName)
+    {
+        var leftRaw = ReadOptionalArg(args, $"--{rectName}-left");
+        var topRaw = ReadOptionalArg(args, $"--{rectName}-top");
+        var rightRaw = ReadOptionalArg(args, $"--{rectName}-right");
+        var bottomRaw = ReadOptionalArg(args, $"--{rectName}-bottom");
+
+        if (leftRaw is null && topRaw is null && rightRaw is null && bottomRaw is null)
+        {
+            return null;
+        }
+
+        if (leftRaw is null || topRaw is null || rightRaw is null || bottomRaw is null)
+        {
+            throw new InvalidOperationException(
+                $"--{rectName}-left/top/right/bottom must all be provided together.");
+        }
+
+        var left = ParseInt(leftRaw, $"--{rectName}-left");
+        var top = ParseInt(topRaw, $"--{rectName}-top");
+        var right = ParseInt(rightRaw, $"--{rectName}-right");
+        var bottom = ParseInt(bottomRaw, $"--{rectName}-bottom");
+
+        if (right <= left || bottom <= top)
+        {
+            throw new InvalidOperationException(
+                $"--{rectName}-* must describe a non-empty rect.");
+        }
+
+        return new ScreenRect(left, top, right, bottom);
+    }
+
+    private static BitmapBounds? ResolveCropBounds(CaptureOptions options, int bitmapWidth, int bitmapHeight)
+    {
+        if (options.WindowRect is null || options.ClientRect is null)
+        {
+            return null;
+        }
+
+        var windowRect = options.WindowRect;
+        var clientRect = options.ClientRect;
+        if (windowRect.Width <= 0 || windowRect.Height <= 0)
+        {
+            throw new InvalidOperationException("Window rect for crop mapping is empty.");
+        }
+
+        var scaleX = bitmapWidth / (double)windowRect.Width;
+        var scaleY = bitmapHeight / (double)windowRect.Height;
+        var left = (int)Math.Round((clientRect.Left - windowRect.Left) * scaleX);
+        var top = (int)Math.Round((clientRect.Top - windowRect.Top) * scaleY);
+        var right = (int)Math.Round((clientRect.Right - windowRect.Left) * scaleX);
+        var bottom = (int)Math.Round((clientRect.Bottom - windowRect.Top) * scaleY);
+
+        left = Math.Clamp(left, 0, bitmapWidth);
+        top = Math.Clamp(top, 0, bitmapHeight);
+        right = Math.Clamp(right, 0, bitmapWidth);
+        bottom = Math.Clamp(bottom, 0, bitmapHeight);
+
+        if (right <= left || bottom <= top)
+        {
+            throw new InvalidOperationException(
+                "Client area crop resolved outside the captured window content.");
+        }
+
+        return new BitmapBounds
+        {
+            X = (uint)left,
+            Y = (uint)top,
+            Width = (uint)(right - left),
+            Height = (uint)(bottom - top),
+        };
+    }
+
     private static long ParseHandle(string rawValue)
     {
         var style = rawValue.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
@@ -237,6 +339,17 @@ internal static class Program
         {
             throw new InvalidOperationException(
                 $"--handle must be a positive decimal or 0x-prefixed hex number, got \"{rawValue}\".");
+        }
+
+        return parsed;
+    }
+
+    private static int ParseInt(string rawValue, string flagName)
+    {
+        if (!int.TryParse(rawValue, out var parsed))
+        {
+            throw new InvalidOperationException(
+                $"{flagName} must be an integer, got \"{rawValue}\".");
         }
 
         return parsed;

@@ -56,6 +56,11 @@ const defaultScenarios = [
     args: ['--scenario=view-shot-current-window', '--skip-prepare'],
   },
   {
+    name: 'window-capture-current-window',
+    description: 'packaged auto-open window-capture lab runs foreground WGC smoke in the current window',
+    args: ['--scenario=window-capture-current-window', '--skip-prepare'],
+  },
+  {
     name: 'secondary-window',
     description: 'startup detached settings window surface-model check',
     args: ['--scenario=secondary-window'],

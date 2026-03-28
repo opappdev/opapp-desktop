@@ -34,6 +34,10 @@ Use `npm run smoke:windows:release` when you only need the packaged host smoke.
 Use `npm run smoke:windows:portable` when you only need the portable/direct-exe
 smoke.
 
+Use `npm run verify:windows:dev:window-capture` or
+`npm run smoke:windows:window-capture` when you need to validate the native
+`OpappWindowCapture` bridge end to end.
+
 Use `npm run verify:windows:surface-model` or `npm run smoke:windows:surface-model`
 only when validating multi-surface or multi-window behavior.
 
@@ -43,6 +47,23 @@ surface model behavior through the direct-run release directory artifact.
 
 All smoke entrypoints clean up the launched Windows host process before
 returning.
+
+## External Window Capture
+
+Use `npm run capture:windows:window -- ...` to capture an external top-level
+window for Windows-only debugging and data intake support.
+
+Current behavior:
+
+- `--region=window` and `--region=client` now default to `Windows.Graphics.Capture`
+- `--region=client` is implemented as `window` capture plus client-area crop mapping
+- `--region=monitor` still uses desktop pixel copy
+- the WGC helper implementation lives in `tooling/dotnet/window-capture-wgc/`
+- the current third-party SDK evaluation note also lives there
+
+Example:
+
+- `npm run capture:windows:window -- --process-name=HeavenBurnsRed --region=window --json`
 
 ## OTA Cloudflare Publish (Windows First)
 
