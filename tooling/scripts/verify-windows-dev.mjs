@@ -83,6 +83,7 @@ const defaultScenarios = [
       '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.view-shot',
       '[frontend-view-shot] dev-smoke-start',
       '[frontend-view-shot] dev-smoke-capture-ref uri=',
+      '[frontend-view-shot] dev-smoke-component-data-uri prefix=data:image/png;base64, length=',
       '[frontend-view-shot] dev-smoke-capture-screen uri=',
       '[frontend-view-shot] dev-smoke-release-complete',
       '[frontend-view-shot] dev-smoke-complete',
@@ -102,6 +103,11 @@ const defaultScenarios = [
         logContents,
         /\[frontend-view-shot\] dev-smoke-capture-ref uri=.*OPApp[\\/]+view-shot[\\/]+/i,
         'view-shot dev smoke did not produce a tmpfile captureRef artifact under the managed host directory.',
+      );
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-view-shot\] dev-smoke-component-data-uri prefix=data:image\/png;base64, length=\d+/i,
+        'view-shot dev smoke did not produce a PNG data-uri from ViewShot.capture.',
       );
       assertLogContainsRegex(
         logContents,
