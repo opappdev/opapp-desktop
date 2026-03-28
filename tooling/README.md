@@ -9,6 +9,9 @@ Key OTA publishing entrypoint:
   Defaults to loading the workspace root `.env.r2.local`, prefers direct R2 S3
   upload when `R2_ENDPOINT` + `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` are
   available, and keeps Wrangler upload as a compatibility fallback.
+- `npm run test:ota:updater`: direct-node assertions for OTA updater
+  `last-run.json` payload shaping, including rollout/channel context retention
+  during `--mode=update`.
 
 Window capture entrypoints:
 

@@ -426,6 +426,43 @@ async function _writeOtaLastRun(cacheDir, result) {
   );
 }
 
+/**
+ * Build the persisted last-run payload for a successful `--mode=update`.
+ *
+ * The update flow already computes rollout/channel/currentVersion metadata in
+ * the check step, but the apply step only returns staging fields. Preserve the
+ * richer check context so `last-run.json` stays useful for post-update
+ * diagnostics.
+ *
+ * @param {object} checkResult
+ * @param {object} applyResult
+ * @returns {object}
+ */
+export function buildOtaUpdateLastRunRecord(checkResult, applyResult) {
+  const record = {
+    status: 'updated',
+    bundleId: applyResult.bundleId ?? checkResult.bundleId,
+    channel: checkResult.channel,
+    currentVersion: checkResult.currentVersion,
+    latestVersion: checkResult.latestVersion,
+    version: applyResult.version,
+    previousVersion: checkResult.currentVersion,
+    stagedAt: applyResult.stagedAt,
+    deviceId: checkResult.deviceId,
+    inRollout: checkResult.inRollout,
+  };
+
+  if (checkResult.rolloutPercent !== undefined) {
+    record.rolloutPercent = checkResult.rolloutPercent;
+  }
+
+  if (checkResult.channels) {
+    record.channels = checkResult.channels;
+  }
+
+  return record;
+}
+
 async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
   const base = remoteBase.replace(/\/$/, '');
   const indexUrl = `${base}/index.json`;
@@ -711,9 +748,7 @@ async function main() {
   await _writeOtaLastRun(cacheDirArg, {
     mode: modeArg,
     remoteBase: remoteArg,
-    status: 'updated',
-    previousVersion: checkResult.currentVersion,
-    ...applyResult,
+    ...buildOtaUpdateLastRunRecord(checkResult, applyResult),
   });
   console.log(
     JSON.stringify({
