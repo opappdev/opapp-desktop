@@ -36,6 +36,11 @@ const preserveState = process.argv.includes('--preserve-state');
 const resetSessions = process.argv.includes('--reset-sessions');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
+const otaRemoteToken = process.argv.find(argument => argument.startsWith('--ota-remote='));
+const otaRemoteArg = otaRemoteToken?.split('=').slice(1).join('=');
+const otaChannelToken = process.argv.find(argument => argument.startsWith('--ota-channel='));
+const otaChannelArg = otaChannelToken?.split('=').slice(1).join('=');
+const otaForceFlag = process.argv.includes('--ota-force');
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
@@ -60,6 +65,10 @@ const logPath = path.join(tempRoot, 'opapp-windows-host.log');
 const launchConfigPath = path.join(tempRoot, 'opapp-windows-host.launch.ini');
 const preferencesPath = path.join(tempRoot, 'opapp-windows-host.preferences.ini');
 const sessionsPath = path.join(tempRoot, 'opapp-windows-host.sessions.ini');
+const otaCacheRoot = path.join(repoRoot, '.ota-cache');
+const otaLastRunPath = path.join(otaCacheRoot, 'last-run.json');
+const otaStatePath = path.join(otaCacheRoot, 'ota-state.json');
+const otaChannelPath = path.join(otaCacheRoot, 'channel.json');
 const userDataRoot = path.join(
   process.env.LOCALAPPDATA || path.join(workspaceRoot, '.tmp'),
   'OPApp',
@@ -157,6 +166,18 @@ function resolveScenarioNameOrThrow() {
 
   return includeSecondaryWindow ? 'secondary-window' : 'tab-session';
 }
+
+function validateOtaArgs() {
+  if (otaRemoteArg !== undefined && otaRemoteArg.trim().length === 0) {
+    throw new Error('`--ota-remote=` must include a non-empty URL.');
+  }
+  if (otaChannelArg !== undefined && otaChannelArg.trim().length === 0) {
+    throw new Error('`--ota-channel=` must include a non-empty channel name.');
+  }
+  if (!otaRemoteArg && (otaChannelArg !== undefined || otaForceFlag)) {
+    throw new Error('`--ota-channel` and `--ota-force` require `--ota-remote=<url>`.');
+  }
+}
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -184,6 +205,18 @@ function extractLoggedPath(logContents, regex, reason) {
   }
 
   return match[1].trim();
+}
+
+function extractRuntimeBundleRoot(logContents) {
+  return extractLoggedPath(
+    logContents,
+    /Runtime=Bundle root=(.+?) file=/,
+    'runtime bundle root was not logged.',
+  );
+}
+
+function extractOtaLoggedCurrentVersion(logContents) {
+  return normalizeLogContents(logContents).match(/OTA\.SpawnUpdateProcess .* currentVersion=([^\r\n ]+)/)?.[1] ?? null;
 }
 
 async function snapshotOptionalTextFile(filePath) {
@@ -1915,6 +1948,16 @@ function buildLaunchConfig() {
     content += `\n[secondary]\nsurface=${scenario.launchConfig.secondary.surface}\npolicy=${scenario.launchConfig.secondary.policy}\n`;
   }
 
+  if (otaRemoteArg) {
+    content += `\n[ota]\nremote=${otaRemoteArg}\n`;
+    if (otaChannelArg) {
+      content += `channel=${otaChannelArg}\n`;
+    }
+    if (otaForceFlag) {
+      content += 'force=true\n';
+    }
+  }
+
   return content;
 }
 
@@ -2039,6 +2082,139 @@ async function waitForMarkers(markers, {timeoutMs, phaseLabel, timeoutFlag}) {
   }));
 }
 
+async function waitForOtaState({timeoutMs, timeoutFlag}) {
+  const startMs = Date.now();
+  while (Date.now() - startMs < timeoutMs) {
+    if (await fileExists(otaStatePath)) {
+      const otaState = JSON.parse(await readFile(otaStatePath, 'utf8'));
+      if (typeof otaState?.version === 'string' && otaState.version && typeof otaState?.stagedAt === 'string') {
+        return otaState;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  throw new Error(formatMarkerTimeoutMessage({
+    phaseLabel: 'ota-state write',
+    scenarioName,
+    timeoutFlag,
+    timeoutMs,
+  }));
+}
+
+async function waitForOtaChannel({timeoutMs, timeoutFlag}) {
+  const startMs = Date.now();
+  while (Date.now() - startMs < timeoutMs) {
+    if (await fileExists(otaChannelPath)) {
+      const otaChannel = JSON.parse(await readFile(otaChannelPath, 'utf8'));
+      if (typeof otaChannel?.channel === 'string' && otaChannel.channel) {
+        return otaChannel;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  throw new Error(formatMarkerTimeoutMessage({
+    phaseLabel: 'ota-channel write',
+    scenarioName,
+    timeoutFlag,
+    timeoutMs,
+  }));
+}
+
+async function waitForOtaLastRun({timeoutMs, timeoutFlag}) {
+  const startMs = Date.now();
+  while (Date.now() - startMs < timeoutMs) {
+    if (await fileExists(otaLastRunPath)) {
+      const lastRun = JSON.parse(await readFile(otaLastRunPath, 'utf8'));
+      if (typeof lastRun?.mode === 'string' && typeof lastRun?.recordedAt === 'string') {
+        return lastRun;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  throw new Error(formatMarkerTimeoutMessage({
+    phaseLabel: 'ota last-run write',
+    scenarioName,
+    timeoutFlag,
+    timeoutMs,
+  }));
+}
+
+async function verifyOtaSideEffects(logContents) {
+  if (!otaRemoteArg) {
+    return;
+  }
+
+  const runtimeBundleRoot = extractRuntimeBundleRoot(logContents);
+  if (!normalizeLogContents(logContents).includes(`hostBundleDir=${runtimeBundleRoot}`)) {
+    throw new Error(
+      `Windows release smoke failed: ota spawn log did not target the runtime bundle root '${runtimeBundleRoot}'.`,
+    );
+  }
+
+  await waitForMarkers(['OTA.SpawnUpdateProcess.OK'], {
+    timeoutMs: scenarioTimeoutMs,
+    phaseLabel: 'ota spawn marker',
+    timeoutFlag: '--scenario-ms',
+  });
+
+  const otaLastRun = await waitForOtaLastRun({
+    timeoutMs: scenarioTimeoutMs,
+    timeoutFlag: '--scenario-ms',
+  });
+  if (otaLastRun.remoteBase !== otaRemoteArg) {
+    throw new Error(
+      `Windows release smoke failed: ota last-run remoteBase was '${otaLastRun.remoteBase ?? 'unknown'}', expected '${otaRemoteArg}'.`,
+    );
+  }
+
+  if (otaChannelArg) {
+    const otaChannel = await waitForOtaChannel({
+      timeoutMs: scenarioTimeoutMs,
+      timeoutFlag: '--scenario-ms',
+    });
+    if (otaChannel?.channel !== otaChannelArg) {
+      throw new Error(
+        `Windows release smoke failed: ota channel persisted as '${otaChannel?.channel ?? 'unknown'}', expected '${otaChannelArg}'.`,
+      );
+    }
+  }
+
+  if (otaLastRun.status !== 'updated' && otaLastRun.status !== 'up-to-date') {
+    throw new Error(
+      `Windows release smoke failed: ota last-run status was '${otaLastRun.status ?? 'unknown'}', expected 'updated' or 'up-to-date'.`,
+    );
+  }
+
+  const loggedCurrentVersion = extractOtaLoggedCurrentVersion(logContents);
+  if (otaLastRun.currentVersion && loggedCurrentVersion && otaLastRun.currentVersion !== loggedCurrentVersion) {
+    throw new Error(
+      `Windows release smoke failed: ota last-run currentVersion '${otaLastRun.currentVersion}' did not match the host logged currentVersion '${loggedCurrentVersion}'.`,
+    );
+  }
+
+  if (otaLastRun.status !== 'updated') {
+    return;
+  }
+
+  const otaState = await waitForOtaState({
+    timeoutMs: scenarioTimeoutMs,
+    timeoutFlag: '--scenario-ms',
+  });
+  if (otaState.hostBundleDir !== runtimeBundleRoot) {
+    throw new Error(
+      `Windows release smoke failed: ota-state hostBundleDir was '${otaState.hostBundleDir ?? 'unknown'}', expected '${runtimeBundleRoot}'.`,
+    );
+  }
+  if (otaState.version !== otaLastRun.version) {
+    throw new Error(
+      `Windows release smoke failed: ota-state version '${otaState.version}' did not match ota last-run version '${otaLastRun.version ?? 'unknown'}'.`,
+    );
+  }
+}
+
 async function verifyPersistedSession() {
   const sessionFile = await readFile(sessionsPath, 'utf8');
   scenario.verifyPersistedSession?.(sessionFile);
@@ -2054,6 +2230,7 @@ async function verifyPersistedPreferences() {
 }
 
 async function main() {
+  validateOtaArgs();
   log(`repoRoot=${repoRoot}`);
   log(`frontendRoot=${frontendRoot}`);
   log(`hostRoot=${hostRoot}`);
@@ -2061,6 +2238,9 @@ async function main() {
   log(`portableReleaseRoot=${portableReleaseRoot}`);
   log(`portableExePath=${portableExePath}`);
   log(`logPath=${logPath}`);
+  log(`otaCacheRoot=${otaCacheRoot}`);
+  log(`otaLastRunPath=${otaLastRunPath}`);
+  log(`otaStatePath=${otaStatePath}`);
   log(`launchConfigPath=${launchConfigPath}`);
   log(`preferencesPath=${preferencesPath}`);
   log(`cliPath=${cliPath}`);
@@ -2084,6 +2264,13 @@ async function main() {
   log(`preflightOnly=${preflightOnly}`);
   log(`skipPrepare=${skipPrepare}`);
   log(`resetSessions=${resetSessions}`);
+  if (otaRemoteArg) {
+    log(`otaRemote=${otaRemoteArg}`);
+  }
+  if (otaChannelArg) {
+    log(`otaChannel=${otaChannelArg}`);
+  }
+  log(`otaForce=${otaForceFlag}`);
   if (validateOnly && preflightOnly) {
     throw new Error('`--validate-only` conflicts with `--preflight-only`; choose one execution mode.');
   }
@@ -2104,6 +2291,13 @@ async function main() {
   await removeIfPresent(logPath);
   await removeIfPresent(launchConfigPath);
   await removeIfPresent(preferencesPath);
+  if (otaRemoteArg) {
+    await removeIfPresent(otaLastRunPath);
+    await removeIfPresent(otaStatePath);
+    if (otaChannelArg) {
+      await removeIfPresent(otaChannelPath);
+    }
+  }
   if (resetSessions || !preserveState) {
     await removeIfPresent(sessionsPath);
   }
@@ -2182,6 +2376,7 @@ async function main() {
     const tail = logContents.split(/\r?\n/).slice(-120).join('\n');
     console.log('[smoke] success log tail:');
     console.log(tail);
+    await verifyOtaSideEffects(logContents);
     await verifyPersistedSession();
     await verifyPersistedPreferences();
   } catch (error) {

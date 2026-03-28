@@ -58,6 +58,31 @@ std::optional<std::wstring> GetStartupOverride(
   return GetEnvironmentString(environmentName);
 }
 
+std::optional<bool> ParseBooleanValue(std::wstring const &value) noexcept {
+  if (value == L"1" || value == L"true" || value == L"TRUE" || value == L"yes" || value == L"on") {
+    return true;
+  }
+  if (value == L"0" || value == L"false" || value == L"FALSE" || value == L"no" || value == L"off") {
+    return false;
+  }
+
+  return std::nullopt;
+}
+
+bool GetBooleanStartupOverride(
+    std::wstring const &section,
+    std::wstring const &key,
+    std::wstring const &environmentName,
+    bool fallbackValue = false) noexcept {
+  if (auto value = GetStartupOverride(section, key, environmentName)) {
+    if (auto parsed = ParseBooleanValue(*value)) {
+      return *parsed;
+    }
+  }
+
+  return fallbackValue;
+}
+
 } // namespace
 
 LaunchSurfaceConfig BuildLaunchSurface(
@@ -165,6 +190,14 @@ std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept {
 
 std::optional<std::wstring> GetOtaRemoteUrl() noexcept {
   return GetStartupOverride(L"ota", L"remote", L"OPAPP_OTA_REMOTE_URL");
+}
+
+std::optional<std::wstring> GetOtaChannel() noexcept {
+  return GetStartupOverride(L"ota", L"channel", L"OPAPP_OTA_CHANNEL");
+}
+
+bool GetOtaForceUpdate() noexcept {
+  return GetBooleanStartupOverride(L"ota", L"force", L"OPAPP_OTA_FORCE");
 }
 
 } // namespace OpappWindowsHost

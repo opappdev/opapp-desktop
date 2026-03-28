@@ -67,6 +67,7 @@ const DEFAULT_HOST_BUNDLE_DIR = path.join(
   'Bundle',
 );
 const OTA_STATE_FILENAME = 'ota-state.json';
+const OTA_LAST_RUN_FILENAME = 'last-run.json';
 
 // ---------------------------------------------------------------------------
 // Exported API
@@ -400,6 +401,22 @@ async function _writeOtaState(cacheDir, state) {
   );
 }
 
+async function _writeOtaLastRun(cacheDir, result) {
+  await mkdir(cacheDir, {recursive: true});
+  await writeFile(
+    path.join(cacheDir, OTA_LAST_RUN_FILENAME),
+    JSON.stringify(
+      {
+        ...result,
+        recordedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ) + '\n',
+    'utf8',
+  );
+}
+
 async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
   const base = remoteBase.replace(/\/$/, '');
   const indexUrl = `${base}/index.json`;
@@ -595,6 +612,7 @@ async function main() {
       platform: platformArg !== DEFAULT_PLATFORM ? platformArg : undefined,
       bundleId: bundleIdArg,
     });
+    await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: null, ...result});
     console.log(JSON.stringify(result));
     return;
   }
@@ -609,6 +627,7 @@ async function main() {
       deviceId: deviceIdArg,
       channel: channelArg,
     });
+    await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: remoteArg, ...result});
     console.log(JSON.stringify(result));
     return;
   }
@@ -623,6 +642,7 @@ async function main() {
       force: forceFlag,
       channel: channelArg,
     });
+    await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: remoteArg, ...result});
     console.log(JSON.stringify(result));
     return;
   }
@@ -635,6 +655,7 @@ async function main() {
       bundleId: bundleIdArg,
       version: versionArg,
     });
+    await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: null, ...result});
     console.log(JSON.stringify(result));
     return;
   }
@@ -651,6 +672,12 @@ async function main() {
   });
 
   if (!checkResult.hasUpdate) {
+    await _writeOtaLastRun(cacheDirArg, {
+      mode: modeArg,
+      remoteBase: remoteArg,
+      status: 'up-to-date',
+      ...checkResult,
+    });
     console.log(JSON.stringify({status: 'up-to-date', ...checkResult}));
     return;
   }
@@ -672,6 +699,13 @@ async function main() {
     version: downloadResult.version,
   });
 
+  await _writeOtaLastRun(cacheDirArg, {
+    mode: modeArg,
+    remoteBase: remoteArg,
+    status: 'updated',
+    previousVersion: checkResult.currentVersion,
+    ...applyResult,
+  });
   console.log(
     JSON.stringify({
       status: 'updated',

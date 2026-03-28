@@ -13,6 +13,11 @@ const validateOnly = process.argv.includes('--validate-only');
 const preflightOnly = process.argv.includes('--preflight-only');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
+const otaRemoteToken = process.argv.find(argument => argument.startsWith('--ota-remote='));
+const otaRemoteArg = otaRemoteToken?.split('=').slice(1).join('=');
+const otaChannelToken = process.argv.find(argument => argument.startsWith('--ota-channel='));
+const otaChannelArg = otaChannelToken?.split('=').slice(1).join('=');
+const otaForceFlag = process.argv.includes('--ota-force');
 const baseReadinessTimeoutMs = 25_000;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
@@ -230,6 +235,18 @@ function runCmdOrThrow(args, options = {}) {
   runOrThrow('cmd.exe', ['/d', '/s', '/c', ...args], options);
 }
 
+function validateOtaArgs() {
+  if (otaRemoteArg !== undefined && otaRemoteArg.trim().length === 0) {
+    throw new Error('`--ota-remote=` must include a non-empty URL.');
+  }
+  if (otaChannelArg !== undefined && otaChannelArg.trim().length === 0) {
+    throw new Error('`--ota-channel=` must include a non-empty channel name.');
+  }
+  if (!otaRemoteArg && (otaChannelArg !== undefined || otaForceFlag)) {
+    throw new Error('`--ota-channel` and `--ota-force` require `--ota-remote=<url>`.');
+  }
+}
+
 function resolveSmokeArgsForRun(scenario, scenarioIndex) {
   if (scenarioIndex !== 0) {
     return scenario.args;
@@ -268,6 +285,15 @@ function runWindowsSmoke(scenario, scenarioIndex) {
     `--startup-ms=${startupTimeoutMs}`,
     `--scenario-ms=${scenarioTimeoutMs}`,
   ];
+  if (otaRemoteArg) {
+    smokeArgs.push(`--ota-remote=${otaRemoteArg}`);
+  }
+  if (otaChannelArg) {
+    smokeArgs.push(`--ota-channel=${otaChannelArg}`);
+  }
+  if (otaForceFlag) {
+    smokeArgs.push('--ota-force');
+  }
   const startMs = Date.now();
   runOrThrow(process.execPath, smokeArgs, {
     cwd: repoRoot,
@@ -297,6 +323,15 @@ function runWindowsPreflight(scenarios) {
     `--startup-ms=${startupTimeoutMs}`,
     `--scenario-ms=${scenarioTimeoutMs}`,
   ];
+  if (otaRemoteArg) {
+    preflightArgs.push(`--ota-remote=${otaRemoteArg}`);
+  }
+  if (otaChannelArg) {
+    preflightArgs.push(`--ota-channel=${otaChannelArg}`);
+  }
+  if (otaForceFlag) {
+    preflightArgs.push('--ota-force');
+  }
   runOrThrow(process.execPath, preflightArgs, {
     cwd: repoRoot,
     env: process.env,
@@ -304,6 +339,7 @@ function runWindowsPreflight(scenarios) {
 }
 
 function resolveScenariosOrThrow() {
+  validateOtaArgs();
   const scenarioFilterNames = parseScenarioFilterNames(scenarioFilterArg);
   const hasScenarioFlag = Boolean(scenarioFilterToken);
   const hasScenarioFilter = scenarioFilterNames.length > 0;

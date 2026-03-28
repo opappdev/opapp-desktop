@@ -205,8 +205,30 @@ test('verify-windows validate-only accepts portable launch mode', () => {
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts ota remote/channel/force flags', () => {
+  const result = runVerifyValidateOnly([
+    '--ota-remote=https://r2.opapp.dev',
+    '--ota-channel=nightly',
+    '--ota-force',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only rejects non-positive smoke timeout flags', () => {
   const result = runVerifyValidateOnly(['--smoke-ms=0']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only rejects ota channel without remote', () => {
+  const result = runVerifyValidateOnly(['--ota-channel=nightly']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only rejects ota force without remote', () => {
+  const result = runVerifyValidateOnly(['--ota-force']);
 
   assert.notEqual(result.status, 0);
 });

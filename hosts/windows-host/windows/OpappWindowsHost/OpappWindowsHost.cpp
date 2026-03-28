@@ -53,6 +53,30 @@ std::optional<std::wstring> ReadBundleManifestEntryFile(std::wstring const &bund
   }
 }
 
+// Reads bundle-manifest.json from bundleRoot and returns the version field, or
+// nullopt if the manifest cannot be read or parsed.
+std::optional<std::wstring> ReadBundleManifestVersion(std::wstring const &bundleRoot) noexcept {
+  try {
+    auto manifestPath = std::filesystem::path(bundleRoot) / L"bundle-manifest.json";
+    std::ifstream stream(manifestPath, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    auto jsonObject = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
+    auto versionHstr = jsonObject.GetNamedString(L"version");
+    std::wstring version(versionHstr.c_str(), versionHstr.size());
+    if (version.empty()) {
+      return std::nullopt;
+    }
+
+    return version;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 void LogRedBoxError(std::string const &phase, winrt::Microsoft::ReactNative::IRedBoxErrorInfo const &info) noexcept {
   AppendLog(phase + ".Message=" + ToUtf8(info.Message()));
   AppendLog(phase + ".OriginalMessage=" + ToUtf8(info.OriginalMessage()));
@@ -175,26 +199,30 @@ struct LoggingRedBoxHandler
   winrt::Microsoft::ReactNative::IRedBoxHandler m_innerHandler{nullptr};
 };
 
-// Resolves a tooling script path relative to the exe directory.
+// Resolves a tooling script path by searching upward from the exe directory
+// until a matching <ancestor>/tooling/scripts/<scriptName> is found.
 //
-// The build output directory sits 5 levels below the opapp-desktop repo root:
-//   Release/ → x64/ → windows/ → windows-host/ → hosts/ → opapp-desktop/
-//
-// Returns nullopt if the computed path does not exist on disk, which prevents
-// spawning when the app is deployed without the development toolchain.
+// Portable output reaches the repo root in ~5 levels, while the packaged AppX
+// output sits deeper under OpappWindowsHost.Package/bin/x64/Release/AppX/.
+// Walking ancestors keeps both layouts working inside the repo while still
+// returning nullopt for deployments that do not include the development
+// toolchain beside the build output.
 std::optional<std::wstring> ResolveToolingScriptPath(
     std::wstring const &appDirectory,
     std::wstring const &scriptName) noexcept {
   try {
-    auto scriptPath = std::filesystem::path(appDirectory)
-                          .parent_path()  // x64/
-                          .parent_path()  // windows/
-                          .parent_path()  // windows-host/
-                          .parent_path()  // hosts/
-                          .parent_path()  // opapp-desktop/ (repo root)
-                      / L"tooling" / L"scripts" / scriptName;
-    if (std::filesystem::exists(scriptPath)) {
-      return scriptPath.wstring();
+    auto currentPath = std::filesystem::path(appDirectory);
+    while (!currentPath.empty()) {
+      auto scriptPath = currentPath / L"tooling" / L"scripts" / scriptName;
+      if (std::filesystem::exists(scriptPath)) {
+        return scriptPath.wstring();
+      }
+
+      auto parentPath = currentPath.parent_path();
+      if (parentPath == currentPath) {
+        break;
+      }
+      currentPath = parentPath;
     }
     return std::nullopt;
   } catch (...) {
@@ -211,8 +239,27 @@ std::optional<std::wstring> ResolveOtaScriptPath(std::wstring const &appDirector
 //
 // WinMain does not wait for the child process to exit.  The staged bundle takes
 // effect on the next application launch (RFC-010 Phase 2).
-void SpawnOtaUpdateProcess(std::wstring const &appDirectory, std::wstring const &remoteUrl) noexcept {
-  AppendLog("OTA.SpawnUpdateProcess remoteUrl=" + ToUtf8(remoteUrl));
+void SpawnOtaUpdateProcess(
+    std::wstring const &appDirectory,
+    std::wstring const &remoteUrl,
+    std::optional<std::wstring> const &hostBundleDir,
+    std::optional<std::wstring> const &currentVersion,
+    std::optional<std::wstring> const &channel,
+    bool forceUpdate) noexcept {
+  auto logLine = std::string("OTA.SpawnUpdateProcess remoteUrl=") + ToUtf8(remoteUrl);
+  if (hostBundleDir) {
+    logLine += " hostBundleDir=" + ToUtf8(*hostBundleDir);
+  }
+  if (currentVersion) {
+    logLine += " currentVersion=" + ToUtf8(*currentVersion);
+  }
+  if (channel) {
+    logLine += " channel=" + ToUtf8(*channel);
+  }
+  if (forceUpdate) {
+    logLine += " force=true";
+  }
+  AppendLog(logLine);
 
   auto scriptPath = ResolveOtaScriptPath(appDirectory);
   if (!scriptPath) {
@@ -222,6 +269,18 @@ void SpawnOtaUpdateProcess(std::wstring const &appDirectory, std::wstring const 
 
   std::wstring cmdLine = std::wstring(L"node.exe \"") + *scriptPath +
       L"\" --mode=update --remote=\"" + remoteUrl + L"\" --platform=windows";
+  if (hostBundleDir) {
+    cmdLine += L" --host-bundle-dir=\"" + *hostBundleDir + L"\"";
+  }
+  if (currentVersion) {
+    cmdLine += L" --current-version=\"" + *currentVersion + L"\"";
+  }
+  if (channel) {
+    cmdLine += L" --channel=\"" + *channel + L"\"";
+  }
+  if (forceUpdate) {
+    cmdLine += L" --force";
+  }
 
   STARTUPINFOW si{};
   si.cb = sizeof(si);
@@ -514,7 +573,19 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     // (CREATE_NO_WINDOW | DETACHED_PROCESS) and exits on its own; the staged
     // bundle takes effect on the next application launch.
     if (auto otaRemoteUrl = GetOtaRemoteUrl()) {
-      SpawnOtaUpdateProcess(std::wstring(appDirectory), *otaRemoteUrl);
+      std::optional<std::wstring> hostBundleDir;
+      std::optional<std::wstring> currentBundleVersion;
+#if BUNDLE
+      hostBundleDir = std::wstring(appDirectory).append(L"\\Bundle");
+      currentBundleVersion = ReadBundleManifestVersion(*hostBundleDir);
+#endif
+      SpawnOtaUpdateProcess(
+          std::wstring(appDirectory),
+          *otaRemoteUrl,
+          hostBundleDir,
+          currentBundleVersion,
+          GetOtaChannel(),
+          GetOtaForceUpdate());
     }
 
     AppendLog("WinMain.StartReactNativeApp");
