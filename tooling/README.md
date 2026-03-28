@@ -34,6 +34,7 @@ Windows smoke timeout knobs:
 - `windows-release-smoke.mjs` now prints per-phase timing utilization and low-headroom hints so real-machine runs can tune `--startup-ms` / `--scenario-ms` with concrete elapsed values.
 - `verify-windows.mjs` now logs each scenario duration and an aggregated `scenario timing summary totalMs=...` line after full runs.
 - `windows-smoke-timing-report.mjs` converts collected `timing summary scenario=...` logs into percentile-based timeout recommendations (default `P95 + 5000ms`), and when `verify-windows` summary lines are present it also prints a recommended full-run verify timeout.
+- when verify logs contain `launchMode=...` markers, the verify-timeout recommendation also respects `--launch=packaged|portable` filtering (while staying backward-compatible with older logs that do not include launch markers).
 - when logs contain only `verify-windows` summary lines, add `--allow-verify-only` to emit verify-timeout recommendations while skipping startup/scenario marker budgets.
 - Example timing report usage:
   - `npm run report:windows:timing -- --input=%TEMP%\\verify-packaged.log,%TEMP%\\verify-portable.log --launch=all --percentile=95 --headroom-ms=5000`

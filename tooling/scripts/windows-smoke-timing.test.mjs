@@ -6,6 +6,7 @@ import {
   formatMarkerTimeoutMessage,
   formatMarkerTimingSummary,
   parseMarkerTimingSummaryLine,
+  parseVerifyLaunchModeLine,
   parseVerifyTimingSummaryLine,
 } from './windows-smoke-timing.mjs';
 
@@ -119,6 +120,12 @@ test('parseVerifyTimingSummaryLine extracts verify total duration summary', () =
     scenarioCount: 7,
     totalDurationMs: 58_123,
   });
+});
+
+test('parseVerifyLaunchModeLine extracts verify launch mode marker', () => {
+  assert.equal(parseVerifyLaunchModeLine('[verify] launchMode=portable'), 'portable');
+  assert.equal(parseVerifyLaunchModeLine('[verify] launchMode=packaged'), 'packaged');
+  assert.equal(parseVerifyLaunchModeLine('[verify] scenario timing summary totalMs=58123'), null);
 });
 
 test('buildTimingBudgetRecommendation validates inputs', () => {

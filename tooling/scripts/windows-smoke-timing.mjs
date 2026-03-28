@@ -23,6 +23,7 @@ export function buildTimingPhaseResult({phaseLabel, elapsedMs, budgetMs, timeout
 const timingSummaryRegex =
   /timing summary scenario=(\S+) launchMode=(packaged|portable) startupMs=(\d+) scenarioMs=(\d+) totalMarkerMs=(\d+)/;
 const verifyTimingSummaryRegex = /scenario timing summary totalMs=(\d+) scenarioCount=(\d+)/;
+const verifyLaunchModeRegex = /launchMode=(packaged|portable)\b/;
 
 export function parseMarkerTimingSummaryLine(line) {
   const match = line.match(timingSummaryRegex);
@@ -49,6 +50,15 @@ export function parseVerifyTimingSummaryLine(line) {
     scenarioCount: Number(match[2]),
     totalDurationMs: Number(match[1]),
   };
+}
+
+export function parseVerifyLaunchModeLine(line) {
+  const match = line.match(verifyLaunchModeRegex);
+  if (!match) {
+    return null;
+  }
+
+  return match[1];
 }
 
 function getNearestRankValue(values, percentile) {

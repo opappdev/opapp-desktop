@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildSerializedReport,
   buildDurationRecommendation,
+  collectVerifyTimingSummaries,
   formatTimingTextReport,
   generateTimingReport,
   resolveInputPathsOrThrow,
@@ -20,6 +21,13 @@ const sampleLog = [
 const verifyOnlyLog = [
   '[verify] scenario timing summary totalMs=11111 scenarioCount=2',
   '[verify] scenario timing summary totalMs=12000 scenarioCount=2',
+].join('\n');
+
+const mixedLaunchVerifyLog = [
+  '[verify] launchMode=packaged',
+  '[verify] scenario timing summary totalMs=14000 scenarioCount=2',
+  '[verify] launchMode=portable',
+  '[verify] scenario timing summary totalMs=22000 scenarioCount=2',
 ].join('\n');
 
 test('generateTimingReport computes packaged recommendations from summary logs', () => {
@@ -68,6 +76,42 @@ test('generateTimingReport supports verify-only recommendation mode', () => {
   assert.equal(report.scenarioRecommendations.length, 0);
   assert.ok(report.verifyTotalRecommendation);
   assert.equal(report.verifyTotalRecommendation.recommendedBudgetMs, 16_000);
+});
+
+test('collectVerifyTimingSummaries honors launch-mode filtering when markers are present', () => {
+  const packagedSummaries = collectVerifyTimingSummaries(mixedLaunchVerifyLog, 'packaged');
+  assert.deepEqual(
+    packagedSummaries.map(summary => summary.totalDurationMs),
+    [14_000],
+  );
+  assert.equal(packagedSummaries[0].launchMode, 'packaged');
+
+  const portableSummaries = collectVerifyTimingSummaries(mixedLaunchVerifyLog, 'portable');
+  assert.deepEqual(
+    portableSummaries.map(summary => summary.totalDurationMs),
+    [22_000],
+  );
+  assert.equal(portableSummaries[0].launchMode, 'portable');
+});
+
+test('generateTimingReport verify-only recommendations respect --launch when logs are mixed', () => {
+  const packagedReport = generateTimingReport({
+    allowVerifyOnly: true,
+    headroomMs: 3_000,
+    launchMode: 'packaged',
+    logContents: mixedLaunchVerifyLog,
+    percentileValue: 95,
+  });
+  assert.equal(packagedReport.verifyTotalRecommendation.recommendedBudgetMs, 17_000);
+
+  const portableReport = generateTimingReport({
+    allowVerifyOnly: true,
+    headroomMs: 3_000,
+    launchMode: 'portable',
+    logContents: mixedLaunchVerifyLog,
+    percentileValue: 95,
+  });
+  assert.equal(portableReport.verifyTotalRecommendation.recommendedBudgetMs, 25_000);
 });
 
 test('formatTimingTextReport describes verify-only fallback output', () => {

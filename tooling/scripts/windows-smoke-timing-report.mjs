@@ -6,6 +6,7 @@ import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {
   buildTimingBudgetRecommendation,
   parseMarkerTimingSummaryLine,
+  parseVerifyLaunchModeLine,
   parseVerifyTimingSummaryLine,
 } from './windows-smoke-timing.mjs';
 
@@ -86,13 +87,33 @@ export function buildDurationRecommendation(durationsMs, {headroomMs, percentile
   };
 }
 
-export function collectVerifyTimingSummaries(logContents) {
+export function collectVerifyTimingSummaries(logContents, selectedLaunchMode = 'all') {
   const verifySummaries = [];
+  let activeLaunchMode = null;
   for (const line of logContents.split(/\r?\n/)) {
-    const parsedSummary = parseVerifyTimingSummaryLine(line);
-    if (parsedSummary) {
-      verifySummaries.push(parsedSummary);
+    const parsedLaunchMode = parseVerifyLaunchModeLine(line);
+    if (parsedLaunchMode) {
+      activeLaunchMode = parsedLaunchMode;
+      continue;
     }
+
+    const parsedSummary = parseVerifyTimingSummaryLine(line);
+    if (!parsedSummary) {
+      continue;
+    }
+
+    if (
+      selectedLaunchMode !== 'all' &&
+      activeLaunchMode &&
+      activeLaunchMode !== selectedLaunchMode
+    ) {
+      continue;
+    }
+
+    verifySummaries.push({
+      ...parsedSummary,
+      launchMode: activeLaunchMode,
+    });
   }
 
   return verifySummaries;
@@ -109,7 +130,7 @@ export function generateTimingReport({
   const percentile = resolvePercentileOrThrow(percentileValue);
   const timingSummaries = collectTimingSummaries(logContents, selectedLaunchMode);
   const recommendationOptions = {headroomMs, percentile};
-  const verifyTimingSummaries = collectVerifyTimingSummaries(logContents);
+  const verifyTimingSummaries = collectVerifyTimingSummaries(logContents, selectedLaunchMode);
   const verifyTotalRecommendation = buildDurationRecommendation(
     verifyTimingSummaries.map(summary => summary.totalDurationMs),
     recommendationOptions,
