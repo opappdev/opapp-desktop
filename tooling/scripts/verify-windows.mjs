@@ -26,6 +26,16 @@ const smokeTimeoutMs = parsePositiveIntegerArg(
   '--smoke-ms',
   readinessTimeoutMs,
 );
+const startupTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--startup-ms',
+  smokeTimeoutMs,
+);
+const scenarioTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--scenario-ms',
+  smokeTimeoutMs,
+);
 
 const defaultScenarios = [
   {
@@ -154,6 +164,8 @@ function runWindowsSmoke(scenario) {
     `--launch=${launchMode}`,
     `--readiness-ms=${readinessTimeoutMs}`,
     `--smoke-ms=${smokeTimeoutMs}`,
+    `--startup-ms=${startupTimeoutMs}`,
+    `--scenario-ms=${scenarioTimeoutMs}`,
   ];
   runOrThrow(process.execPath, smokeArgs, {
     cwd: repoRoot,
@@ -225,6 +237,8 @@ function main() {
   log(`launchMode=${launchMode}`);
   log(`readinessTimeoutMs=${readinessTimeoutMs}`);
   log(`smokeTimeoutMs=${smokeTimeoutMs}`);
+  log(`startupTimeoutMs=${startupTimeoutMs}`);
+  log(`scenarioTimeoutMs=${scenarioTimeoutMs}`);
 
   if (validateOnly) {
     log('validate-only enabled; skipping frontend typecheck and Windows smoke execution.');

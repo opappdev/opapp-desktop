@@ -55,6 +55,12 @@ test('verify-windows validate-only accepts positive smoke/readiness timeout flag
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts positive startup/scenario timeout flags', () => {
+  const result = runVerifyValidateOnly(['--startup-ms=9000', '--scenario-ms=12000']);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only accepts packaged launch mode explicitly', () => {
   const result = runVerifyValidateOnly(['--launch=packaged']);
 
@@ -69,6 +75,18 @@ test('verify-windows validate-only accepts portable launch mode', () => {
 
 test('verify-windows validate-only rejects non-positive smoke timeout flags', () => {
   const result = runVerifyValidateOnly(['--smoke-ms=0']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only rejects non-positive startup timeout flags', () => {
+  const result = runVerifyValidateOnly(['--startup-ms=0']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only rejects non-positive scenario timeout flags', () => {
+  const result = runVerifyValidateOnly(['--scenario-ms=0']);
 
   assert.notEqual(result.status, 0);
 });

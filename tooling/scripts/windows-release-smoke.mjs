@@ -60,6 +60,16 @@ const smokeTimeoutMs = parsePositiveIntegerArg(
   '--smoke-ms',
   readinessTimeoutMs,
 );
+const startupTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--startup-ms',
+  smokeTimeoutMs,
+);
+const scenarioTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--scenario-ms',
+  smokeTimeoutMs,
+);
 
 let windowPolicyRegistryCache = null;
 
@@ -642,6 +652,14 @@ if (!scenario) {
 const successMarkers = [
   ...scenario.successMarkers,
   ...(launchMode === 'portable' ? ['WinMain.BootstrapInitialize', 'WinMain.BootstrapInitialize.Done'] : []),
+];
+const defaultStartupMarkers = [
+  'InstanceLoaded failed=false',
+  'NativeLogger[1] Running "OpappWindowsHost"',
+];
+const startupMarkers = [
+  ...(scenario.startupMarkers ?? defaultStartupMarkers),
+  ...(launchMode === 'portable' ? ['WinMain.BootstrapInitialize.Done'] : []),
 ];
 
 const failureMarkers = [
@@ -1235,8 +1253,8 @@ function launchPortableApp() {
   );
 }
 
-async function waitForMarkers() {
-  const deadline = Date.now() + smokeTimeoutMs;
+async function waitForMarkers(markers, {timeoutMs, phaseLabel}) {
+  const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1252,29 +1270,24 @@ async function waitForMarkers() {
         const tail = logContents.split(/\r?\n/).slice(-160).join('\n');
         console.log('[smoke] failure log tail:');
         console.log(tail);
-        throw new Error(`Windows release smoke failed: found '${marker}'`);
+        throw new Error(`Windows release smoke failed: found '${marker}' while waiting for ${phaseLabel}.`);
       }
     }
 
-    if (successMarkers.every(marker => logContents.includes(marker))) {
-      await assertBundledPolicyRegistry(logContents);
-      await scenario.verifyLog?.(logContents);
-      const tail = logContents.split(/\r?\n/).slice(-120).join('\n');
-      console.log('[smoke] success log tail:');
-      console.log(tail);
-      return;
+    if (markers.every(marker => logContents.includes(marker))) {
+      return logContents;
     }
   }
 
   if (await fileExists(logPath)) {
     const logContents = await readFile(logPath, 'utf8');
     const tail = logContents.split(/\r?\n/).slice(-180).join('\n');
-    console.log('[smoke] timeout log tail:');
+    console.log(`[smoke] ${phaseLabel} timeout log tail:`);
     console.log(tail);
   }
 
   throw new Error(
-    `Windows release smoke timed out before all success markers appeared for scenario '${scenarioName}' within ${smokeTimeoutMs}ms.`,
+    `Windows release smoke timed out waiting for ${phaseLabel} in scenario '${scenarioName}' within ${timeoutMs}ms.`,
   );
 }
 
@@ -1308,6 +1321,8 @@ async function main() {
   log(`launchMode=${launchMode}`);
   log(`readinessTimeoutMs=${readinessTimeoutMs}`);
   log(`smokeTimeoutMs=${smokeTimeoutMs}`);
+  log(`startupTimeoutMs=${startupTimeoutMs}`);
+  log(`scenarioTimeoutMs=${scenarioTimeoutMs}`);
   log(`skipPrepare=${skipPrepare}`);
   log(`resetSessions=${resetSessions}`);
 
@@ -1344,7 +1359,19 @@ async function main() {
       launchInstalledApp();
     }
 
-    await waitForMarkers();
+    await waitForMarkers(startupMarkers, {
+      timeoutMs: startupTimeoutMs,
+      phaseLabel: 'startup markers',
+    });
+    const logContents = await waitForMarkers(successMarkers, {
+      timeoutMs: scenarioTimeoutMs,
+      phaseLabel: 'scenario success markers',
+    });
+    await assertBundledPolicyRegistry(logContents);
+    await scenario.verifyLog?.(logContents);
+    const tail = logContents.split(/\r?\n/).slice(-120).join('\n');
+    console.log('[smoke] success log tail:');
+    console.log(tail);
     await verifyPersistedSession();
     await verifyPersistedPreferences();
   } catch (error) {
