@@ -17,6 +17,11 @@ const sampleLog = [
   '[smoke] timing summary scenario=secondary-window launchMode=portable startupMs=10000 scenarioMs=12500 totalMarkerMs=22500',
 ].join('\n');
 
+const verifyOnlyLog = [
+  '[verify] scenario timing summary totalMs=11111 scenarioCount=2',
+  '[verify] scenario timing summary totalMs=12000 scenarioCount=2',
+].join('\n');
+
 test('generateTimingReport computes packaged recommendations from summary logs', () => {
   const report = generateTimingReport({
     headroomMs: 5_000,
@@ -51,6 +56,35 @@ test('formatTimingTextReport renders a readable timeout recommendation summary',
   assert.match(output, /recommended verify timeout >=16111/);
 });
 
+test('generateTimingReport supports verify-only recommendation mode', () => {
+  const report = generateTimingReport({
+    allowVerifyOnly: true,
+    headroomMs: 4_000,
+    logContents: verifyOnlyLog,
+    percentileValue: 95,
+  });
+
+  assert.equal(report.overallRecommendation, null);
+  assert.equal(report.scenarioRecommendations.length, 0);
+  assert.ok(report.verifyTotalRecommendation);
+  assert.equal(report.verifyTotalRecommendation.recommendedBudgetMs, 16_000);
+});
+
+test('formatTimingTextReport describes verify-only fallback output', () => {
+  const report = generateTimingReport({
+    allowVerifyOnly: true,
+    logContents: verifyOnlyLog,
+  });
+  const output = formatTimingTextReport({
+    inputPath: 'D:\\logs\\verify-preflight.log',
+    report,
+  });
+
+  assert.match(output, /marker timing samples=0/);
+  assert.match(output, /startup\/scenario recommendations skipped/);
+  assert.match(output, /recommended verify timeout >=17000/);
+});
+
 test('generateTimingReport fails when selected launch mode has no timing samples', () => {
   assert.throws(
     () =>
@@ -58,6 +92,16 @@ test('generateTimingReport fails when selected launch mode has no timing samples
         launchMode: 'portable',
         logContents:
           '[smoke] timing summary scenario=tab-session launchMode=packaged startupMs=8000 scenarioMs=11000 totalMarkerMs=19000',
+      }),
+    /No timing summary lines found/,
+  );
+});
+
+test('generateTimingReport requires marker timing samples unless verify-only is enabled', () => {
+  assert.throws(
+    () =>
+      generateTimingReport({
+        logContents: verifyOnlyLog,
       }),
     /No timing summary lines found/,
   );

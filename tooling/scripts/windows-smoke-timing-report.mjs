@@ -99,6 +99,7 @@ export function collectVerifyTimingSummaries(logContents) {
 }
 
 export function generateTimingReport({
+  allowVerifyOnly = false,
   headroomMs = 5_000,
   launchMode = 'all',
   logContents,
@@ -107,40 +108,65 @@ export function generateTimingReport({
   const selectedLaunchMode = resolveLaunchModeOrThrow(launchMode);
   const percentile = resolvePercentileOrThrow(percentileValue);
   const timingSummaries = collectTimingSummaries(logContents, selectedLaunchMode);
+  const recommendationOptions = {headroomMs, percentile};
+  const verifyTimingSummaries = collectVerifyTimingSummaries(logContents);
+  const verifyTotalRecommendation = buildDurationRecommendation(
+    verifyTimingSummaries.map(summary => summary.totalDurationMs),
+    recommendationOptions,
+  );
   if (timingSummaries.length === 0) {
+    if (allowVerifyOnly && verifyTotalRecommendation) {
+      return {
+        headroomMs,
+        launchMode: selectedLaunchMode,
+        overallRecommendation: null,
+        percentileLabel: formatPercentileLabel(percentileValue),
+        percentileValue,
+        scenarioRecommendations: [],
+        verifyTotalRecommendation,
+      };
+    }
+
+    const additionalHint = verifyTotalRecommendation
+      ? ' Add --allow-verify-only to emit verify timeout recommendations from verify summary lines only.'
+      : ' Make sure the input file includes `timing summary scenario=...` log entries.';
     throw new Error(
-      `No timing summary lines found for launch=${selectedLaunchMode}. ` +
-        'Make sure the input file includes `timing summary scenario=...` log entries.',
+      `No timing summary lines found for launch=${selectedLaunchMode}. ${additionalHint}`,
     );
   }
 
-  const recommendationOptions = {headroomMs, percentile};
-  const verifyTimingSummaries = collectVerifyTimingSummaries(logContents);
   return {
+    headroomMs,
     launchMode: selectedLaunchMode,
     overallRecommendation: buildTimingBudgetRecommendation(timingSummaries, recommendationOptions),
     percentileLabel: formatPercentileLabel(percentileValue),
     percentileValue,
     scenarioRecommendations: buildScenarioRecommendationMap(timingSummaries, recommendationOptions),
-    verifyTotalRecommendation: buildDurationRecommendation(
-      verifyTimingSummaries.map(summary => summary.totalDurationMs),
-      recommendationOptions,
-    ),
+    verifyTotalRecommendation,
   };
 }
 
 export function formatTimingTextReport({inputPath, report}) {
-  const lines = [
-    `[timing-report] input=${inputPath}`,
-    `[timing-report] samples=${report.overallRecommendation.sampleCount} launch=${report.launchMode} ` +
-      `percentile=${report.percentileLabel} headroomMs=${report.overallRecommendation.headroomMs}`,
-    `[timing-report] startup ${report.percentileLabel}=${report.overallRecommendation.startup.percentileMs}ms ` +
-      `max=${report.overallRecommendation.startup.maxMs}ms ` +
-      `recommended --startup-ms>=${report.overallRecommendation.startup.recommendedBudgetMs}`,
-    `[timing-report] scenario ${report.percentileLabel}=${report.overallRecommendation.scenario.percentileMs}ms ` +
-      `max=${report.overallRecommendation.scenario.maxMs}ms ` +
-      `recommended --scenario-ms>=${report.overallRecommendation.scenario.recommendedBudgetMs}`,
-  ];
+  const lines = [`[timing-report] input=${inputPath}`];
+
+  if (report.overallRecommendation) {
+    lines.push(
+      `[timing-report] samples=${report.overallRecommendation.sampleCount} launch=${report.launchMode} ` +
+        `percentile=${report.percentileLabel} headroomMs=${report.overallRecommendation.headroomMs}`,
+      `[timing-report] startup ${report.percentileLabel}=${report.overallRecommendation.startup.percentileMs}ms ` +
+        `max=${report.overallRecommendation.startup.maxMs}ms ` +
+        `recommended --startup-ms>=${report.overallRecommendation.startup.recommendedBudgetMs}`,
+      `[timing-report] scenario ${report.percentileLabel}=${report.overallRecommendation.scenario.percentileMs}ms ` +
+        `max=${report.overallRecommendation.scenario.maxMs}ms ` +
+        `recommended --scenario-ms>=${report.overallRecommendation.scenario.recommendedBudgetMs}`,
+    );
+  } else {
+    lines.push(
+      `[timing-report] marker timing samples=0 launch=${report.launchMode} ` +
+        `percentile=${report.percentileLabel} headroomMs=${report.headroomMs}`,
+      '[timing-report] no marker timing summary lines found; startup/scenario recommendations skipped.',
+    );
+  }
 
   if (report.scenarioRecommendations.length > 0) {
     lines.push('[timing-report] per-scenario recommendations:');
@@ -169,6 +195,7 @@ export function buildSerializedReport({inputPaths, outputJson, report}) {
   if (outputJson) {
     return JSON.stringify(
       {
+        headroomMs: report.headroomMs,
         inputPaths,
         launchMode: report.launchMode,
         overall: report.overallRecommendation,
@@ -224,6 +251,7 @@ async function writeOutputFileIfRequested(outputPath, outputText) {
 }
 
 async function main(argv = process.argv) {
+  const allowVerifyOnly = argv.includes('--allow-verify-only');
   const launchMode = findArgValue(argv, '--launch') ?? 'all';
   const outputJson = argv.includes('--json');
   const outputPath = resolveOutputPath(argv);
@@ -234,6 +262,7 @@ async function main(argv = process.argv) {
     await Promise.all(inputPaths.map(inputPath => readFile(inputPath, 'utf8')))
   ).join('\n');
   const report = generateTimingReport({
+    allowVerifyOnly,
     headroomMs,
     launchMode,
     logContents,

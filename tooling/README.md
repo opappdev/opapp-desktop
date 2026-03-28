@@ -17,7 +17,7 @@ Windows verification entrypoints:
 - `npm run verify:windows:portable:preflight`: portable preflight probe via verify entrypoint.
 - `npm run verify:windows:ci-preflight`: packaged preflight probe with CI-oriented timeout args.
 - `npm run verify:windows:portable:ci-preflight`: portable preflight probe with CI-oriented timeout args.
-- `npm run report:windows:timing -- --input=<log-path>[,<log-path-2>] [--input=<log-path-3>] [--launch=all|packaged|portable] [--percentile=95] [--headroom-ms=5000] [--output=<report-path>]`: parse and aggregate `timing summary` lines across one or more logs, then print recommended `--startup-ms` / `--scenario-ms`（可选写入文件）。
+- `npm run report:windows:timing -- --input=<log-path>[,<log-path-2>] [--input=<log-path-3>] [--launch=all|packaged|portable] [--percentile=95] [--headroom-ms=5000] [--allow-verify-only] [--output=<report-path>]`: parse and aggregate `timing summary` lines across one or more logs, then print recommended `--startup-ms` / `--scenario-ms`（可选写入文件）。
 - `npm run smoke:windows:validate`: validate direct release-smoke packaged args only.
 - `npm run smoke:windows:portable:validate`: validate direct release-smoke portable args only.
 - `npm run smoke:windows:preflight`: packaged release preflight probe only (no bundle/build/launch).
@@ -34,9 +34,11 @@ Windows smoke timeout knobs:
 - `windows-release-smoke.mjs` now prints per-phase timing utilization and low-headroom hints so real-machine runs can tune `--startup-ms` / `--scenario-ms` with concrete elapsed values.
 - `verify-windows.mjs` now logs each scenario duration and an aggregated `scenario timing summary totalMs=...` line after full runs.
 - `windows-smoke-timing-report.mjs` converts collected `timing summary scenario=...` logs into percentile-based timeout recommendations (default `P95 + 5000ms`), and when `verify-windows` summary lines are present it also prints a recommended full-run verify timeout.
+- when logs contain only `verify-windows` summary lines, add `--allow-verify-only` to emit verify-timeout recommendations while skipping startup/scenario marker budgets.
 - Example timing report usage:
   - `npm run report:windows:timing -- --input=%TEMP%\\verify-packaged.log,%TEMP%\\verify-portable.log --launch=all --percentile=95 --headroom-ms=5000`
   - `npm run report:windows:timing -- --input=%TEMP%\\verify-packaged.log --launch=packaged --json --output=%TEMP%\\windows-timing-report.json`
+  - `npm run report:windows:timing -- --input=%TEMP%\\verify-ci-preflight.log --allow-verify-only`
 
 Portable fallback override knobs:
 
