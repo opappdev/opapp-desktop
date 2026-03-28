@@ -59,6 +59,18 @@ test('verify-windows validate-only accepts startup-target launcher scenario filt
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts startup-target settings scenario filter', () => {
+  const result = runVerifyValidateOnly(['--scenario=startup-target-settings']);
+
+  assert.equal(result.status, 0);
+});
+
+test('verify-windows validate-only accepts startup-target challenge-advisor scenario filter', () => {
+  const result = runVerifyValidateOnly(['--scenario=startup-target-challenge-advisor']);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only accepts comma-separated scenario filters', () => {
   const result = runVerifyValidateOnly(['--scenario=tab-session,view-shot-current-window']);
 

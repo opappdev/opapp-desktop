@@ -104,6 +104,8 @@ const supportedScenarioNames = [
   'tab-session',
   'restore-tab-session',
   'startup-target-main-launcher',
+  'startup-target-settings',
+  'startup-target-challenge-advisor',
   'restore-settings-window',
   'settings-default-current-window',
   'settings-default-new-window',
@@ -622,6 +624,191 @@ const smokeScenarios = {
         'window.main',
         'companion.settings',
         'startup target override left the restored settings surface in the main window session.',
+      );
+    },
+  },
+  'startup-target-settings': {
+    description: 'saved settings startup target overrides a restored main-window launcher session',
+    preferences: defaultPreferences,
+    launchConfig: {},
+    successMarkers: [
+      'LaunchSurface surface=companion.main policy=main mode=',
+      'InstanceLoaded failed=false',
+      'NativeLogger[1] Running "OpappWindowsHost"',
+      'BundleManifestSource=manifest',
+      '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=companion.settings presentation=current-window targetBundle=opapp.companion.main',
+      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.settings policy=settings',
+      '[frontend-companion] mounted bundle=opapp.companion.main window=window.main surface=companion.settings policy=settings',
+      '[frontend-companion] session bundle=opapp.companion.main window=window.main tabs=1 active=',
+    ],
+    async prepareState() {
+      await mkdir(path.dirname(companionStartupTargetPath), {recursive: true});
+      await writeFile(
+        companionStartupTargetPath,
+        JSON.stringify({
+          surfaceId: 'companion.settings',
+          bundleId: 'opapp.companion.main',
+          policy: 'settings',
+          presentation: 'current-window',
+        }),
+        'utf8',
+      );
+
+      await writeFile(
+        sessionsPath,
+        buildPersistedSessionFile({
+          'window.main': {
+            windowId: 'window.main',
+            activeTabId: 'tab:companion.main:1',
+            tabs: [
+              {
+                tabId: 'tab:companion.main:1',
+                surfaceId: 'companion.main',
+                policy: 'main',
+              },
+            ],
+          },
+        }),
+        'utf8',
+      );
+    },
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+      if (normalized.includes('InitialOpenSurface surface=')) {
+        throw new Error(
+          'Windows release smoke failed: startup target settings override should not rely on an initial-open launch config.',
+        );
+      }
+
+      if (
+        normalized.includes(
+          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
+        )
+      ) {
+        throw new Error(
+          'Windows release smoke failed: startup target settings override still rendered the restored launcher surface in the main window.',
+        );
+      }
+
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-companion\] session bundle=opapp\.companion\.main window=window\.main tabs=1 active=\S+ entries=[^\r\n]*companion\.settings/i,
+        'startup target settings override did not settle the main window session on the settings surface.',
+      );
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.settings',
+        'startup target settings override did not persist the settings surface back into the main window session.',
+      );
+      assertPersistedSessionLacksSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.main',
+        'startup target settings override left the restored launcher surface in the main window session.',
+      );
+    },
+  },
+  'startup-target-challenge-advisor': {
+    description: 'saved challenge-advisor startup target switches the main window into the child bundle during cold start',
+    preferences: defaultPreferences,
+    launchConfig: {},
+    successMarkers: [
+      'LaunchSurface surface=companion.main policy=main mode=',
+      'InstanceLoaded failed=false',
+      'NativeLogger[1] Running "OpappWindowsHost"',
+      'BundleManifestSource=manifest',
+      '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=companion.challenge-advisor presentation=current-window targetBundle=opapp.companion.challenge-advisor',
+      'BundleSwitchPrepared window=window.main bundle=opapp.companion.challenge-advisor surface=companion.challenge-advisor policy=main',
+      'BundleSwitchReloadRequested window=window.main bundle=opapp.companion.challenge-advisor',
+      '[frontend-companion] render bundle=opapp.companion.challenge-advisor window=window.main surface=companion.challenge-advisor policy=main',
+      '[frontend-companion] mounted bundle=opapp.companion.challenge-advisor window=window.main surface=companion.challenge-advisor policy=main',
+    ],
+    async prepareState() {
+      await mkdir(path.dirname(companionStartupTargetPath), {recursive: true});
+      await writeFile(
+        companionStartupTargetPath,
+        JSON.stringify({
+          surfaceId: 'companion.challenge-advisor',
+          bundleId: 'opapp.companion.challenge-advisor',
+          policy: 'main',
+          presentation: 'current-window',
+        }),
+        'utf8',
+      );
+
+      await writeFile(
+        sessionsPath,
+        buildPersistedSessionFile({
+          'window.main': {
+            windowId: 'window.main',
+            activeTabId: 'tab:companion.main:1',
+            tabs: [
+              {
+                tabId: 'tab:companion.main:1',
+                surfaceId: 'companion.main',
+                policy: 'main',
+              },
+            ],
+          },
+        }),
+        'utf8',
+      );
+    },
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+      if (normalized.includes('InitialOpenSurface surface=')) {
+        throw new Error(
+          'Windows release smoke failed: startup target challenge-advisor override should not rely on an initial-open launch config.',
+        );
+      }
+
+      if (!normalized.includes('Bundle\\bundles\\opapp.companion.challenge-advisor')) {
+        throw new Error(
+          'Windows release smoke failed: startup target challenge-advisor override did not point the host at the staged child bundle root.',
+        );
+      }
+
+      if (
+        normalized.includes(
+          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
+        )
+      ) {
+        throw new Error(
+          'Windows release smoke failed: startup target challenge-advisor override still rendered the restored launcher surface in the main window.',
+        );
+      }
+
+      if (normalized.includes('surface-fallback bundle=opapp.companion.challenge-advisor')) {
+        throw new Error(
+          'Windows release smoke failed: startup target challenge-advisor override rendered through the fallback surface path.',
+        );
+      }
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.challenge-advisor',
+        'startup target challenge-advisor override did not persist the challenge-advisor surface into the main window session.',
+      );
+      assertPersistedSessionContains(
+        sessionFile,
+        'window.main',
+        'opapp.companion.challenge-advisor',
+        'startup target challenge-advisor override did not persist the challenge-advisor bundle id into the main window session.',
+      );
+      assertPersistedSessionLacksSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.main',
+        'startup target challenge-advisor override left the restored launcher surface in the main window session.',
       );
     },
   },
