@@ -25,6 +25,7 @@ import {
   writeHostLaunchConfig,
 } from './windows-dev-common.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
+import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
@@ -83,7 +84,9 @@ const defaultScenarios = [
       '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.view-shot',
       '[frontend-view-shot] dev-smoke-start',
       '[frontend-view-shot] dev-smoke-capture-ref uri=',
+      '[frontend-view-shot] dev-smoke-inspection-ref uri=',
       '[frontend-view-shot] dev-smoke-component-data-uri prefix=data:image/png;base64, length=',
+      '[frontend-view-shot] dev-smoke-jpg-quality low=',
       '[frontend-view-shot] dev-smoke-capture-screen uri=',
       '[frontend-view-shot] dev-smoke-release-complete',
       '[frontend-view-shot] dev-smoke-complete',
@@ -98,17 +101,54 @@ const defaultScenarios = [
         'dev-smoke-scenario': 'view-shot-basics',
       },
     },
-    verifyLog(logContents) {
+    async verifyLog(logContents) {
       assertLogContainsRegex(
         logContents,
         /\[frontend-view-shot\] dev-smoke-capture-ref uri=.*OPApp[\\/]+view-shot[\\/]+/i,
         'view-shot dev smoke did not produce a tmpfile captureRef artifact under the managed host directory.',
       );
+      const inspectionCapturePath = extractLoggedPath(
+        logContents,
+        /\[frontend-view-shot\] dev-smoke-inspection-ref uri=([^\r\n]+)/i,
+        'view-shot dev smoke did not produce an inspection tmpfile artifact under the managed host directory.',
+      );
+      try {
+        const inspectionStats = assertPngCaptureLooksOpaque(
+          inspectionCapturePath,
+          'Windows dev verify view-shot inspection capture',
+        );
+        log(
+          'verify-dev',
+          `view-shot inspection OK: path=${inspectionCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
+        );
+      } finally {
+        await clearOptionalFile(inspectionCapturePath);
+      }
       assertLogContainsRegex(
         logContents,
         /\[frontend-view-shot\] dev-smoke-component-data-uri prefix=data:image\/png;base64, length=\d+/i,
         'view-shot dev smoke did not produce a PNG data-uri from ViewShot.capture.',
       );
+      const jpgQualityMatch = normalizeLogContents(logContents).match(
+        /\[frontend-view-shot\] dev-smoke-jpg-quality low=(\d+) high=(\d+)/i,
+      );
+      if (!jpgQualityMatch) {
+        throw new Error(
+          'Windows dev verify failed: view-shot dev smoke did not emit the JPG quality summary marker.',
+        );
+      }
+      const lowQualityLength = Number(jpgQualityMatch[1]);
+      const highQualityLength = Number(jpgQualityMatch[2]);
+      if (!Number.isFinite(lowQualityLength) || !Number.isFinite(highQualityLength)) {
+        throw new Error(
+          'Windows dev verify failed: view-shot dev smoke emitted an invalid JPG quality summary marker.',
+        );
+      }
+      if (highQualityLength <= lowQualityLength) {
+        throw new Error(
+          'Windows dev verify failed: high-quality JPG capture was not larger than low-quality JPG capture.',
+        );
+      }
       assertLogContainsRegex(
         logContents,
         /\[frontend-view-shot\] dev-smoke-capture-screen uri=.*OPApp[\\/]+view-shot[\\/]+/i,
@@ -130,6 +170,15 @@ function assertLogContainsRegex(logContents, regex, reason) {
   if (!regex.test(normalizeLogContents(logContents))) {
     throw new Error(`Windows dev verify failed: ${reason}`);
   }
+}
+
+function extractLoggedPath(logContents, regex, reason) {
+  const match = normalizeLogContents(logContents).match(regex);
+  if (!match?.[1]) {
+    throw new Error(`Windows dev verify failed: ${reason}`);
+  }
+
+  return match[1].trim();
 }
 
 function parseScenarioFilterNames(rawValue) {

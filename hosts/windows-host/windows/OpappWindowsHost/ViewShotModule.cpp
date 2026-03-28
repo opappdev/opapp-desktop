@@ -457,6 +457,10 @@ bool CapturePixelsFromScreen(
     return false;
   }
 
+  for (std::size_t offset = 3; offset < pixels.size(); offset += 4) {
+    pixels[offset] = 0xFF;
+  }
+
   return true;
 }
 
@@ -468,6 +472,29 @@ bool EncodePixelsToBytes(
     std::vector<uint8_t> &encoded,
     std::wstring &error) noexcept {
   try {
+    WICPixelFormatGUID inputPixelFormat = GUID_WICPixelFormat32bppBGRA;
+    UINT inputStride = static_cast<UINT>(width * 4);
+    std::vector<uint8_t> inputPixels;
+    auto const *inputBytes = pixels.data();
+    auto inputSize = static_cast<UINT>(pixels.size());
+
+    if (options.Format == CaptureFormat::Jpg) {
+      inputPixelFormat = GUID_WICPixelFormat24bppBGR;
+      inputStride = static_cast<UINT>(width * 3);
+      inputPixels.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3);
+
+      for (int index = 0; index < width * height; ++index) {
+        auto sourceOffset = static_cast<std::size_t>(index) * 4;
+        auto targetOffset = static_cast<std::size_t>(index) * 3;
+        inputPixels[targetOffset] = pixels[sourceOffset];
+        inputPixels[targetOffset + 1] = pixels[sourceOffset + 1];
+        inputPixels[targetOffset + 2] = pixels[sourceOffset + 2];
+      }
+
+      inputBytes = inputPixels.data();
+      inputSize = static_cast<UINT>(inputPixels.size());
+    }
+
     winrt::com_ptr<IWICImagingFactory> imagingFactory;
     winrt::check_hresult(CoCreateInstance(
         CLSID_WICImagingFactory,
@@ -505,18 +532,20 @@ bool EncodePixelsToBytes(
     winrt::check_hresult(frame->Initialize(propertyBag.get()));
     winrt::check_hresult(frame->SetSize(static_cast<UINT>(width), static_cast<UINT>(height)));
 
-    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    WICPixelFormatGUID pixelFormat = inputPixelFormat;
     winrt::check_hresult(frame->SetPixelFormat(&pixelFormat));
-    if (pixelFormat != GUID_WICPixelFormat32bppBGRA) {
-      error = L"Windows image encoder did not accept 32bpp BGRA input.";
+    if (pixelFormat != inputPixelFormat) {
+      error = options.Format == CaptureFormat::Jpg
+          ? L"Windows JPEG encoder did not accept 24bpp BGR input."
+          : L"Windows PNG encoder did not accept 32bpp BGRA input.";
       return false;
     }
 
     winrt::check_hresult(frame->WritePixels(
         static_cast<UINT>(height),
-        static_cast<UINT>(width * 4),
-        static_cast<UINT>(pixels.size()),
-        const_cast<BYTE *>(pixels.data())));
+        inputStride,
+        inputSize,
+        const_cast<BYTE *>(inputBytes)));
 
     winrt::check_hresult(frame->Commit());
     winrt::check_hresult(encoder->Commit());
