@@ -9,6 +9,7 @@
     "doctor": "echo \"TODO: configure desktop doctor\"",
     "commit:check": "npm run verify:windows:dev",
     "commit:check:release": "npm run verify:windows",
+    "capture:windows:window": "node ./tooling/scripts/windows-capture-window.mjs",
     "dev:windows": "node ./tooling/scripts/dev-windows.mjs",
     "dev:windows:fast-fail": "node ./tooling/scripts/dev-windows.mjs --readiness-ms=15000 --smoke-ms=1000",
     "verify:windows:dev": "node ./tooling/scripts/verify-windows-dev.mjs",
