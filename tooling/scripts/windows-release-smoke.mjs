@@ -22,6 +22,7 @@ const scenarioArg = process.argv
   .find(argument => argument.startsWith('--scenario='))
   ?.split('=')[1];
 const includeSecondaryWindow = process.argv.includes('--include-secondary-window');
+const validateOnly = process.argv.includes('--validate-only');
 const skipPrepare = process.argv.includes('--skip-prepare');
 const preserveState = process.argv.includes('--preserve-state');
 const resetSessions = process.argv.includes('--reset-sessions');
@@ -48,7 +49,7 @@ const cliPath = path.join(hostRoot, 'node_modules', '@react-native-community', '
 const packageName = 'OpappWindowsHost';
 const applicationId = 'App';
 const windowPolicyRegistryPath = path.join(frontendRoot, 'contracts', 'windowing', 'src', 'window-policy-registry.json');
-const launchMode = portableFlag ? 'portable' : (launchModeArg === 'portable' ? 'portable' : 'packaged');
+const launchMode = resolveLaunchModeOrThrow();
 const defaultReadinessTimeoutMs = 25_000;
 const readinessTimeoutMs = parsePositiveIntegerArg(
   process.argv,
@@ -73,28 +74,70 @@ const scenarioTimeoutMs = parsePositiveIntegerArg(
 
 let windowPolicyRegistryCache = null;
 
-function resolveScenarioName() {
-  if (
-    scenarioArg === 'main-window-bootstrap-compact' ||
-    scenarioArg === 'tab-session' ||
-    scenarioArg === 'restore-tab-session' ||
-    scenarioArg === 'restore-settings-window' ||
-    scenarioArg === 'settings-default-current-window' ||
-    scenarioArg === 'settings-default-new-window' ||
-    scenarioArg === 'save-main-window-preferences' ||
-    scenarioArg === 'secondary-window'
-  ) {
-    return scenarioArg;
+const supportedScenarioNames = [
+  'main-window-bootstrap-compact',
+  'tab-session',
+  'restore-tab-session',
+  'restore-settings-window',
+  'settings-default-current-window',
+  'settings-default-new-window',
+  'save-main-window-preferences',
+  'secondary-window',
+];
+
+function resolveLaunchModeOrThrow() {
+  if (portableFlag) {
+    if (launchModeArg && launchModeArg !== 'portable') {
+      throw new Error(
+        `--portable conflicts with --launch=${launchModeArg}. Use --launch=portable or remove --portable.`,
+      );
+    }
+
+    return 'portable';
   }
 
-  if (includeSecondaryWindow) {
-    return 'secondary-window';
+  if (!launchModeArg || launchModeArg === 'packaged') {
+    return 'packaged';
   }
 
-  return 'tab-session';
+  if (launchModeArg === 'portable') {
+    return 'portable';
+  }
+
+  throw new Error(
+    `Unknown --launch=${launchModeArg}. Supported launch modes: packaged, portable.`,
+  );
 }
 
-const scenarioName = resolveScenarioName();
+function resolveScenarioNameOrThrow() {
+  if (scenarioArg !== undefined) {
+    const normalizedScenarioName = scenarioArg.trim();
+    if (!normalizedScenarioName) {
+      throw new Error('`--scenario=` must include exactly one supported scenario name.');
+    }
+    if (normalizedScenarioName.includes(',')) {
+      throw new Error(
+        '`windows-release-smoke` accepts a single --scenario value; use verify-windows for multi-scenario execution.',
+      );
+    }
+    if (!supportedScenarioNames.includes(normalizedScenarioName)) {
+      throw new Error(
+        `Unknown --scenario=${normalizedScenarioName}. Supported scenarios: ${supportedScenarioNames.join(', ')}`,
+      );
+    }
+    if (includeSecondaryWindow && normalizedScenarioName !== 'secondary-window') {
+      throw new Error(
+        `--include-secondary-window conflicts with --scenario=${normalizedScenarioName}. ` +
+          'Use --scenario=secondary-window when selecting an explicit scenario.',
+      );
+    }
+    return normalizedScenarioName;
+  }
+
+  return includeSecondaryWindow ? 'secondary-window' : 'tab-session';
+}
+
+const scenarioName = resolveScenarioNameOrThrow();
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -1323,8 +1366,13 @@ async function main() {
   log(`smokeTimeoutMs=${smokeTimeoutMs}`);
   log(`startupTimeoutMs=${startupTimeoutMs}`);
   log(`scenarioTimeoutMs=${scenarioTimeoutMs}`);
+  log(`validateOnly=${validateOnly}`);
   log(`skipPrepare=${skipPrepare}`);
   log(`resetSessions=${resetSessions}`);
+  if (validateOnly) {
+    log('validate-only enabled; skipping bundle/build/launch execution.');
+    return;
+  }
 
   let runError = null;
 

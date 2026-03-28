@@ -13,6 +13,7 @@ Windows verification entrypoints:
 - `npm run verify:windows:portable`: full portable validation.
 - `npm run verify:windows:ci-fast-fail`: validate-only packaged quick gate for CI.
 - `npm run verify:windows:portable:ci-fast-fail`: validate-only portable quick gate for CI.
+- `node ./tooling/scripts/windows-release-smoke.mjs --validate-only ...`: validate direct smoke args without running bundle/build/launch.
 
 Windows smoke timeout knobs:
 
