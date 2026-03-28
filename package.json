@@ -65,6 +65,7 @@
     "registry:channel:set": "node ./tooling/scripts/registry-ops.mjs channel --set",
     "registry:channel:unset": "node ./tooling/scripts/registry-ops.mjs channel --unset",
     "ota:publish:cloudflare": "node ./tooling/scripts/ota-cloudflare-publish.mjs",
+    "ota:build:publish:cloudflare": "node ./tooling/scripts/ota-cloudflare-publish.mjs --build",
     "test:ota:publish": "node ./tooling/scripts/ota-cloudflare-publish.test-runner.mjs"
   }
 }

@@ -72,20 +72,54 @@ the Cloudflare-backed OTA path while keeping runtime protocol unchanged
 (`index.json`, `bundles`, `versions`, `latestVersion`, `channels`,
 `rolloutPercent`).
 
-Required flags:
+Default env file:
+
+- workspace root `.env.r2.local` (relative path from `opapp-desktop`: `..\\.env.r2.local`)
+
+Recognized env keys:
+
+- `R2_BUCKET`
+- `R2_PUBLIC_BASE_URL`
+- `R2_ENDPOINT`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+- `R2_ACCOUNT_ID`
+- `R2_JURISDICTION`
+
+Always required:
+
+- `--channel`
+- `--rollout-percent`
+
+Conditionally required:
 
 - `--bundle-id`
 - `--platform`
 - `--version`
 - `--remote-base`
-- `--channel`
-- `--rollout-percent`
 - `--cloudflare-bucket`
+
+When `--build` or `--source-dir` is used, `bundleId` / `version` / `platform`
+can be resolved from `bundle-manifest.json`, and `remote-base` /
+`cloudflare-bucket` can come from `.env.r2.local`.
 
 Optional flags:
 
+- `--build` (run `opapp-frontend` Windows bundle first)
+- `--env-file`
 - `--source-dir` (publish build output into local registry before upload)
 - `--registry-dir`
 - `--cloudflare-prefix` (defaults to URL path in `--remote-base`)
+- `--upload-mode` (`r2-s3` by default when R2 credentials are available; otherwise `wrangler`)
+- `--r2-endpoint` / `--r2-access-key-id` / `--r2-secret-access-key`
+- `--r2-account-id` / `--r2-jurisdiction`
+- `--frontend-root`
 - `--wrangler-bin` / `--wrangler-config`
 - `--skip-upload` / `--dry-run`
+
+Common examples:
+
+- Build the Windows bundle and prepare a publish dry-run using `.env.r2.local`:
+  `npm run ota:build:publish:cloudflare -- --channel=stable --rollout-percent=100 --dry-run`
+- Publish an existing frontend dist directory with explicit overrides:
+  `npm run ota:publish:cloudflare -- --source-dir=..\\opapp-frontend\\.dist\\bundles\\companion-app\\windows --channel=beta --rollout-percent=10 --remote-base=https://pub-xxxx.r2.dev --cloudflare-bucket=cross-platform-ota`

@@ -5,7 +5,10 @@ Desktop repo-specific engineering support lives here.
 Key OTA publishing entrypoint:
 
 - `scripts/ota-cloudflare-publish.mjs`: Windows-first Cloudflare publish flow
-  (`bundle -> local registry -> index merge -> upload`).
+  (`optional frontend build -> local registry -> index merge -> upload`).
+  Defaults to loading the workspace root `.env.r2.local`, prefers direct R2 S3
+  upload when `R2_ENDPOINT` + `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` are
+  available, and keeps Wrangler upload as a compatibility fallback.
 
 Window capture entrypoints:
 

@@ -5,8 +5,10 @@ import path from 'node:path';
 import {access, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {
   applyBundlePublishOverrides,
+  deriveR2Endpoint,
   mergeRegistryIndexes,
   uploadFilesToCloudflare,
+  uploadFilesToR2,
   upsertBundleSidecars,
   withFileRollback,
 } from './ota-cloudflare-publish.mjs';
@@ -165,6 +167,33 @@ test('withFileRollback restores sidecar snapshots after failure', async t => {
   assert.deepEqual(restoredRollout, {percent: 20});
 });
 
+test('deriveR2Endpoint prefers explicit endpoint and derives jurisdiction-specific defaults', () => {
+  assert.equal(
+    deriveR2Endpoint({
+      accountId: 'account-123',
+      endpoint: 'https://custom.example.com',
+      jurisdiction: 'eu',
+    }),
+    'https://custom.example.com',
+  );
+  assert.equal(
+    deriveR2Endpoint({
+      accountId: 'account-123',
+      endpoint: null,
+      jurisdiction: 'default',
+    }),
+    'https://account-123.r2.cloudflarestorage.com',
+  );
+  assert.equal(
+    deriveR2Endpoint({
+      accountId: 'account-123',
+      endpoint: null,
+      jurisdiction: 'eu',
+    }),
+    'https://account-123.eu.r2.cloudflarestorage.com',
+  );
+});
+
 test('uploadFilesToCloudflare compensates by deleting uploaded keys when upload fails', async () => {
   const calls = [];
   const compensationEvents = [];
@@ -212,6 +241,109 @@ test('uploadFilesToCloudflare compensates by deleting uploaded keys when upload 
     ['put', 'ota-bucket/registry/index.json'],
     ['delete', 'ota-bucket/registry/companion-app/0.2.0/windows/main.hbc'],
     ['delete', 'ota-bucket/registry/companion-app/0.2.0/windows/bundle-manifest.json'],
+  ]);
+  assert.deepEqual(compensationEvents, [
+    {
+      phase: 'cleanup-start',
+      uploadError: 'simulated index upload failure',
+      attemptedDeletes: 2,
+    },
+    {
+      phase: 'cleanup-delete',
+      objectKey: 'registry/companion-app/0.2.0/windows/main.hbc',
+      status: 'deleted',
+    },
+    {
+      phase: 'cleanup-delete',
+      objectKey: 'registry/companion-app/0.2.0/windows/bundle-manifest.json',
+      status: 'deleted',
+    },
+    {
+      phase: 'cleanup-summary',
+      attemptedDeletes: 2,
+      cleanedCount: 2,
+      failedCount: 0,
+    },
+  ]);
+});
+
+test('uploadFilesToR2 compensates by deleting uploaded keys when upload fails', async t => {
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), 'ota-cloudflare-publish-r2-'));
+  t.after(async () => {
+    await rm(fixtureRoot, {recursive: true, force: true});
+  });
+
+  const manifestPath = path.join(fixtureRoot, 'bundle-manifest.json');
+  const bundlePath = path.join(fixtureRoot, 'main.hbc');
+  const indexPath = path.join(fixtureRoot, 'index.json');
+  await writeFile(manifestPath, '{"bundleId":"companion-app"}\n', 'utf8');
+  await writeFile(bundlePath, 'bundle-bytes\n', 'utf8');
+  await writeFile(indexPath, '{"bundles":{}}\n', 'utf8');
+
+  const calls = [];
+  const compensationEvents = [];
+  const executeObjectRequest = async options => {
+    calls.push({
+      method: options.method,
+      objectKey: options.objectKey,
+    });
+    if (options.method === 'PUT' && options.objectKey === 'registry/index.json') {
+      throw new Error('simulated index upload failure');
+    }
+    return {ok: true, status: 200};
+  };
+
+  await assert.rejects(
+    uploadFilesToR2({
+      files: [
+        {
+          localPath: manifestPath,
+          relativeRegistryPath: 'companion-app/0.2.0/windows/bundle-manifest.json',
+        },
+        {
+          localPath: bundlePath,
+          relativeRegistryPath: 'companion-app/0.2.0/windows/main.hbc',
+        },
+        {
+          localPath: indexPath,
+          relativeRegistryPath: 'index.json',
+        },
+      ],
+      bucket: 'ota-bucket',
+      objectPrefix: 'registry',
+      r2Endpoint: 'https://account-123.r2.cloudflarestorage.com',
+      r2AccessKeyId: 'AKIAEXAMPLE',
+      r2SecretAccessKey: 'secret-example',
+      dryRun: false,
+      executeObjectRequest,
+      reportCompensationEvent: event => {
+        compensationEvents.push(event);
+      },
+    }),
+    /simulated index upload failure/,
+  );
+
+  assert.deepEqual(calls, [
+    {
+      method: 'PUT',
+      objectKey: 'registry/companion-app/0.2.0/windows/bundle-manifest.json',
+    },
+    {
+      method: 'PUT',
+      objectKey: 'registry/companion-app/0.2.0/windows/main.hbc',
+    },
+    {
+      method: 'PUT',
+      objectKey: 'registry/index.json',
+    },
+    {
+      method: 'DELETE',
+      objectKey: 'registry/companion-app/0.2.0/windows/main.hbc',
+    },
+    {
+      method: 'DELETE',
+      objectKey: 'registry/companion-app/0.2.0/windows/bundle-manifest.json',
+    },
   ]);
   assert.deepEqual(compensationEvents, [
     {
