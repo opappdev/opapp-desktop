@@ -498,6 +498,7 @@ export async function generateRegistryIndex(registryRoot) {
 
     // RFC-015: read optional channels.json for channel-pinned version mapping.
     let channels;
+    const versionSet = new Set(versions);
     try {
       const channelsData = JSON.parse(
         await readFile(path.join(bundleIdDir, 'channels.json'), 'utf8'),
@@ -508,7 +509,12 @@ export async function generateRegistryIndex(registryRoot) {
         !Array.isArray(channelsData)
       ) {
         const filtered = Object.fromEntries(
-          Object.entries(channelsData).filter(([, v]) => typeof v === 'string' && v),
+          Object.entries(channelsData).filter(
+            ([, v]) =>
+              typeof v === 'string' &&
+              v &&
+              versionSet.has(v),
+          ),
         );
         if (Object.keys(filtered).length > 0) channels = filtered;
       }

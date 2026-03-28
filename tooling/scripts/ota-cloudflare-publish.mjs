@@ -75,24 +75,30 @@ function asObject(value) {
 }
 
 function normalizeVersions(entry) {
+  const hasVersionList = Array.isArray(entry?.versions);
   const fromVersions = Array.isArray(entry?.versions)
     ? entry.versions.filter(version => typeof version === 'string' && version.length > 0)
     : [];
+  if (hasVersionList) {
+    return [...new Set(fromVersions)].sort();
+  }
   const latest = typeof entry?.latestVersion === 'string' && entry.latestVersion.length > 0
     ? [entry.latestVersion]
     : [];
   return [...new Set([...fromVersions, ...latest])].sort();
 }
 
-function normalizeChannels(entry) {
+function normalizeChannels(entry, versions = normalizeVersions(entry)) {
   const channels = asObject(entry?.channels);
+  const versionSet = new Set(versions);
   return Object.fromEntries(
     Object.entries(channels).filter(
       ([channel, version]) =>
         typeof channel === 'string' &&
         channel.length > 0 &&
         typeof version === 'string' &&
-        version.length > 0,
+        version.length > 0 &&
+        versionSet.has(version),
     ),
   );
 }
@@ -117,8 +123,8 @@ export function mergeRegistryIndexes(remoteIndex, localIndex) {
     const versions = [...new Set([...normalizeVersions(remoteEntry), ...normalizeVersions(localEntry)])].sort();
     const latestVersion = versions.at(-1) ?? null;
     const channels = {
-      ...normalizeChannels(remoteEntry),
-      ...normalizeChannels(localEntry),
+      ...normalizeChannels(remoteEntry, versions),
+      ...normalizeChannels(localEntry, versions),
     };
     const rolloutPercent = normalizeRolloutPercent(localEntry) ?? normalizeRolloutPercent(remoteEntry);
     const mergedEntry = {latestVersion, versions};
@@ -135,7 +141,7 @@ export function applyBundlePublishOverrides(index, options) {
   const currentEntry = asObject(bundles[bundleId]);
   const versions = [...new Set([...normalizeVersions(currentEntry), version])].sort();
   const channels = {
-    ...normalizeChannels(currentEntry),
+    ...normalizeChannels(currentEntry, versions),
     [channel]: version,
   };
 

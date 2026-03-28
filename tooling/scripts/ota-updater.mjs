@@ -500,28 +500,41 @@ async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
     );
   }
 
-  const versions = Array.isArray(info.versions) ? info.versions : [];
+  const hasVersionList = Array.isArray(info.versions);
+  const versions = hasVersionList
+    ? info.versions.filter(version => typeof version === 'string' && version)
+    : [];
   // Lexicographic sort — consistent with LocalRegistryArtifactSource / RemoteArtifactSource.
   const overallLatest = [...versions].sort().at(-1);
+  const legacyLatestVersion = !hasVersionList &&
+    typeof info.latestVersion === 'string' &&
+    info.latestVersion
+    ? info.latestVersion
+    : undefined;
 
   // RFC-015: channel-aware version resolution.
   const channelMap =
     info.channels && typeof info.channels === 'object' && !Array.isArray(info.channels)
       ? info.channels
       : {};
+  const pickChannelVersion = candidate => {
+    if (typeof candidate !== 'string' || !candidate) {
+      return undefined;
+    }
+    if (hasVersionList && !versions.includes(candidate)) {
+      return undefined;
+    }
+    return candidate;
+  };
   let latestVersion;
   if (channel) {
-    if (typeof channelMap[channel] === 'string' && channelMap[channel]) {
-      latestVersion = channelMap[channel];
-    } else if (channel !== 'stable' && typeof channelMap['stable'] === 'string' && channelMap['stable']) {
+    latestVersion = pickChannelVersion(channelMap[channel]);
+    if (!latestVersion && channel !== 'stable') {
       // Requested channel not in index — fall back to stable.
-      latestVersion = channelMap['stable'];
-    } else {
-      latestVersion = overallLatest;
+      latestVersion = pickChannelVersion(channelMap['stable']);
     }
-  } else {
-    latestVersion = overallLatest;
   }
+  latestVersion ??= overallLatest ?? legacyLatestVersion;
 
   if (!latestVersion) {
     throw new Error(

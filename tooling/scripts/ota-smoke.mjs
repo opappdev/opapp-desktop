@@ -16,7 +16,10 @@
  *   7. Unknown channel falls back to the stable channel entry
  *   8. No channels.json (absent) → RFC-010 backward-compat (overallLatest)
  *   9. Missing latestVersion falls back to the lexicographic latest versions[] entry
- *  10. apply / rollback replace directories cleanly without leaving stale files
+ *  10. Channel pins that drift outside versions[] are ignored and fall back safely
+ *  11. Invalid top-level latestVersion falls back to versions[] instead of a dead path
+ *  12. Explicit empty versions[] rejects stale pins instead of reviving dead paths
+ *  13. apply / rollback replace directories cleanly without leaving stale files
  *
  * Usage:
  *   node ota-smoke.mjs
@@ -392,14 +395,95 @@ async function main() {
       'missing latestVersion fallback still reports hasUpdate=true',
     );
 
+    // ── 10. Invalid channel pin → safe fallback through stable / versions[] ─
+    process.stdout.write('\n10. Invalid channel pin outside versions[] \u2192 safe fallback\n');
+
+    const invalidChannelIndex = await generateRegistryIndex(registryRoot);
+    invalidChannelIndex.bundles[BUNDLE_ID].channels = {
+      stable: '0.1.0',
+      nightly: '9.9.9',
+    };
+    await _writeJson(path.join(registryRoot, 'index.json'), invalidChannelIndex);
+
+    const invalidChannelResult = await checkForUpdate({
+      remoteBase: baseUrl,
+      platform: PLATFORM,
+      cacheDir: path.join(cacheBase, 'invalid-channel'),
+      bundleId: BUNDLE_ID,
+      currentVersion: '0.0.0',
+      deviceId: inDevice,
+      channel: 'nightly',
+    });
+    eq(
+      invalidChannelResult.latestVersion,
+      '0.1.0',
+      'invalid nightly pin falls back to stable listed version (0.1.0)',
+    );
+
+    // ── 11. Invalid latestVersion → versions[] fallback ───────────────────
+    process.stdout.write('\n11. Invalid latestVersion outside versions[] \u2192 versions[] fallback\n');
+
+    const invalidLatestVersionIndex = await generateRegistryIndex(registryRoot);
+    delete invalidLatestVersionIndex.bundles[BUNDLE_ID].channels;
+    invalidLatestVersionIndex.bundles[BUNDLE_ID].latestVersion = '9.9.9';
+    await _writeJson(path.join(registryRoot, 'index.json'), invalidLatestVersionIndex);
+
+    const invalidLatestVersionResult = await checkForUpdate({
+      remoteBase: baseUrl,
+      platform: PLATFORM,
+      cacheDir: path.join(cacheBase, 'invalid-latest-version'),
+      bundleId: BUNDLE_ID,
+      currentVersion: '0.0.0',
+      deviceId: inDevice,
+    });
+    eq(
+      invalidLatestVersionResult.latestVersion,
+      '0.2.0',
+      'invalid latestVersion falls back to lexicographic versions[] latest (0.2.0)',
+    );
+    ok(
+      invalidLatestVersionResult.hasUpdate === true,
+      'invalid latestVersion fallback still reports hasUpdate=true',
+    );
+
+    // ── 12. Explicit empty versions[] rejects stale pins completely ────────
+    process.stdout.write('\n12. Explicit empty versions[] rejects stale pins\n');
+
+    const emptyVersionsIndex = await generateRegistryIndex(registryRoot);
+    emptyVersionsIndex.bundles[BUNDLE_ID].versions = [];
+    emptyVersionsIndex.bundles[BUNDLE_ID].latestVersion = '9.9.9';
+    emptyVersionsIndex.bundles[BUNDLE_ID].channels = {
+      stable: '9.9.9',
+    };
+    await _writeJson(path.join(registryRoot, 'index.json'), emptyVersionsIndex);
+
+    let emptyVersionsError = null;
+    try {
+      await checkForUpdate({
+        remoteBase: baseUrl,
+        platform: PLATFORM,
+        cacheDir: path.join(cacheBase, 'empty-versions'),
+        bundleId: BUNDLE_ID,
+        currentVersion: '0.0.0',
+        deviceId: inDevice,
+      });
+    } catch (error) {
+      emptyVersionsError = error;
+    }
+    ok(
+      emptyVersionsError instanceof Error &&
+        /no versions/.test(emptyVersionsError.message),
+      'explicit empty versions[] rejects stale latestVersion/channel pins with no versions error',
+    );
+
     // Restore the normal generated index before bundle staging sections.
     await _writeJson(
       path.join(registryRoot, 'index.json'),
       await generateRegistryIndex(registryRoot),
     );
 
-    // ── 10. Apply / rollback replace directories cleanly ───────────────────
-    process.stdout.write('\n10. apply / rollback replace directories cleanly\n');
+    // ── 13. Apply / rollback replace directories cleanly ───────────────────
+    process.stdout.write('\n13. apply / rollback replace directories cleanly\n');
 
     const applyCacheDir = path.join(tmpBase, 'apply-cache');
     const hostBundleDir = path.join(tmpBase, 'host-bundle');
@@ -476,8 +560,8 @@ async function main() {
       'rollback does not leak files from older snapshots into the restored bundle',
     );
 
-    // ── 11. Main bundle apply preserves nested bundles ─────────────────────
-    process.stdout.write('\n11. main bundle apply preserves nested bundles\n');
+    // ── 14. Main bundle apply preserves nested bundles ─────────────────────
+    process.stdout.write('\n14. main bundle apply preserves nested bundles\n');
 
     const mainApplyCacheDir = path.join(tmpBase, 'main-apply-cache');
     const mainHostBundleDir = path.join(tmpBase, 'main-host-bundle');
@@ -540,8 +624,8 @@ async function main() {
       'main bundle apply still removes stale top-level files while preserving nested bundles',
     );
 
-    // ── 12. download → apply → rollback (full HTTP end-to-end) ────────────
-    process.stdout.write('\n12. download \u2192 apply \u2192 rollback (full HTTP end-to-end)\n');
+    // ── 15. download → apply → rollback (full HTTP end-to-end) ────────────
+    process.stdout.write('\n15. download \u2192 apply \u2192 rollback (full HTTP end-to-end)\n');
 
     // The registry still has BUNDLE_ID@0.1.0 and @0.2.0 with no channels/rollout
     // (state from section 8). Use a fresh cache and host dir for isolation.

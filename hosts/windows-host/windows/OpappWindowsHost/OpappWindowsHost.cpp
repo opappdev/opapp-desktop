@@ -825,6 +825,44 @@ std::optional<std::wstring> ResolveLatestVersionFromVersions(
   }
 }
 
+bool IsListedVersion(
+    winrt::Windows::Data::Json::JsonObject const &bundleInfoObject,
+    std::wstring const &candidate) noexcept {
+  if (candidate.empty()) {
+    return false;
+  }
+
+  try {
+    auto versionsValue = bundleInfoObject.GetNamedValue(L"versions", nullptr);
+    if (!versionsValue ||
+        versionsValue.ValueType() != winrt::Windows::Data::Json::JsonValueType::Array) {
+      return true;
+    }
+
+    auto versionsArray = versionsValue.GetArray();
+    auto sawListedVersion = false;
+    for (auto const &value : versionsArray) {
+      if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::String) {
+        continue;
+      }
+
+      auto listedVersion = std::wstring(value.GetString());
+      if (listedVersion.empty()) {
+        continue;
+      }
+
+      sawListedVersion = true;
+      if (listedVersion == candidate) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch (...) {
+    return false;
+  }
+}
+
 std::optional<int32_t> ComputeRolloutBucket(
     std::wstring const &bundleId,
     std::wstring const &deviceId) noexcept {
@@ -1117,28 +1155,42 @@ void RunNativeOtaUpdate(
     }
 
     auto latestVersionFromVersions = ResolveLatestVersionFromVersions(bundleInfoObject);
-    std::wstring latestVersion =
-        bundleInfoObject.GetNamedString(L"latestVersion", L"").c_str();
-    std::string latestVersionSource = latestVersion.empty() ? std::string() : std::string("latestVersion");
+    std::wstring latestVersion;
+    std::string latestVersionSource;
+    auto tryUseLatestVersion = [&](std::wstring const &candidate, std::string const &source) {
+      if (candidate.empty()) {
+        return false;
+      }
+      if (!IsListedVersion(bundleInfoObject, candidate)) {
+        AppendLog(
+            "OTA.Native.LatestVersionIgnored source=" + source +
+            " value=" + ToUtf8(candidate) +
+            " reason=missing-from-versions");
+        return false;
+      }
+      latestVersion = candidate;
+      latestVersionSource = source;
+      return true;
+    };
+
+    if (latestVersionFromVersions) {
+      latestVersion = *latestVersionFromVersions;
+      latestVersionSource = "versions";
+    } else {
+      tryUseLatestVersion(
+          bundleInfoObject.GetNamedString(L"latestVersion", L"").c_str(),
+          "latestVersion");
+    }
+
     if (auto channelsObject = bundleInfoObject.GetNamedObject(L"channels", nullptr)) {
       std::wstring channelVersion =
           channelsObject.GetNamedString(winrt::hstring(resolvedChannel), L"").c_str();
-      if (!channelVersion.empty()) {
-        latestVersion = channelVersion;
-        latestVersionSource = "channels:" + ToUtf8(resolvedChannel);
-      } else if (resolvedChannel != L"stable") {
+      if (!tryUseLatestVersion(channelVersion, "channels:" + ToUtf8(resolvedChannel)) &&
+          resolvedChannel != L"stable") {
         std::wstring stableVersion =
             channelsObject.GetNamedString(L"stable", L"").c_str();
-        if (!stableVersion.empty()) {
-          latestVersion = stableVersion;
-          latestVersionSource = "channels:stable";
-        }
+        tryUseLatestVersion(stableVersion, "channels:stable");
       }
-    }
-
-    if (latestVersion.empty() && latestVersionFromVersions) {
-      latestVersion = *latestVersionFromVersions;
-      latestVersionSource = "versions";
     }
 
     if (latestVersion.empty()) {

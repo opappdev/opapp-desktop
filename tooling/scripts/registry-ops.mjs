@@ -31,6 +31,8 @@
  * Flags (channel subcommand):
  *   --get              Print current channels.json as JSON.
  *   --set=<n>=<v>      Upsert channel <n> with version <v> in channels.json.
+ *                      The target version directory must already exist under
+ *                      <registryRoot>/<bundleId>/<version>.
  *   --unset=<n>        Remove channel <n> from channels.json.
  *                      Deletes channels.json when the last entry is removed.
  *
@@ -163,8 +165,14 @@ async function channelGet(registryRoot, bundleId) {
  * @param {boolean} dryRun
  * @returns {Promise<object>}
  */
-async function channelSet(registryRoot, bundleId, channelName, version, dryRun) {
+export async function channelSet(registryRoot, bundleId, channelName, version, dryRun) {
   const filePath = path.join(registryRoot, bundleId, 'channels.json');
+  const versionDir = path.join(registryRoot, bundleId, version);
+  if (!existsSync(versionDir)) {
+    throw new Error(
+      `registry-ops channel --set: version '${version}' does not exist under ${path.join(bundleId, version)}.`,
+    );
+  }
   const existing = await _readJson(filePath) ?? {};
   const updated = {
     ...existing,

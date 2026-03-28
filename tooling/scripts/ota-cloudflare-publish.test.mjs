@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import {access, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {generateRegistryIndex} from './artifact-source.mjs';
 import {
   applyBundlePublishOverrides,
   deriveR2Endpoint,
@@ -13,7 +14,7 @@ import {
   withFileRollback,
 } from './ota-cloudflare-publish.mjs';
 
-test('mergeRegistryIndexes unions versions and prefers local channel mapping', () => {
+test('mergeRegistryIndexes unions versions, prefers local channel mapping, and drops stale pins', () => {
   const remote = {
     bundles: {
       'companion-app': {
@@ -45,7 +46,6 @@ test('mergeRegistryIndexes unions versions and prefers local channel mapping', (
   assert.equal(entry.latestVersion, '0.1.1');
   assert.deepEqual(entry.channels, {
     stable: '0.1.1',
-    beta: '0.1.0-beta.1',
   });
   assert.equal(entry.rolloutPercent, 20);
 });
@@ -83,6 +83,31 @@ test('applyBundlePublishOverrides removes rolloutPercent for full rollout', () =
   assert.equal(entry.channels.stable, '0.1.1');
 });
 
+test('applyBundlePublishOverrides drops stale existing channel pins while adding the published version', () => {
+  const current = {
+    bundles: {
+      'companion-app': {
+        latestVersion: '0.1.0',
+        versions: ['0.1.0'],
+        channels: {
+          stable: '0.1.0',
+          beta: '9.9.9',
+        },
+      },
+    },
+  };
+
+  const overridden = applyBundlePublishOverrides(current, {
+    bundleId: 'companion-app',
+    version: '0.1.1',
+    channel: 'stable',
+    rolloutPercent: 50,
+  });
+  assert.deepEqual(overridden.bundles['companion-app'].channels, {
+    stable: '0.1.1',
+  });
+});
+
 test('mergeRegistryIndexes keeps remote-only bundles', () => {
   const remote = {
     bundles: {
@@ -108,6 +133,68 @@ test('mergeRegistryIndexes keeps remote-only bundles', () => {
   const merged = mergeRegistryIndexes(remote, local);
   assert.equal(merged.bundles['legacy-bundle'].latestVersion, '9.9.9');
   assert.deepEqual(merged.bundles['legacy-bundle'].versions, ['9.9.9']);
+});
+
+test('mergeRegistryIndexes drops stale channel pins from remote-only bundles', () => {
+  const remote = {
+    bundles: {
+      'legacy-bundle': {
+        latestVersion: '9.9.9',
+        versions: ['9.9.9'],
+        channels: {
+          stable: '1.0.0',
+          nightly: '9.9.9',
+        },
+      },
+    },
+  };
+
+  const merged = mergeRegistryIndexes(remote, {bundles: {}});
+  assert.deepEqual(merged.bundles['legacy-bundle'].channels, {
+    nightly: '9.9.9',
+  });
+});
+
+test('mergeRegistryIndexes treats explicit empty versions lists as authoritative and drops stale pins', () => {
+  const remote = {
+    bundles: {
+      'legacy-bundle': {
+        latestVersion: '9.9.9',
+        versions: [],
+        channels: {
+          stable: '9.9.9',
+        },
+      },
+    },
+  };
+
+  const merged = mergeRegistryIndexes(remote, {bundles: {}});
+  assert.deepEqual(merged.bundles['legacy-bundle'], {
+    latestVersion: null,
+    versions: [],
+  });
+});
+
+test('mergeRegistryIndexes preserves legacy latestVersion when versions are absent', () => {
+  const remote = {
+    bundles: {
+      'legacy-bundle': {
+        latestVersion: '9.9.9',
+        channels: {
+          stable: '9.9.9',
+        },
+      },
+    },
+  };
+
+  const merged = mergeRegistryIndexes(remote, {bundles: {}});
+  assert.deepEqual(merged.bundles['legacy-bundle'], {
+    latestVersion: '9.9.9',
+    versions: ['9.9.9'],
+    channels: {
+      stable: '9.9.9',
+    },
+  });
 });
 
 test('upsertBundleSidecars writes channels and removes rollout for 100%', async t => {
@@ -137,6 +224,48 @@ test('upsertBundleSidecars writes channels and removes rollout for 100%', async 
     stable: '0.2.1',
   });
   await assert.rejects(access(rolloutPath));
+});
+
+test('generateRegistryIndex drops channel pins for versions that are not present', async t => {
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), 'ota-index-channels-'));
+  t.after(async () => {
+    await rm(fixtureRoot, {recursive: true, force: true});
+  });
+
+  const bundleRoot = path.join(fixtureRoot, 'companion-app');
+  await mkdir(path.join(bundleRoot, '0.1.0'), {recursive: true});
+  await mkdir(path.join(bundleRoot, '0.2.0'), {recursive: true});
+  await writeFile(
+    path.join(bundleRoot, 'channels.json'),
+    JSON.stringify({stable: '0.2.0', nightly: '9.9.9'}, null, 2) + '\n',
+    'utf8',
+  );
+
+  const index = await generateRegistryIndex(fixtureRoot);
+  assert.deepEqual(index.bundles['companion-app'].channels, {
+    stable: '0.2.0',
+  });
+});
+
+test('generateRegistryIndex drops all channel pins when no versions are present', async t => {
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), 'ota-index-empty-versions-'));
+  t.after(async () => {
+    await rm(fixtureRoot, {recursive: true, force: true});
+  });
+
+  const bundleRoot = path.join(fixtureRoot, 'companion-app');
+  await mkdir(bundleRoot, {recursive: true});
+  await writeFile(
+    path.join(bundleRoot, 'channels.json'),
+    JSON.stringify({stable: '9.9.9'}, null, 2) + '\n',
+    'utf8',
+  );
+
+  const index = await generateRegistryIndex(fixtureRoot);
+  assert.deepEqual(index.bundles['companion-app'], {
+    latestVersion: null,
+    versions: [],
+  });
 });
 
 test('withFileRollback restores sidecar snapshots after failure', async t => {

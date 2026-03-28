@@ -60,7 +60,7 @@
     "watchdog:guard": "node ./tooling/scripts/crash-watchdog.mjs --mode=guard",
     "watchdog:heartbeat": "node ./tooling/scripts/crash-watchdog.mjs --mode=heartbeat",
     "smoke:ota": "node ./tooling/scripts/ota-smoke.mjs",
-    "commit:check:infra": "npm run test:windows:release-diagnostics && npm run test:ota:publish && npm run test:ota:updater && npm run smoke:ota",
+    "commit:check:infra": "npm run test:windows:release-diagnostics && npm run test:ota:publish && npm run test:registry:ops && npm run test:ota:updater && npm run smoke:ota",
     "registry:rollout:get": "node ./tooling/scripts/registry-ops.mjs rollout --get",
     "registry:rollout:set": "node ./tooling/scripts/registry-ops.mjs rollout --set",
     "registry:channel:get": "node ./tooling/scripts/registry-ops.mjs channel --get",
@@ -69,6 +69,7 @@
     "ota:publish:cloudflare": "node ./tooling/scripts/ota-cloudflare-publish.mjs",
     "ota:build:publish:cloudflare": "node ./tooling/scripts/ota-cloudflare-publish.mjs --build",
     "test:ota:publish": "node ./tooling/scripts/ota-cloudflare-publish.test-runner.mjs",
+    "test:registry:ops": "node ./tooling/scripts/registry-ops.test.mjs",
     "test:ota:updater": "node ./tooling/scripts/ota-updater.test.mjs"
   }
 }

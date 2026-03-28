@@ -9,6 +9,14 @@ Key OTA publishing entrypoint:
   Defaults to loading the workspace root `.env.r2.local`, prefers direct R2 S3
   upload when `R2_ENDPOINT` + `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` are
   available, and keeps Wrangler upload as a compatibility fallback.
+- OTA channel pins are now treated as `versions[]`-backed metadata:
+  `generateRegistryIndex()` drops `channels.json` entries that point at missing
+  versions, publish-side index merge does the same for stale remote pins, and
+  updater / Windows host consumers fall back to a listed stable or
+  lexicographic latest version instead of chasing a dead artifact path.
+- `npm run test:registry:ops`: direct-node assertions for operator-side
+  `registry-ops channel --set`, including the guard that rejects channel pins to
+  versions that do not exist in the local registry tree.
 - `npm run test:ota:updater`: direct-node assertions for OTA updater
   `last-run.json` payload shaping, including rollout/channel context retention
   during `--mode=update`.
