@@ -958,6 +958,9 @@ void RunNativeOtaUpdate(
   auto normalizedRemoteUrl = TrimTrailingSlashes(remoteUrl);
   auto resolvedChannel = std::wstring(L"stable");
   auto cacheRoot = ResolveOtaCacheRoot(appDirectory);
+  std::optional<std::wstring> resolvedDeviceIdForLastRun;
+  std::optional<bool> inRolloutForLastRun;
+  std::optional<int32_t> rolloutPercentForLastRun;
 
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -1114,6 +1117,7 @@ void RunNativeOtaUpdate(
       return;
     }
     AppendLog("OTA.Native.DeviceId value=" + ToUtf8(*resolvedDeviceId));
+    resolvedDeviceIdForLastRun = resolvedDeviceId;
 
     auto rolloutPercent = ParseRolloutPercent(bundleInfoObject);
     auto inRollout = true;
@@ -1146,6 +1150,8 @@ void RunNativeOtaUpdate(
     } else {
       AppendLog("OTA.Native.Rollout percent=100 inRollout=true");
     }
+    inRolloutForLastRun = inRollout;
+    rolloutPercentForLastRun = rolloutPercent;
 
     auto shouldUpdate = inRollout && forceUpdate;
     if (!shouldUpdate && inRollout) {
@@ -1401,7 +1407,10 @@ void RunNativeOtaUpdate(
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        resolvedDeviceIdForLastRun,
+        inRolloutForLastRun,
+        rolloutPercentForLastRun);
   } catch (std::exception const &error) {
     AppendLog(std::string("OTA.Native.StdException message=") + error.what());
     WriteOtaLastRun(
@@ -1414,7 +1423,10 @@ void RunNativeOtaUpdate(
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        resolvedDeviceIdForLastRun,
+        inRolloutForLastRun,
+        rolloutPercentForLastRun);
   } catch (...) {
     AppendLog("OTA.Native.UnknownException");
     WriteOtaLastRun(
@@ -1427,7 +1439,10 @@ void RunNativeOtaUpdate(
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        resolvedDeviceIdForLastRun,
+        inRolloutForLastRun,
+        rolloutPercentForLastRun);
   }
 }
 
