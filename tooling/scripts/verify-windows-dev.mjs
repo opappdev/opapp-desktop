@@ -10,6 +10,7 @@ import {
   describeMetroOutcome,
   ensureMetroRunning,
   ensureWorkspaceTemp,
+  formatHostCommandTailDetails,
   hostRoot,
   killProcessTree,
   log,
@@ -98,16 +99,7 @@ async function buildHostWaitFailureMessage(
   if (hostTail) {
     detail += `\n${hostTail}`;
   }
-  if (hostChild?.opappOutputCaptureRequestedPath && hostChild.opappOutputCaptureRequestedPath !== activeCommandOutputPath) {
-    detail += `\n[host-command-tail remapped ${hostChild.opappOutputCaptureRequestedPath} -> ${activeCommandOutputPath}]`;
-  }
-  if (commandTail) {
-    detail += `\n[host-command-tail ${activeCommandOutputPath}]\n${commandTail}`;
-  } else if (hostChild?.opappOutputCaptureFailure) {
-    detail += `\n[host-command-tail unavailable ${activeCommandOutputPath}] ${hostChild.opappOutputCaptureFailure}`;
-  } else if (hostChild?.opappOutputCaptureMode === 'ignore' && hostChild?.opappOutputCapturePath) {
-    detail += `\n[host-command-tail unavailable ${activeCommandOutputPath}] direct fallback used stdio=ignore`;
-  }
+  detail += formatHostCommandTailDetails(hostChild, {activeCommandOutputPath, commandTail});
 
   return detail;
 }

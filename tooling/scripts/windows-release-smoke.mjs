@@ -55,6 +55,11 @@ const readinessTimeoutMs = parsePositiveIntegerArg(
   '--readiness-ms',
   defaultReadinessTimeoutMs,
 );
+const smokeTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--smoke-ms',
+  readinessTimeoutMs,
+);
 
 let windowPolicyRegistryCache = null;
 
@@ -1231,7 +1236,7 @@ function launchPortableApp() {
 }
 
 async function waitForMarkers() {
-  const deadline = Date.now() + readinessTimeoutMs;
+  const deadline = Date.now() + smokeTimeoutMs;
 
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1269,7 +1274,7 @@ async function waitForMarkers() {
   }
 
   throw new Error(
-    `Windows release smoke timed out before all success markers appeared for scenario '${scenarioName}' within ${readinessTimeoutMs}ms.`,
+    `Windows release smoke timed out before all success markers appeared for scenario '${scenarioName}' within ${smokeTimeoutMs}ms.`,
   );
 }
 
@@ -1302,6 +1307,7 @@ async function main() {
   log(`scenarioDescription=${scenario.description}`);
   log(`launchMode=${launchMode}`);
   log(`readinessTimeoutMs=${readinessTimeoutMs}`);
+  log(`smokeTimeoutMs=${smokeTimeoutMs}`);
   log(`skipPrepare=${skipPrepare}`);
   log(`resetSessions=${resetSessions}`);
 

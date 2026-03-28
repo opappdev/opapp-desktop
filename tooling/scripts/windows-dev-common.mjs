@@ -709,6 +709,28 @@ export async function detectDeterministicCommandFailureFromHost(
   };
 }
 
+export function formatHostCommandTailDetails(
+  hostChild,
+  {activeCommandOutputPath = null, commandTail = ''} = {},
+) {
+  const displayPath = activeCommandOutputPath ?? '<unknown-path>';
+  let detail = '';
+
+  if (hostChild?.opappOutputCaptureRequestedPath && hostChild.opappOutputCaptureRequestedPath !== activeCommandOutputPath) {
+    detail += `\n[host-command-tail remapped ${hostChild.opappOutputCaptureRequestedPath} -> ${displayPath}]`;
+  }
+
+  if (commandTail) {
+    detail += `\n[host-command-tail ${displayPath}]\n${commandTail}`;
+  } else if (hostChild?.opappOutputCaptureFailure) {
+    detail += `\n[host-command-tail unavailable ${displayPath}] ${hostChild.opappOutputCaptureFailure}`;
+  } else if (hostChild?.opappOutputCaptureMode === 'ignore' && hostChild?.opappOutputCapturePath) {
+    detail += `\n[host-command-tail unavailable ${displayPath}] direct fallback used stdio=ignore`;
+  }
+
+  return detail;
+}
+
 export async function waitForHostLogMarkers(
   markers,
   timeoutMs = 60000,

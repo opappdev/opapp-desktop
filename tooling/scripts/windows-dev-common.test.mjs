@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   classifyDeterministicCommandFailure,
   detectDeterministicCommandFailureFromHost,
+  formatHostCommandTailDetails,
   resolveHostCommandOutputPath,
   resolveOutputCaptureCandidates,
 } from './windows-dev-common.mjs';
@@ -88,4 +89,39 @@ test('detectDeterministicCommandFailureFromHost returns classification with fall
   } finally {
     await fsp.rm(tempPath, {force: true});
   }
+});
+
+test('formatHostCommandTailDetails includes remap note and command tail content', () => {
+  const detail = formatHostCommandTailDetails(
+    {
+      opappOutputCaptureRequestedPath: 'D:\\tmp\\requested.log',
+      opappOutputCapturePath: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Temp\\actual.log',
+    },
+    {
+      activeCommandOutputPath: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Temp\\actual.log',
+      commandTail: 'Error: spawnSync C:\\\\WINDOWS\\\\system32\\\\cmd.exe EPERM',
+    },
+  );
+
+  assert.match(detail, /\[host-command-tail remapped D:\\tmp\\requested\.log -> C:\\Users\\ArrayZoneYour\\AppData\\Local\\Temp\\actual\.log\]/);
+  assert.match(detail, /\[host-command-tail C:\\Users\\ArrayZoneYour\\AppData\\Local\\Temp\\actual\.log\]/);
+  assert.match(detail, /spawnSync C:\\\\WINDOWS\\\\system32\\\\cmd\.exe EPERM/);
+});
+
+test('formatHostCommandTailDetails reports ignore fallback when command output is unavailable', () => {
+  const detail = formatHostCommandTailDetails(
+    {
+      opappOutputCaptureMode: 'ignore',
+      opappOutputCapturePath: 'D:\\tmp\\capture.log',
+    },
+    {
+      activeCommandOutputPath: 'D:\\tmp\\capture.log',
+      commandTail: '',
+    },
+  );
+
+  assert.equal(
+    detail,
+    '\n[host-command-tail unavailable D:\\tmp\\capture.log] direct fallback used stdio=ignore',
+  );
 });

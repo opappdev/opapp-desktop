@@ -48,3 +48,15 @@ test('verify-windows validate-only rejects conflicting secondary-only and explic
 
   assert.notEqual(result.status, 0);
 });
+
+test('verify-windows validate-only accepts positive smoke/readiness timeout flags', () => {
+  const result = runVerifyValidateOnly(['--readiness-ms=15000', '--smoke-ms=12000']);
+
+  assert.equal(result.status, 0);
+});
+
+test('verify-windows validate-only rejects non-positive smoke timeout flags', () => {
+  const result = runVerifyValidateOnly(['--smoke-ms=0']);
+
+  assert.notEqual(result.status, 0);
+});
