@@ -24,6 +24,7 @@ Windows verification entrypoints:
 
 - `npm run verify:windows`: full packaged validation.
 - `npm run verify:windows:portable`: full portable validation.
+- `npm run verify:windows:raw-release`: shortest raw `run-windows --release` repro from the native host root; skips verify/smoke wrappers and prints upstream React Native Windows / MSBuild output directly.
 - `npm run verify:windows:dev:window-capture`: Metro-backed `OpappWindowCapture`
   scenario that opens the lab surface and validates WGC window/client capture.
 - `npm run smoke:windows:window-capture`: packaged `OpappWindowCapture`
@@ -32,6 +33,7 @@ Windows verification entrypoints:
 - `npm run verify:windows:portable:ci-fast-fail`: validate-only portable quick gate for CI.
 - `npm run verify:windows:preflight`: packaged preflight probe via verify entrypoint.
 - `npm run verify:windows:portable:preflight`: portable preflight probe via verify entrypoint.
+- use `npm run verify:windows:raw-release` after preflight has already identified the blocker and you need the unwrapped upstream restore/build failure for the Windows host itself.
 - `npm run verify:windows:ci-preflight`: packaged preflight probe with CI-oriented timeout args.
 - `npm run verify:windows:portable:ci-preflight`: portable preflight probe with CI-oriented timeout args.
 - `npm run report:windows:timing -- --input=<log-path>[,<log-path-2>] [--input=<log-path-3>] [--launch=all|packaged|portable] [--percentile=95] [--headroom-ms=5000] [--allow-verify-only] [--defaults-only] [--output=<report-path>]`: parse and aggregate `timing summary` lines across one or more logs, then print recommended `--startup-ms` / `--scenario-ms`（可选写入文件）。

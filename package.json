@@ -23,6 +23,7 @@
     "verify:windows": "node ./tooling/scripts/verify-windows.mjs",
     "verify:windows:validate": "node ./tooling/scripts/verify-windows.mjs --validate-only",
     "verify:windows:preflight": "node ./tooling/scripts/verify-windows.mjs --preflight-only",
+    "verify:windows:raw-release": "node ./tooling/scripts/windows-release-raw-build.mjs",
     "verify:windows:ci-preflight": "node ./tooling/scripts/verify-windows.mjs --preflight-only --scenario=secondary-window --readiness-ms=15000 --smoke-ms=15000 --startup-ms=15000 --scenario-ms=15000",
     "verify:windows:ci-fast-fail": "node ./tooling/scripts/verify-windows.mjs --validate-only --scenario=secondary-window --readiness-ms=15000 --smoke-ms=15000 --startup-ms=15000 --scenario-ms=15000",
     "verify:windows:fast-fail": "node ./tooling/scripts/verify-windows.mjs --readiness-ms=15000 --smoke-ms=15000",
