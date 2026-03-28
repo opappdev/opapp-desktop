@@ -916,7 +916,10 @@ void WriteOtaLastRun(
     std::optional<std::wstring> const &latestVersion,
     std::optional<std::wstring> const &version,
     std::optional<std::wstring> const &previousVersion,
-    std::optional<std::wstring> const &stagedAt) {
+    std::optional<std::wstring> const &stagedAt,
+    std::optional<std::wstring> const &deviceId = std::nullopt,
+    std::optional<bool> inRollout = std::nullopt,
+    std::optional<int32_t> rolloutPercent = std::nullopt) {
   winrt::Windows::Data::Json::JsonObject lastRunObject;
   InsertStringField(lastRunObject, L"mode", L"update");
   InsertStringField(lastRunObject, L"remoteBase", remoteUrl);
@@ -928,6 +931,19 @@ void WriteOtaLastRun(
   InsertOptionalStringField(lastRunObject, L"version", version);
   InsertOptionalStringField(lastRunObject, L"previousVersion", previousVersion);
   InsertOptionalStringField(lastRunObject, L"stagedAt", stagedAt);
+  InsertOptionalStringField(lastRunObject, L"deviceId", deviceId);
+  if (inRollout.has_value()) {
+    lastRunObject.Insert(L"inRollout", winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(*inRollout));
+  } else {
+    lastRunObject.Insert(L"inRollout", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+  }
+  if (rolloutPercent.has_value()) {
+    lastRunObject.Insert(
+        L"rolloutPercent",
+        winrt::Windows::Data::Json::JsonValue::CreateNumberValue(*rolloutPercent));
+  } else {
+    lastRunObject.Insert(L"rolloutPercent", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+  }
   InsertStringField(lastRunObject, L"recordedAt", NowIso8601Utc());
   WriteJsonFile(cacheRoot / L"last-run.json", lastRunObject);
 }
@@ -1099,7 +1115,7 @@ void RunNativeOtaUpdate(
     }
     AppendLog("OTA.Native.DeviceId value=" + ToUtf8(*resolvedDeviceId));
 
-    auto rolloutPercent = ParseRolloutPercent(*bundleInfoObject);
+    auto rolloutPercent = ParseRolloutPercent(bundleInfoObject);
     auto inRollout = true;
     if (rolloutPercent && *rolloutPercent < 100) {
       auto rolloutBucket = ComputeRolloutBucket(*resolvedBundleId, *resolvedDeviceId);
@@ -1152,7 +1168,10 @@ void RunNativeOtaUpdate(
           latestVersion,
           latestVersion,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          resolvedDeviceId,
+          inRollout,
+          rolloutPercent);
       return;
     }
 
@@ -1173,7 +1192,10 @@ void RunNativeOtaUpdate(
           latestVersion,
           std::nullopt,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          resolvedDeviceId,
+          inRollout,
+          rolloutPercent);
       return;
     }
 
@@ -1190,7 +1212,10 @@ void RunNativeOtaUpdate(
           latestVersion,
           std::nullopt,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          resolvedDeviceId,
+          inRollout,
+          rolloutPercent);
       return;
     }
 
@@ -1208,7 +1233,10 @@ void RunNativeOtaUpdate(
           latestVersion,
           std::nullopt,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          resolvedDeviceId,
+          inRollout,
+          rolloutPercent);
       return;
     }
 
@@ -1228,7 +1256,10 @@ void RunNativeOtaUpdate(
           latestVersion,
           std::nullopt,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          resolvedDeviceId,
+          inRollout,
+          rolloutPercent);
       return;
     }
 
@@ -1243,7 +1274,10 @@ void RunNativeOtaUpdate(
           latestVersion,
           std::nullopt,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          resolvedDeviceId,
+          inRollout,
+          rolloutPercent);
       return;
     }
 
@@ -1272,7 +1306,10 @@ void RunNativeOtaUpdate(
             latestVersion,
             std::nullopt,
             std::nullopt,
-            std::nullopt);
+            std::nullopt,
+            resolvedDeviceId,
+            inRollout,
+            rolloutPercent);
         return;
       }
       previousSnapshotDir = snapshotDir;
@@ -1299,7 +1336,10 @@ void RunNativeOtaUpdate(
           latestVersion,
           std::nullopt,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          resolvedDeviceId,
+          inRollout,
+          rolloutPercent);
       return;
     }
 
@@ -1340,7 +1380,10 @@ void RunNativeOtaUpdate(
         latestVersion,
         latestVersion,
         previousVersionForLastRun,
-        nowIso);
+        nowIso,
+        resolvedDeviceId,
+        inRollout,
+        rolloutPercent);
     AppendLog(
         "OTA.Native.Updated bundleId=" + ToUtf8(*resolvedBundleId) +
         " version=" + ToUtf8(latestVersion));
