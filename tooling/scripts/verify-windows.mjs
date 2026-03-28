@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath} from 'node:url';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
+import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 
 const includeSecondaryWindowOnly = process.argv.includes('--include-secondary-window');
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
@@ -11,32 +12,12 @@ const validateOnly = process.argv.includes('--validate-only');
 const preflightOnly = process.argv.includes('--preflight-only');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
-const defaultReadinessTimeoutMs = 25_000;
+const baseReadinessTimeoutMs = 25_000;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
 const frontendRoot = path.join(workspaceRoot, 'opapp-frontend');
 const smokeScriptPath = path.join(repoRoot, 'tooling', 'scripts', 'windows-release-smoke.mjs');
-const readinessTimeoutMs = parsePositiveIntegerArg(
-  process.argv,
-  '--readiness-ms',
-  defaultReadinessTimeoutMs,
-);
-const smokeTimeoutMs = parsePositiveIntegerArg(
-  process.argv,
-  '--smoke-ms',
-  readinessTimeoutMs,
-);
-const startupTimeoutMs = parsePositiveIntegerArg(
-  process.argv,
-  '--startup-ms',
-  smokeTimeoutMs,
-);
-const scenarioTimeoutMs = parsePositiveIntegerArg(
-  process.argv,
-  '--scenario-ms',
-  smokeTimeoutMs,
-);
 
 const defaultScenarios = [
   {
@@ -83,6 +64,35 @@ const secondaryOnlyScenario = {
 };
 const scenarioByName = new Map(defaultScenarios.map(scenario => [scenario.name, scenario]));
 const launchMode = resolveLaunchModeOrThrow();
+const timeoutDefaults = loadTimeoutDefaultsForLaunch({
+  argv: process.argv,
+  launchMode,
+});
+const timeoutDefaultsPath = timeoutDefaults?.defaultsPath ?? null;
+const selectedTimeoutDefaults = timeoutDefaults?.defaults ?? null;
+const suggestedVerifyTotalTimeoutMs = selectedTimeoutDefaults?.verifyTotalMs ?? null;
+const defaultReadinessTimeoutMs =
+  selectedTimeoutDefaults?.readinessMs ?? baseReadinessTimeoutMs;
+const readinessTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--readiness-ms',
+  defaultReadinessTimeoutMs,
+);
+const smokeTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--smoke-ms',
+  selectedTimeoutDefaults?.smokeMs ?? readinessTimeoutMs,
+);
+const startupTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--startup-ms',
+  selectedTimeoutDefaults?.startupMs ?? smokeTimeoutMs,
+);
+const scenarioTimeoutMs = parsePositiveIntegerArg(
+  process.argv,
+  '--scenario-ms',
+  selectedTimeoutDefaults?.scenarioMs ?? smokeTimeoutMs,
+);
 
 function resolveLaunchModeOrThrow() {
   if (portableFlag) {
@@ -271,6 +281,13 @@ function main() {
   log(`validateOnly=${validateOnly}`);
   log(`preflightOnly=${preflightOnly}`);
   log(`launchMode=${launchMode}`);
+  if (timeoutDefaultsPath) {
+    log(`timeoutDefaultsPath=${timeoutDefaultsPath}`);
+    log(`timeoutDefaultsLaunch=${selectedTimeoutDefaults.launchMode}`);
+    if (suggestedVerifyTotalTimeoutMs !== null) {
+      log(`timeoutDefaultsVerifyTotalMs=${suggestedVerifyTotalTimeoutMs}`);
+    }
+  }
   log(`readinessTimeoutMs=${readinessTimeoutMs}`);
   log(`smokeTimeoutMs=${smokeTimeoutMs}`);
   log(`startupTimeoutMs=${startupTimeoutMs}`);

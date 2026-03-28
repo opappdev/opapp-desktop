@@ -31,6 +31,8 @@ Windows smoke timeout knobs:
 - `--smoke-ms`: legacy/global timeout fallback for release smoke phases.
 - `--startup-ms`: startup-marker wait timeout in `windows-release-smoke.mjs`.
 - `--scenario-ms`: scenario success-marker wait timeout after startup markers pass.
+- `--timeout-defaults=<path-to-json>`: load `suggestedDefaults` from `windows-smoke-timing-report --json` output and auto-apply launch-specific readiness/smoke/startup/scenario defaults (explicit timeout flags still win).
+- `--timeout-defaults` resolves `suggestedDefaults` by current launch mode first (`packaged`/`portable`), then falls back to `launch=all`; missing matches or duplicate `--timeout-defaults` args fail fast.
 - `windows-release-smoke.mjs` now prints per-phase timing utilization and low-headroom hints so real-machine runs can tune `--startup-ms` / `--scenario-ms` with concrete elapsed values.
 - `verify-windows.mjs` now logs each scenario duration and an aggregated `scenario timing summary totalMs=...` line after full runs.
 - `windows-smoke-timing-report.mjs` converts collected `timing summary scenario=...` logs into percentile-based timeout recommendations (default `P95 + 5000ms`), and when `verify-windows` summary lines are present it also prints a recommended full-run verify timeout.
@@ -43,6 +45,9 @@ Windows smoke timeout knobs:
 - Example timing report usage:
   - `npm run report:windows:timing -- --input=%TEMP%\\verify-packaged.log,%TEMP%\\verify-portable.log --launch=all --percentile=95 --headroom-ms=5000`
   - `npm run report:windows:timing -- --input=%TEMP%\\verify-packaged.log --launch=packaged --json --output=%TEMP%\\windows-timing-report.json`
+  - `npm run verify:windows -- --timeout-defaults=%TEMP%\\windows-timing-report.json`
+  - `npm run verify:windows:portable -- --timeout-defaults=%TEMP%\\windows-timing-report.json`
+  - `node ./tooling/scripts/windows-release-smoke.mjs --launch=portable --timeout-defaults=%TEMP%\\windows-timing-report.json --validate-only`
   - `npm run report:windows:timing -- --input=%TEMP%\\verify-ci-preflight.log --allow-verify-only`
   - `npm run report:windows:timing -- --input=%TEMP%\\verify-mixed.log --allow-verify-only --defaults-only --json`
 

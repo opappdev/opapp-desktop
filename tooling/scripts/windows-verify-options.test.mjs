@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
@@ -32,6 +34,17 @@ function runVerifyPreflightOnly(args = []) {
     throw result.error;
   }
   return result;
+}
+
+function withTimeoutDefaultsFile(content, run) {
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'opapp-timeout-defaults-'));
+  const defaultsPath = path.join(tempDir, 'timeout-defaults.json');
+  writeFileSync(defaultsPath, JSON.stringify(content), 'utf8');
+  try {
+    return run(defaultsPath);
+  } finally {
+    rmSync(tempDir, {force: true, recursive: true});
+  }
 }
 
 test('verify-windows validate-only accepts supported single-scenario filters', () => {
@@ -74,6 +87,92 @@ test('verify-windows validate-only accepts positive startup/scenario timeout fla
   const result = runVerifyValidateOnly(['--startup-ms=9000', '--scenario-ms=12000']);
 
   assert.equal(result.status, 0);
+});
+
+test('verify-windows validate-only accepts timeout defaults file for packaged launch', () => {
+  const result = withTimeoutDefaultsFile(
+    {
+      suggestedDefaults: [
+        {
+          launchMode: 'packaged',
+          readinessMs: 31_000,
+          smokeMs: 33_000,
+          startupMs: 29_000,
+          scenarioMs: 32_000,
+          verifyTotalMs: 80_000,
+        },
+      ],
+    },
+    defaultsPath => runVerifyValidateOnly([`--timeout-defaults=${defaultsPath}`]),
+  );
+
+  assert.equal(result.status, 0);
+});
+
+test('verify-windows validate-only rejects missing timeout defaults file', () => {
+  const missingPath = path.join(tmpdir(), 'opapp-timeout-defaults-missing.json');
+  const result = runVerifyValidateOnly([`--timeout-defaults=${missingPath}`]);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only rejects timeout defaults without matching launch entry', () => {
+  const result = withTimeoutDefaultsFile(
+    {
+      suggestedDefaults: [
+        {
+          launchMode: 'portable',
+          readinessMs: 26_000,
+          smokeMs: 27_000,
+          startupMs: 25_000,
+          scenarioMs: 27_000,
+        },
+      ],
+    },
+    defaultsPath => runVerifyValidateOnly([`--timeout-defaults=${defaultsPath}`]),
+  );
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only accepts launch=portable with launch=all timeout defaults', () => {
+  const result = withTimeoutDefaultsFile(
+    {
+      suggestedDefaults: [
+        {
+          launchMode: 'all',
+          readinessMs: 29_000,
+          smokeMs: 30_000,
+          startupMs: 28_000,
+          scenarioMs: 30_000,
+        },
+      ],
+    },
+    defaultsPath =>
+      runVerifyValidateOnly(['--launch=portable', `--timeout-defaults=${defaultsPath}`]),
+  );
+
+  assert.equal(result.status, 0);
+});
+
+test('verify-windows validate-only rejects duplicate timeout defaults flags', () => {
+  const result = withTimeoutDefaultsFile(
+    {
+      suggestedDefaults: [
+        {
+          launchMode: 'packaged',
+          readinessMs: 31_000,
+        },
+      ],
+    },
+    defaultsPath =>
+      runVerifyValidateOnly([
+        `--timeout-defaults=${defaultsPath}`,
+        '--timeout-defaults=other.json',
+      ]),
+  );
+
+  assert.notEqual(result.status, 0);
 });
 
 test('verify-windows validate-only accepts packaged launch mode explicitly', () => {

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
@@ -32,6 +34,17 @@ function runSmokePreflightOnly(args = []) {
     throw result.error;
   }
   return result;
+}
+
+function withTimeoutDefaultsFile(content, run) {
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'opapp-timeout-defaults-'));
+  const defaultsPath = path.join(tempDir, 'timeout-defaults.json');
+  writeFileSync(defaultsPath, JSON.stringify(content), 'utf8');
+  try {
+    return run(defaultsPath);
+  } finally {
+    rmSync(tempDir, {force: true, recursive: true});
+  }
 }
 
 test('windows-release-smoke validate-only accepts default scenario', () => {
@@ -115,6 +128,73 @@ test('windows-release-smoke validate-only accepts positive readiness/smoke/start
   ]);
 
   assert.equal(result.status, 0);
+});
+
+test('windows-release-smoke validate-only accepts timeout defaults file', () => {
+  const result = withTimeoutDefaultsFile(
+    {
+      suggestedDefaults: [
+        {
+          launchMode: 'packaged',
+          readinessMs: 30_000,
+          smokeMs: 30_000,
+          startupMs: 28_000,
+          scenarioMs: 30_000,
+          verifyTotalMs: 75_000,
+        },
+      ],
+    },
+    defaultsPath => runSmokeValidateOnly([`--timeout-defaults=${defaultsPath}`]),
+  );
+
+  assert.equal(result.status, 0);
+});
+
+test('windows-release-smoke validate-only rejects missing timeout defaults file', () => {
+  const missingPath = path.join(tmpdir(), 'opapp-timeout-defaults-smoke-missing.json');
+  const result = runSmokeValidateOnly([`--timeout-defaults=${missingPath}`]);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('windows-release-smoke validate-only accepts launch=portable with launch=all timeout defaults', () => {
+  const result = withTimeoutDefaultsFile(
+    {
+      suggestedDefaults: [
+        {
+          launchMode: 'all',
+          readinessMs: 30_000,
+          smokeMs: 30_000,
+          startupMs: 29_000,
+          scenarioMs: 30_000,
+        },
+      ],
+    },
+    defaultsPath =>
+      runSmokeValidateOnly(['--launch=portable', `--timeout-defaults=${defaultsPath}`]),
+  );
+
+  assert.equal(result.status, 0);
+});
+
+test('windows-release-smoke validate-only rejects duplicate timeout defaults flags', () => {
+  const result = withTimeoutDefaultsFile(
+    {
+      suggestedDefaults: [
+        {
+          launchMode: 'packaged',
+          readinessMs: 30_000,
+        },
+      ],
+    },
+    defaultsPath =>
+      runSmokeValidateOnly([
+        `--timeout-defaults=${defaultsPath}`,
+        '--timeout-defaults=other.json',
+      ]),
+  );
+
+  assert.notEqual(result.status, 0);
 });
 
 test('windows-release-smoke validate-only rejects non-positive readiness timeout', () => {

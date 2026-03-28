@@ -22,6 +22,7 @@ import {
   formatMarkerTimeoutMessage,
   formatMarkerTimingSummary,
 } from './windows-smoke-timing.mjs';
+import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 
 const scenarioArg = process.argv
   .find(argument => argument.startsWith('--scenario='))
@@ -56,7 +57,14 @@ const packageName = 'OpappWindowsHost';
 const applicationId = 'App';
 const windowPolicyRegistryPath = path.join(frontendRoot, 'contracts', 'windowing', 'src', 'window-policy-registry.json');
 const launchMode = resolveLaunchModeOrThrow();
-const defaultReadinessTimeoutMs = 25_000;
+const timeoutDefaults = loadTimeoutDefaultsForLaunch({
+  argv: process.argv,
+  launchMode,
+});
+const timeoutDefaultsPath = timeoutDefaults?.defaultsPath ?? null;
+const selectedTimeoutDefaults = timeoutDefaults?.defaults ?? null;
+const suggestedVerifyTotalTimeoutMs = selectedTimeoutDefaults?.verifyTotalMs ?? null;
+const defaultReadinessTimeoutMs = selectedTimeoutDefaults?.readinessMs ?? 25_000;
 const readinessTimeoutMs = parsePositiveIntegerArg(
   process.argv,
   '--readiness-ms',
@@ -65,17 +73,17 @@ const readinessTimeoutMs = parsePositiveIntegerArg(
 const smokeTimeoutMs = parsePositiveIntegerArg(
   process.argv,
   '--smoke-ms',
-  readinessTimeoutMs,
+  selectedTimeoutDefaults?.smokeMs ?? readinessTimeoutMs,
 );
 const startupTimeoutMs = parsePositiveIntegerArg(
   process.argv,
   '--startup-ms',
-  smokeTimeoutMs,
+  selectedTimeoutDefaults?.startupMs ?? smokeTimeoutMs,
 );
 const scenarioTimeoutMs = parsePositiveIntegerArg(
   process.argv,
   '--scenario-ms',
-  smokeTimeoutMs,
+  selectedTimeoutDefaults?.scenarioMs ?? smokeTimeoutMs,
 );
 
 let windowPolicyRegistryCache = null;
@@ -1398,6 +1406,13 @@ async function main() {
   log(`scenario=${scenarioName}`);
   log(`scenarioDescription=${scenario.description}`);
   log(`launchMode=${launchMode}`);
+  if (timeoutDefaultsPath) {
+    log(`timeoutDefaultsPath=${timeoutDefaultsPath}`);
+    log(`timeoutDefaultsLaunch=${selectedTimeoutDefaults.launchMode}`);
+    if (suggestedVerifyTotalTimeoutMs !== null) {
+      log(`timeoutDefaultsVerifyTotalMs=${suggestedVerifyTotalTimeoutMs}`);
+    }
+  }
   log(`readinessTimeoutMs=${readinessTimeoutMs}`);
   log(`smokeTimeoutMs=${smokeTimeoutMs}`);
   log(`startupTimeoutMs=${startupTimeoutMs}`);
