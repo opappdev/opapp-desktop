@@ -10,7 +10,6 @@ const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
-const launchMode = portableFlag ? 'portable' : (launchModeArg === 'portable' ? 'portable' : 'packaged');
 const defaultReadinessTimeoutMs = 25_000;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
@@ -72,6 +71,31 @@ const secondaryOnlyScenario = {
   args: ['--scenario=secondary-window'],
 };
 const scenarioByName = new Map(defaultScenarios.map(scenario => [scenario.name, scenario]));
+const launchMode = resolveLaunchModeOrThrow();
+
+function resolveLaunchModeOrThrow() {
+  if (portableFlag) {
+    if (launchModeArg && launchModeArg !== 'portable') {
+      throw new Error(
+        `--portable conflicts with --launch=${launchModeArg}. Use --launch=portable or remove --portable.`,
+      );
+    }
+
+    return 'portable';
+  }
+
+  if (!launchModeArg || launchModeArg === 'packaged') {
+    return 'packaged';
+  }
+
+  if (launchModeArg === 'portable') {
+    return 'portable';
+  }
+
+  throw new Error(
+    `Unknown --launch=${launchModeArg}. Supported launch modes: packaged, portable.`,
+  );
+}
 
 function parseScenarioFilterNames(rawValue) {
   if (!rawValue) {
