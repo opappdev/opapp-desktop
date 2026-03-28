@@ -793,6 +793,38 @@ std::optional<int32_t> ParseRolloutPercent(winrt::Windows::Data::Json::JsonObjec
   }
 }
 
+std::optional<std::wstring> ResolveLatestVersionFromVersions(
+    winrt::Windows::Data::Json::JsonObject const &bundleInfoObject) noexcept {
+  try {
+    auto versionsValue = bundleInfoObject.GetNamedValue(L"versions", nullptr);
+    if (!versionsValue ||
+        versionsValue.ValueType() != winrt::Windows::Data::Json::JsonValueType::Array) {
+      return std::nullopt;
+    }
+
+    auto versionsArray = versionsValue.GetArray();
+    std::optional<std::wstring> latestVersion;
+    for (auto const &value : versionsArray) {
+      if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::String) {
+        continue;
+      }
+
+      auto candidate = std::wstring(value.GetString());
+      if (candidate.empty()) {
+        continue;
+      }
+
+      if (!latestVersion || candidate > *latestVersion) {
+        latestVersion = candidate;
+      }
+    }
+
+    return latestVersion;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 std::optional<int32_t> ComputeRolloutBucket(
     std::wstring const &bundleId,
     std::wstring const &deviceId) noexcept {
@@ -1084,20 +1116,29 @@ void RunNativeOtaUpdate(
       return;
     }
 
+    auto latestVersionFromVersions = ResolveLatestVersionFromVersions(bundleInfoObject);
     std::wstring latestVersion =
         bundleInfoObject.GetNamedString(L"latestVersion", L"").c_str();
+    std::string latestVersionSource = latestVersion.empty() ? std::string() : std::string("latestVersion");
     if (auto channelsObject = bundleInfoObject.GetNamedObject(L"channels", nullptr)) {
       std::wstring channelVersion =
           channelsObject.GetNamedString(winrt::hstring(resolvedChannel), L"").c_str();
       if (!channelVersion.empty()) {
         latestVersion = channelVersion;
+        latestVersionSource = "channels:" + ToUtf8(resolvedChannel);
       } else if (resolvedChannel != L"stable") {
         std::wstring stableVersion =
             channelsObject.GetNamedString(L"stable", L"").c_str();
         if (!stableVersion.empty()) {
           latestVersion = stableVersion;
+          latestVersionSource = "channels:stable";
         }
       }
+    }
+
+    if (latestVersion.empty() && latestVersionFromVersions) {
+      latestVersion = *latestVersionFromVersions;
+      latestVersionSource = "versions";
     }
 
     if (latestVersion.empty()) {
@@ -1115,6 +1156,9 @@ void RunNativeOtaUpdate(
           std::nullopt);
       return;
     }
+    AppendLog(
+        "OTA.Native.LatestVersion source=" + latestVersionSource +
+        " value=" + ToUtf8(latestVersion));
 
     auto resolvedDeviceId = GetOrCreateOtaDeviceId(cacheRoot);
     if (!resolvedDeviceId) {
