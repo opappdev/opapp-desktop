@@ -19,6 +19,21 @@ function runVerifyValidateOnly(args = []) {
   return result;
 }
 
+function runVerifyPreflightOnly(args = []) {
+  const result = spawnSync(process.execPath, [verifyScriptPath, '--preflight-only', ...args], {
+    stdio: 'ignore',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST: '1',
+    },
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return result;
+}
+
 test('verify-windows validate-only accepts supported single-scenario filters', () => {
   const result = runVerifyValidateOnly(['--scenario=secondary-window']);
 
@@ -101,4 +116,22 @@ test('verify-windows validate-only rejects conflicting --portable and --launch f
   const result = runVerifyValidateOnly(['--portable', '--launch=packaged']);
 
   assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only rejects conflicting validate/preflight execution modes', () => {
+  const result = runVerifyValidateOnly(['--preflight-only']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows preflight-only accepts packaged launch mode', () => {
+  const result = runVerifyPreflightOnly(['--scenario=secondary-window']);
+
+  assert.equal(result.status, 0);
+});
+
+test('verify-windows preflight-only accepts portable launch mode', () => {
+  const result = runVerifyPreflightOnly(['--launch=portable', '--scenario=secondary-window']);
+
+  assert.equal(result.status, 0);
 });

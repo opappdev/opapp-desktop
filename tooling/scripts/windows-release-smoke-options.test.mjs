@@ -19,6 +19,21 @@ function runSmokeValidateOnly(args = []) {
   return result;
 }
 
+function runSmokePreflightOnly(args = []) {
+  const result = spawnSync(process.execPath, [smokeScriptPath, '--preflight-only', ...args], {
+    stdio: 'ignore',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST: '1',
+    },
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return result;
+}
+
 test('windows-release-smoke validate-only accepts default scenario', () => {
   const result = runSmokeValidateOnly();
 
@@ -71,6 +86,24 @@ test('windows-release-smoke validate-only rejects conflicting --portable and --l
   const result = runSmokeValidateOnly(['--portable', '--launch=packaged']);
 
   assert.notEqual(result.status, 0);
+});
+
+test('windows-release-smoke validate-only rejects conflicting validate/preflight execution modes', () => {
+  const result = spawnSync(process.execPath, [smokeScriptPath, '--validate-only', '--preflight-only'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+
+  assert.notEqual(result.status, 0);
+});
+
+test('windows-release-smoke preflight-only runs release probe without bundle/build', () => {
+  const result = runSmokePreflightOnly(['--scenario=tab-session']);
+
+  assert.equal(result.status, 0);
 });
 
 test('windows-release-smoke validate-only rejects non-positive scenario timeout', () => {

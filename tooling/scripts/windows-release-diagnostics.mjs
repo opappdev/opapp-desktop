@@ -531,8 +531,12 @@ function buildActionHints(classification, probe) {
   }
 
   if (probe.localMicrosoftSdkProbe?.exists && !probe.localMicrosoftSdkProbe.accessible) {
+    const sdkPath = probe.localMicrosoftSdkProbe.path;
     hints.push(
-      `Local Microsoft SDKs path is not readable (${probe.localMicrosoftSdkProbe.path}): ${probe.localMicrosoftSdkProbe.errorMessage ?? 'access denied'}.`,
+      `Local Microsoft SDKs path is not readable (${sdkPath}): ${probe.localMicrosoftSdkProbe.errorMessage ?? 'access denied'}.`,
+    );
+    hints.push(
+      `Inspect ACL details before retrying portable fallback: powershell -NoProfile -Command "Get-Acl '${sdkPath}' | Format-List"`,
     );
   }
 

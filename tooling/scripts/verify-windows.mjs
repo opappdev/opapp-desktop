@@ -8,6 +8,7 @@ const includeSecondaryWindowOnly = process.argv.includes('--include-secondary-wi
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
+const preflightOnly = process.argv.includes('--preflight-only');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
 const defaultReadinessTimeoutMs = 25_000;
@@ -173,6 +174,31 @@ function runWindowsSmoke(scenario) {
   });
 }
 
+function runWindowsPreflight(scenarios) {
+  const scenarioName = scenarios[0]?.name ?? 'tab-session';
+  if (scenarios.length > 1) {
+    log(
+      `preflight-only ignores multi-scenario execution; using first scenario '${scenarioName}' for smoke-script option validation.`,
+    );
+  }
+
+  log(`running ${launchMode} Windows preflight diagnostics`);
+  const preflightArgs = [
+    smokeScriptPath,
+    '--preflight-only',
+    `--scenario=${scenarioName}`,
+    `--launch=${launchMode}`,
+    `--readiness-ms=${readinessTimeoutMs}`,
+    `--smoke-ms=${smokeTimeoutMs}`,
+    `--startup-ms=${startupTimeoutMs}`,
+    `--scenario-ms=${scenarioTimeoutMs}`,
+  ];
+  runOrThrow(process.execPath, preflightArgs, {
+    cwd: repoRoot,
+    env: process.env,
+  });
+}
+
 function resolveScenariosOrThrow() {
   const scenarioFilterNames = parseScenarioFilterNames(scenarioFilterArg);
   const hasScenarioFlag = Boolean(scenarioFilterToken);
@@ -234,14 +260,25 @@ function main() {
   log(`scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
   log(`scenarioCount=${scenarios.length}`);
   log(`validateOnly=${validateOnly}`);
+  log(`preflightOnly=${preflightOnly}`);
   log(`launchMode=${launchMode}`);
   log(`readinessTimeoutMs=${readinessTimeoutMs}`);
   log(`smokeTimeoutMs=${smokeTimeoutMs}`);
   log(`startupTimeoutMs=${startupTimeoutMs}`);
   log(`scenarioTimeoutMs=${scenarioTimeoutMs}`);
 
+  if (validateOnly && preflightOnly) {
+    throw new Error('`--validate-only` conflicts with `--preflight-only`; choose one execution mode.');
+  }
+
   if (validateOnly) {
     log('validate-only enabled; skipping frontend typecheck and Windows smoke execution.');
+    return;
+  }
+
+  if (preflightOnly) {
+    log('preflight-only enabled; skipping frontend typecheck and running release diagnostics only.');
+    runWindowsPreflight(scenarios);
     return;
   }
 

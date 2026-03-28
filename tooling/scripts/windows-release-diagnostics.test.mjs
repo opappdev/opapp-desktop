@@ -109,6 +109,7 @@ test('formatReleaseFailureDiagnostics includes classification and actionable hin
   assert(diagnostics.includes('Suggested next actions:'));
   assert(diagnostics.includes('non-sandbox'));
   assert(diagnostics.includes('Local Microsoft SDKs path is not readable'));
+  assert(diagnostics.includes("Get-Acl 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs'"));
 });
 
 test('getBlockingReleaseProbeFailure reports cmd EPERM as blocking', () => {

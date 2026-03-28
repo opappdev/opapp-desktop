@@ -23,6 +23,7 @@ const scenarioArg = process.argv
   ?.split('=')[1];
 const includeSecondaryWindow = process.argv.includes('--include-secondary-window');
 const validateOnly = process.argv.includes('--validate-only');
+const preflightOnly = process.argv.includes('--preflight-only');
 const skipPrepare = process.argv.includes('--skip-prepare');
 const preserveState = process.argv.includes('--preserve-state');
 const resetSessions = process.argv.includes('--reset-sessions');
@@ -1095,6 +1096,44 @@ async function runPortableMsbuildFallbackOrThrow(releaseBuildProbe) {
   throw new Error(`portable msbuild fallback failed: ${failures.join('; ')}`);
 }
 
+function runReleasePreflightOrThrow() {
+  const releaseBuildProbe = collectReleaseBuildProbe();
+  for (const line of formatReleaseProbeForLogs(releaseBuildProbe)) {
+    log(`release-preflight ${line}`);
+  }
+
+  const preflightBlockingFailure = getBlockingReleaseProbeFailure(releaseBuildProbe);
+  const skipPreflightFailFast = process.env.OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST === '1';
+  if (preflightBlockingFailure && !skipPreflightFailFast) {
+    const classification = classifyRunWindowsFailure(preflightBlockingFailure.classifierHint);
+    throw new Error(
+      formatReleaseFailureDiagnostics({
+        args: [],
+        classification,
+        command: process.execPath,
+        failureSummary: `release preflight blocked execution: ${preflightBlockingFailure.reason}`,
+        probe: releaseBuildProbe,
+        result: {status: null, error: {code: preflightBlockingFailure.code}},
+      }),
+    );
+  }
+
+  if (preflightBlockingFailure) {
+    log(
+      `release-preflight blocking issue ignored via OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1: ${preflightBlockingFailure.reason}`,
+    );
+  }
+
+  if (launchMode === 'portable') {
+    const portableFallbackBlocker = getPortableMsbuildFallbackBlocker(releaseBuildProbe);
+    if (portableFallbackBlocker) {
+      log(`release-preflight portable-fallback blocker: ${portableFallbackBlocker}`);
+    }
+  }
+
+  return releaseBuildProbe;
+}
+
 async function preparePackagedApp() {
   await bundleFrontend();
 
@@ -1120,31 +1159,7 @@ async function preparePackagedApp() {
   await assertStagedManifest();
 
   log('building and deploying packaged release app');
-  const releaseBuildProbe = collectReleaseBuildProbe();
-  for (const line of formatReleaseProbeForLogs(releaseBuildProbe)) {
-    log(`release-preflight ${line}`);
-  }
-
-  const preflightBlockingFailure = getBlockingReleaseProbeFailure(releaseBuildProbe);
-  const skipPreflightFailFast = process.env.OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST === '1';
-  if (preflightBlockingFailure && !skipPreflightFailFast) {
-    const classification = classifyRunWindowsFailure(preflightBlockingFailure.classifierHint);
-    throw new Error(
-      formatReleaseFailureDiagnostics({
-        args: [],
-        classification,
-        command: process.execPath,
-        failureSummary: `release preflight blocked execution: ${preflightBlockingFailure.reason}`,
-        probe: releaseBuildProbe,
-        result: {status: null, error: {code: preflightBlockingFailure.code}},
-      }),
-    );
-  }
-  if (preflightBlockingFailure) {
-    log(
-      `release-preflight blocking issue ignored via OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1: ${preflightBlockingFailure.reason}`,
-    );
-  }
+  const releaseBuildProbe = runReleasePreflightOrThrow();
 
   const releaseArgs = [
     cliPath,
@@ -1367,10 +1382,19 @@ async function main() {
   log(`startupTimeoutMs=${startupTimeoutMs}`);
   log(`scenarioTimeoutMs=${scenarioTimeoutMs}`);
   log(`validateOnly=${validateOnly}`);
+  log(`preflightOnly=${preflightOnly}`);
   log(`skipPrepare=${skipPrepare}`);
   log(`resetSessions=${resetSessions}`);
+  if (validateOnly && preflightOnly) {
+    throw new Error('`--validate-only` conflicts with `--preflight-only`; choose one execution mode.');
+  }
   if (validateOnly) {
     log('validate-only enabled; skipping bundle/build/launch execution.');
+    return;
+  }
+  if (preflightOnly) {
+    log('preflight-only enabled; collecting release toolchain probe diagnostics only.');
+    runReleasePreflightOrThrow();
     return;
   }
 

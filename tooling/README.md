@@ -13,9 +13,16 @@ Windows verification entrypoints:
 - `npm run verify:windows:portable`: full portable validation.
 - `npm run verify:windows:ci-fast-fail`: validate-only packaged quick gate for CI.
 - `npm run verify:windows:portable:ci-fast-fail`: validate-only portable quick gate for CI.
+- `npm run verify:windows:preflight`: packaged preflight probe via verify entrypoint.
+- `npm run verify:windows:portable:preflight`: portable preflight probe via verify entrypoint.
+- `npm run verify:windows:ci-preflight`: packaged preflight probe with CI-oriented timeout args.
+- `npm run verify:windows:portable:ci-preflight`: portable preflight probe with CI-oriented timeout args.
 - `npm run smoke:windows:validate`: validate direct release-smoke packaged args only.
 - `npm run smoke:windows:portable:validate`: validate direct release-smoke portable args only.
+- `npm run smoke:windows:preflight`: packaged release preflight probe only (no bundle/build/launch).
+- `npm run smoke:windows:portable:preflight`: portable release preflight probe only.
 - `node ./tooling/scripts/windows-release-smoke.mjs --validate-only ...`: validate direct smoke args without running bundle/build/launch.
+- `node ./tooling/scripts/windows-release-smoke.mjs --preflight-only ...`: collect release probe diagnostics without running bundle/build/launch.
 
 Windows smoke timeout knobs:
 
