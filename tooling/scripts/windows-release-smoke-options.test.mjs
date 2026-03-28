@@ -106,6 +106,35 @@ test('windows-release-smoke preflight-only runs release probe without bundle/bui
   assert.equal(result.status, 0);
 });
 
+test('windows-release-smoke validate-only accepts positive readiness/smoke/startup/scenario timeouts', () => {
+  const result = runSmokeValidateOnly([
+    '--readiness-ms=15000',
+    '--smoke-ms=14000',
+    '--startup-ms=13000',
+    '--scenario-ms=12000',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
+test('windows-release-smoke validate-only rejects non-positive readiness timeout', () => {
+  const result = runSmokeValidateOnly(['--readiness-ms=0']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('windows-release-smoke validate-only rejects non-positive smoke timeout', () => {
+  const result = runSmokeValidateOnly(['--smoke-ms=0']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('windows-release-smoke validate-only rejects non-positive startup timeout', () => {
+  const result = runSmokeValidateOnly(['--startup-ms=0']);
+
+  assert.notEqual(result.status, 0);
+});
+
 test('windows-release-smoke validate-only rejects non-positive scenario timeout', () => {
   const result = runSmokeValidateOnly(['--scenario-ms=0']);
 
