@@ -164,6 +164,26 @@ test('getPortableMsbuildFallbackBlocker returns null when local sdk path is acce
   assert.equal(blocker, null);
 });
 
+test('getPortableMsbuildFallbackBlocker allows forced fallback override via env', () => {
+  const blocker = getPortableMsbuildFallbackBlocker(
+    {
+      localMicrosoftSdkProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        exists: true,
+        accessible: false,
+        errorMessage: 'Access to the path is denied.',
+      },
+    },
+    {
+      env: {
+        OPAPP_WINDOWS_RELEASE_FORCE_MSBUILD_FALLBACK: '1',
+      },
+    },
+  );
+
+  assert.equal(blocker, null);
+});
+
 test('refineReleaseFailureClassification upgrades unknown release failure to cmd-spawn-eperm with blocked capture signal', () => {
   const classification = refineReleaseFailureClassification({
     classification: {code: 'unknown', summary: 'unclassified run-windows failure'},

@@ -23,3 +23,8 @@ Windows smoke timeout knobs:
 - `--smoke-ms`: legacy/global timeout fallback for release smoke phases.
 - `--startup-ms`: startup-marker wait timeout in `windows-release-smoke.mjs`.
 - `--scenario-ms`: scenario success-marker wait timeout after startup markers pass.
+
+Portable fallback override knobs:
+
+- `OPAPP_WINDOWS_MSBUILD_PATH`: explicit `msbuild.exe` candidate for portable fallback.
+- `OPAPP_WINDOWS_RELEASE_FORCE_MSBUILD_FALLBACK=1`: ignore local SDK ACL blocker and force a fallback build attempt.

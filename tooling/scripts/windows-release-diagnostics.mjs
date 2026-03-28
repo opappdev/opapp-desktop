@@ -495,7 +495,7 @@ function buildActionHints(classification, probe) {
     );
     hints.push('Re-run `npm run verify:windows:portable` on a non-sandbox machine to confirm release-chain health.');
     hints.push(
-      'For portable checks, use direct msbuild fallback by setting OPAPP_WINDOWS_MSBUILD_PATH when auto-discovery misses your Visual Studio install.',
+      'For portable checks, use direct msbuild fallback by setting OPAPP_WINDOWS_MSBUILD_PATH when auto-discovery misses your Visual Studio install; set OPAPP_WINDOWS_RELEASE_FORCE_MSBUILD_FALLBACK=1 to override local SDK ACL blockers.',
     );
   } else if (classification.code === 'process-spawn-eperm') {
     hints.push('A child process was blocked with EPERM before release build completion, which strongly suggests host/sandbox policy restrictions.');
@@ -581,7 +581,13 @@ export function getBlockingReleaseProbeFailure(probe) {
   return null;
 }
 
-export function getPortableMsbuildFallbackBlocker(probe) {
+export function getPortableMsbuildFallbackBlocker(probe, {env = process.env} = {}) {
+  const forcePortableMsbuildFallback =
+    normalizeText(env.OPAPP_WINDOWS_RELEASE_FORCE_MSBUILD_FALLBACK) === '1';
+  if (forcePortableMsbuildFallback) {
+    return null;
+  }
+
   if (probe.localMicrosoftSdkProbe?.exists && !probe.localMicrosoftSdkProbe.accessible) {
     return (
       `local Microsoft SDKs path is not readable (${probe.localMicrosoftSdkProbe.path}): ` +
