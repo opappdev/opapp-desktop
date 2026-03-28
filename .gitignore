@@ -27,3 +27,6 @@ distribution/artifacts/*
 
 # OTA bundle cache (RFC-010)
 .ota-cache/
+
+# Local private verify/smoke extensions
+tooling/scripts/.private-*/

@@ -40,12 +40,12 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
 const frontendRoot = path.join(workspaceRoot, 'opapp-frontend');
-const optionalHbrEntryPath = path.join(
-  frontendRoot,
-  'apps',
-  'companion-app',
-  '.private-hbr',
-  'index.hbr.js',
+const optionalPrivateScenarioModulePath = path.join(
+  repoRoot,
+  'tooling',
+  'scripts',
+  '.private-companion',
+  'windows-private-scenarios.mjs',
 );
 const frontendBundleScriptPath = path.join(frontendRoot, 'tooling', 'scripts', 'bundle-companion-windows.mjs');
 const frontendBundleRoot = path.join(frontendRoot, '.dist', 'bundles', 'companion-app', 'windows');
@@ -106,33 +106,6 @@ const scenarioTimeoutMs = parsePositiveIntegerArg(
 
 let windowPolicyRegistryCache = null;
 
-const supportedScenarioNames = [
-  'main-window-bootstrap-compact',
-  'tab-session',
-  'restore-tab-session',
-  'startup-target-main-launcher',
-  'legacy-startup-target-main-launcher',
-  'startup-target-settings',
-  'startup-target-challenge-advisor',
-  'legacy-startup-target-challenge-advisor',
-  'launcher-open-challenge-advisor',
-  'restore-settings-window',
-  'settings-default-current-window',
-  'settings-default-new-window',
-  'save-main-window-preferences',
-  'challenge-advisor-current-window',
-  'view-shot-current-window',
-  'window-capture-current-window',
-  'secondary-window',
-];
-const optionalHbrScenarioNames = new Set([
-  'startup-target-challenge-advisor',
-  'legacy-startup-target-challenge-advisor',
-  'launcher-open-challenge-advisor',
-  'challenge-advisor-current-window',
-]);
-const optionalHbrEntryPresent = existsSync(optionalHbrEntryPath);
-
 function resolveLaunchModeOrThrow() {
   if (portableFlag) {
     if (launchModeArg && launchModeArg !== 'portable') {
@@ -184,9 +157,6 @@ function resolveScenarioNameOrThrow() {
 
   return includeSecondaryWindow ? 'secondary-window' : 'tab-session';
 }
-
-const scenarioName = resolveScenarioNameOrThrow();
-
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -446,6 +416,70 @@ function assertPersistedSessionLacksSurfaceId(sessionFile, windowId, surfaceId, 
   }
 }
 
+function normalizePrivateSmokeScenarioEntries(privateSmokeScenarios, sourceLabel) {
+  if (!privateSmokeScenarios || typeof privateSmokeScenarios !== 'object') {
+    throw new Error(
+      `Invalid private smoke scenarios from ${sourceLabel}. Expected an object keyed by scenario name.`,
+    );
+  }
+
+  return Object.entries(privateSmokeScenarios).map(([scenarioName, scenario]) => {
+    if (
+      typeof scenarioName !== 'string' ||
+      scenarioName.length === 0 ||
+      !scenario ||
+      typeof scenario !== 'object' ||
+      typeof scenario.description !== 'string' ||
+      scenario.description.length === 0 ||
+      !Array.isArray(scenario.successMarkers)
+    ) {
+      throw new Error(
+        `Invalid private smoke scenario '${scenarioName}' from ${sourceLabel}. Expected an object with description and successMarkers[].`,
+      );
+    }
+
+    return [scenarioName, scenario];
+  });
+}
+
+async function loadOptionalPrivateSmokeScenarios() {
+  if (!existsSync(optionalPrivateScenarioModulePath)) {
+    return {};
+  }
+
+  const privateScenarioModule = await import(
+    pathToFileURL(optionalPrivateScenarioModulePath).href
+  );
+  if (typeof privateScenarioModule.createPrivateSmokeScenarios !== 'function') {
+    return {};
+  }
+
+  const privateSmokeScenarios =
+    await privateScenarioModule.createPrivateSmokeScenarios({
+      assertPersistedSessionContains,
+      assertPersistedSessionHasSurfaceId,
+      assertPersistedSessionLacksSurfaceId,
+      assertRectMatchesPolicy,
+      buildPersistedSessionFile,
+      commonSuccessMarkers,
+      companionStartupTargetPath,
+      defaultPreferences,
+      fileExists,
+      normalizeLogContents,
+      preferencesPath,
+      readFile,
+      sessionsPath,
+      writeFile,
+    });
+
+  return Object.fromEntries(
+    normalizePrivateSmokeScenarioEntries(
+      privateSmokeScenarios,
+      optionalPrivateScenarioModulePath,
+    ),
+  );
+}
+
 const commonSuccessMarkers = [
   'LaunchSurface surface=companion.main policy=main mode=',
   'InstanceLoaded failed=false',
@@ -467,7 +501,7 @@ const bootstrapCompactPreferences = {
   settingsPresentation: 'current-window',
 };
 
-const smokeScenarios = {
+const publicSmokeScenarios = {
   'main-window-bootstrap-compact': {
     description: 'saved main window mode is applied during startup bootstrap',
     preferences: bootstrapCompactPreferences,
@@ -824,223 +858,6 @@ const smokeScenarios = {
       );
     },
   },
-  'startup-target-challenge-advisor': {
-    description: 'saved challenge-advisor startup target switches the main window into the child bundle during cold start',
-    preferences: defaultPreferences,
-    startupTarget: {
-      surfaceId: 'hbr.challenge-advisor',
-      bundleId: 'opapp.hbr.workspace',
-      policy: 'main',
-      presentation: 'current-window',
-    },
-    launchConfig: {},
-    successMarkers: [
-      'LaunchSurface surface=companion.main policy=main mode=',
-      'InstanceLoaded failed=false',
-      'NativeLogger[1] Running "OpappWindowsHost"',
-      'BundleManifestSource=manifest',
-      '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
-      'BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main',
-      'BundleSwitchReloadRequested window=window.main bundle=opapp.hbr.workspace',
-      '[frontend-companion] render bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
-      '[frontend-companion] mounted bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
-    ],
-    async prepareState() {
-      await writeFile(
-        sessionsPath,
-        buildPersistedSessionFile({
-          'window.main': {
-            windowId: 'window.main',
-            activeTabId: 'tab:companion.main:1',
-            tabs: [
-              {
-                tabId: 'tab:companion.main:1',
-                surfaceId: 'companion.main',
-                policy: 'main',
-              },
-            ],
-          },
-        }),
-        'utf8',
-      );
-    },
-    async verifyLog(logContents) {
-      const normalized = normalizeLogContents(logContents);
-      if (normalized.includes('InitialOpenSurface surface=')) {
-        throw new Error(
-          'Windows release smoke failed: startup target challenge-advisor override should not rely on an initial-open launch config.',
-        );
-      }
-
-      if (!normalized.includes('Bundle\\bundles\\opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: startup target challenge-advisor override did not point the host at the staged child bundle root.',
-        );
-      }
-
-      if (
-        normalized.includes(
-          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
-        )
-      ) {
-        throw new Error(
-          'Windows release smoke failed: startup target challenge-advisor override still rendered the restored launcher surface in the main window.',
-        );
-      }
-
-      if (normalized.includes('surface-fallback bundle=opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: startup target challenge-advisor override rendered through the fallback surface path.',
-        );
-      }
-
-      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
-    },
-    verifyPersistedSession(sessionFile) {
-      assertPersistedSessionHasSurfaceId(
-        sessionFile,
-        'window.main',
-        'hbr.challenge-advisor',
-        'startup target challenge-advisor override did not persist the challenge-advisor surface into the main window session.',
-      );
-      assertPersistedSessionContains(
-        sessionFile,
-        'window.main',
-        'opapp.hbr.workspace',
-        'startup target challenge-advisor override did not persist the challenge-advisor bundle id into the main window session.',
-      );
-      assertPersistedSessionLacksSurfaceId(
-        sessionFile,
-        'window.main',
-        'companion.main',
-        'startup target challenge-advisor override left the restored launcher surface in the main window session.',
-      );
-    },
-  },
-  'legacy-startup-target-challenge-advisor': {
-    description:
-      'legacy startup target file migrates into native preferences before switching the main window into the child bundle during cold start',
-    preferences: defaultPreferences,
-    launchConfig: {},
-    successMarkers: [
-      'LaunchSurface surface=companion.main policy=main mode=',
-      'InstanceLoaded failed=false',
-      'NativeLogger[1] Running "OpappWindowsHost"',
-      'BundleManifestSource=manifest',
-      '[frontend-companion] startup-target-migration action=migrate bundle=opapp.hbr.workspace surface=hbr.challenge-advisor',
-      '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
-      'BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main',
-      'BundleSwitchReloadRequested window=window.main bundle=opapp.hbr.workspace',
-      '[frontend-companion] render bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
-      '[frontend-companion] mounted bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
-    ],
-    async prepareState() {
-      await writeFile(
-        sessionsPath,
-        buildPersistedSessionFile({
-          'window.main': {
-            windowId: 'window.main',
-            activeTabId: 'tab:companion.main:1',
-            tabs: [
-              {
-                tabId: 'tab:companion.main:1',
-                surfaceId: 'companion.main',
-                policy: 'main',
-              },
-            ],
-          },
-        }),
-        'utf8',
-      );
-      await writeFile(
-        companionStartupTargetPath,
-        JSON.stringify({
-          surfaceId: 'hbr.challenge-advisor',
-          bundleId: 'opapp.hbr.workspace',
-          policy: 'main',
-          presentation: 'current-window',
-        }),
-        'utf8',
-      );
-    },
-    async verifyLog(logContents) {
-      const normalized = normalizeLogContents(logContents);
-      if (normalized.includes('InitialOpenSurface surface=')) {
-        throw new Error(
-          'Windows release smoke failed: legacy startup target migration should not rely on an initial-open launch config.',
-        );
-      }
-
-      if (!normalized.includes('Bundle\\bundles\\opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: legacy startup target migration did not point the host at the staged child bundle root.',
-        );
-      }
-
-      if (
-        normalized.includes(
-          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
-        )
-      ) {
-        throw new Error(
-          'Windows release smoke failed: legacy startup target migration still rendered the restored launcher surface in the main window.',
-        );
-      }
-
-      if (normalized.includes('surface-fallback bundle=opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: legacy startup target migration rendered through the fallback surface path.',
-        );
-      }
-
-      if (await fileExists(companionStartupTargetPath)) {
-        throw new Error(
-          'Windows release smoke failed: legacy startup target file was not deleted after migration.',
-        );
-      }
-
-      const preferencesFile = await readFile(preferencesPath, 'utf8');
-      if (!preferencesFile.includes('[startup-target]')) {
-        throw new Error(
-          'Windows release smoke failed: legacy startup target migration did not persist a native startup-target section.',
-        );
-      }
-
-      if (!preferencesFile.includes('surface=hbr.challenge-advisor')) {
-        throw new Error(
-          'Windows release smoke failed: native startup-target preference is missing the migrated challenge-advisor surface id.',
-        );
-      }
-
-      if (!preferencesFile.includes('bundle=opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: native startup-target preference is missing the migrated child bundle id.',
-        );
-      }
-
-      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
-    },
-    verifyPersistedSession(sessionFile) {
-      assertPersistedSessionHasSurfaceId(
-        sessionFile,
-        'window.main',
-        'hbr.challenge-advisor',
-        'legacy startup target migration did not persist the challenge-advisor surface into the main window session.',
-      );
-      assertPersistedSessionContains(
-        sessionFile,
-        'window.main',
-        'opapp.hbr.workspace',
-        'legacy startup target migration did not persist the challenge-advisor bundle id into the main window session.',
-      );
-      assertPersistedSessionLacksSurfaceId(
-        sessionFile,
-        'window.main',
-        'companion.main',
-        'legacy startup target migration left the restored launcher surface in the main window session.',
-      );
-    },
-  },
   'settings-default-current-window': {
     description: 'saved settings preference keeps default settings entry in the current window',
     preferences: {
@@ -1254,118 +1071,6 @@ const smokeScenarios = {
       if (!preferencesFile.includes('main-mode=compact')) {
         throw new Error('Windows release smoke failed: saving preferences did not persist compact mode for the main window.');
       }
-    },
-  },
-  'challenge-advisor-current-window': {
-    description: 'main bundle auto-open switches the current window into the challenge-advisor child bundle',
-    preferences: defaultPreferences,
-    launchConfig: {
-      initialOpen: {
-        surface: 'hbr.challenge-advisor',
-        bundle: 'opapp.hbr.workspace',
-        policy: 'main',
-        presentation: 'current-window',
-      },
-    },
-    successMarkers: [
-      ...commonSuccessMarkers,
-      'InitialOpenSurface surface=hbr.challenge-advisor policy=main presentation=current-window',
-      '[frontend-companion] auto-open window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
-      'BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main',
-      'BundleSwitchReloadRequested window=window.main bundle=opapp.hbr.workspace',
-      '[frontend-companion] render bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
-      '[frontend-companion] mounted bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
-    ],
-    async verifyLog(logContents) {
-      const normalized = normalizeLogContents(logContents);
-      if (!normalized.includes('Bundle\\bundles\\opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: bundle switch did not point the host at the staged challenge-advisor bundle root.',
-        );
-      }
-
-      if (normalized.includes('surface-fallback bundle=opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: challenge-advisor child bundle rendered through the fallback surface path.',
-        );
-      }
-
-      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
-    },
-    verifyPersistedSession(sessionFile) {
-      assertPersistedSessionHasSurfaceId(
-        sessionFile,
-        'window.main',
-        'hbr.challenge-advisor',
-        'main window session is missing the challenge-advisor surface after bundle switching.',
-      );
-      assertPersistedSessionContains(
-        sessionFile,
-        'window.main',
-        'opapp.hbr.workspace',
-        'main window session is missing the challenge-advisor bundle id after bundle switching.',
-      );
-    },
-  },
-  'launcher-open-challenge-advisor': {
-    description: 'main bundle launcher opens the challenge-advisor child bundle through its own interaction path',
-    preferences: defaultPreferences,
-    launchConfig: {
-      mainProps: {
-        'dev-smoke-scenario': 'launcher-open-challenge-advisor',
-      },
-    },
-    successMarkers: [
-      ...commonSuccessMarkers,
-      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
-      '[frontend-bundle-launcher] dev-smoke-start window=window.main target=challenge-advisor',
-      '[frontend-bundle-launcher] dev-smoke-selected target=challenge-advisor bundle=opapp.hbr.workspace',
-      'BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main',
-      'BundleSwitchReloadRequested window=window.main bundle=opapp.hbr.workspace',
-      '[frontend-companion] render bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
-      '[frontend-companion] mounted bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
-    ],
-    async verifyLog(logContents) {
-      const normalized = normalizeLogContents(logContents);
-      if (normalized.includes('InitialOpenSurface surface=hbr.challenge-advisor')) {
-        throw new Error(
-          'Windows release smoke failed: launcher interaction scenario still relied on initial-open challenge-advisor launch config.',
-        );
-      }
-
-      if (normalized.includes('[frontend-companion] startup-target-auto-open')) {
-        throw new Error(
-          'Windows release smoke failed: launcher interaction scenario was hijacked by startup-target auto-open.',
-        );
-      }
-
-      if (!normalized.includes('Bundle\\bundles\\opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: launcher interaction bundle switch did not point the host at the staged challenge-advisor bundle root.',
-        );
-      }
-
-      if (normalized.includes('surface-fallback bundle=opapp.hbr.workspace')) {
-        throw new Error(
-          'Windows release smoke failed: launcher interaction rendered the challenge-advisor child bundle through the fallback surface path.',
-        );
-      }
-
-      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
-    },
-    verifyPersistedSession(sessionFile) {
-      assertPersistedSessionHasSurfaceId(
-        sessionFile,
-        'window.main',
-        'hbr.challenge-advisor',
-        'launcher interaction did not persist the challenge-advisor surface into the main window session.',
-      );
-      assertPersistedSessionContains(
-        sessionFile,
-        'window.main',
-        'opapp.hbr.workspace',
-        'launcher interaction did not persist the challenge-advisor bundle id into the main window session.',
-      );
     },
   },
   'view-shot-current-window': {
@@ -1617,6 +1322,15 @@ function normalizeCompanionMarker(marker) {
 
   return normalizedMarker;
 }
+
+const privateSmokeScenarios = await loadOptionalPrivateSmokeScenarios();
+const optionalPrivateScenarioCount = Object.keys(privateSmokeScenarios).length;
+const smokeScenarios = {
+  ...publicSmokeScenarios,
+  ...privateSmokeScenarios,
+};
+const supportedScenarioNames = Object.keys(smokeScenarios);
+const scenarioName = resolveScenarioNameOrThrow();
 
 for (const smokeScenario of Object.values(smokeScenarios)) {
   smokeScenario.successMarkers = smokeScenario.successMarkers.map(
@@ -2352,8 +2066,8 @@ async function main() {
   log(`cliPath=${cliPath}`);
   log(`scenario=${scenarioName}`);
   log(`scenarioDescription=${scenario.description}`);
-  log(`optionalHbrEntryPath=${optionalHbrEntryPath}`);
-  log(`optionalHbrEntryPresent=${optionalHbrEntryPresent}`);
+  log(`optionalPrivateScenarioModulePath=${optionalPrivateScenarioModulePath}`);
+  log(`optionalPrivateScenarioCount=${optionalPrivateScenarioCount}`);
   log(`launchMode=${launchMode}`);
   if (timeoutDefaultsPath) {
     log(`timeoutDefaultsPath=${timeoutDefaultsPath}`);
@@ -2382,13 +2096,6 @@ async function main() {
     runReleasePreflightOrThrow();
     return;
   }
-  if (!optionalHbrEntryPresent && optionalHbrScenarioNames.has(scenarioName)) {
-    log(
-      `Skipping optional HBR scenario '${scenarioName}' because ${optionalHbrEntryPath} is missing.`,
-    );
-    return;
-  }
-
   let runError = null;
   let scenarioState = null;
   let startupTargetSnapshot = missingOptionalFile;

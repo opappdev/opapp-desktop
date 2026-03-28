@@ -2,7 +2,7 @@ import {spawnSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 
@@ -19,22 +19,15 @@ const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
 const frontendRoot = path.join(workspaceRoot, 'opapp-frontend');
 const smokeScriptPath = path.join(repoRoot, 'tooling', 'scripts', 'windows-release-smoke.mjs');
-const optionalHbrEntryPath = path.join(
-  frontendRoot,
-  'apps',
-  'companion-app',
-  '.private-hbr',
-  'index.hbr.js',
+const optionalPrivateScenarioModulePath = path.join(
+  repoRoot,
+  'tooling',
+  'scripts',
+  '.private-companion',
+  'windows-private-scenarios.mjs',
 );
-const optionalHbrScenarioNames = new Set([
-  'startup-target-challenge-advisor',
-  'legacy-startup-target-challenge-advisor',
-  'launcher-open-challenge-advisor',
-  'challenge-advisor-current-window',
-]);
-const optionalHbrEntryPresent = existsSync(optionalHbrEntryPath);
 
-const defaultScenarios = [
+const publicScenarios = [
   {
     name: 'main-window-bootstrap-compact',
     description: 'packaged startup applies saved main window mode',
@@ -65,27 +58,6 @@ const defaultScenarios = [
     name: 'startup-target-settings',
     description: 'saved settings startup target wins over a restored main-window launcher session',
     args: ['--scenario=startup-target-settings', '--skip-prepare'],
-  },
-  {
-    name: 'startup-target-challenge-advisor',
-    description: 'saved challenge-advisor startup target wins over a restored main-window launcher session',
-    args: ['--scenario=startup-target-challenge-advisor', '--skip-prepare'],
-  },
-  {
-    name: 'legacy-startup-target-challenge-advisor',
-    description:
-      'legacy startup-target file migrates into native preferences before switching the main window into the challenge-advisor child bundle',
-    args: ['--scenario=legacy-startup-target-challenge-advisor', '--skip-prepare'],
-  },
-  {
-    name: 'launcher-open-challenge-advisor',
-    description: 'main bundle launcher opens the challenge-advisor child bundle through its interaction path',
-    args: ['--scenario=launcher-open-challenge-advisor', '--skip-prepare'],
-  },
-  {
-    name: 'challenge-advisor-current-window',
-    description: 'main bundle auto-open switches the current window into the challenge-advisor child bundle',
-    args: ['--scenario=challenge-advisor-current-window', '--skip-prepare'],
   },
   {
     name: 'settings-default-new-window',
@@ -124,6 +96,53 @@ const secondaryOnlyScenario = {
   description: 'startup detached settings window surface-model check',
   args: ['--scenario=secondary-window'],
 };
+
+function normalizePrivateVerifyScenario(scenario, sourceLabel) {
+  if (
+    !scenario ||
+    typeof scenario.name !== 'string' ||
+    scenario.name.length === 0 ||
+    typeof scenario.description !== 'string' ||
+    scenario.description.length === 0 ||
+    !Array.isArray(scenario.args) ||
+    !scenario.args.every(argument => typeof argument === 'string' && argument.length > 0)
+  ) {
+    throw new Error(
+      `Invalid private verify scenario at ${sourceLabel}. Expected non-empty name, description, and args[].`,
+    );
+  }
+
+  return {
+    name: scenario.name,
+    description: scenario.description,
+    args: scenario.args,
+  };
+}
+
+async function loadOptionalPrivateVerifyScenarios() {
+  if (!existsSync(optionalPrivateScenarioModulePath)) {
+    return [];
+  }
+
+  const privateScenarioModule = await import(
+    pathToFileURL(optionalPrivateScenarioModulePath).href
+  );
+  const privateVerifyScenarios = Array.isArray(
+    privateScenarioModule.privateVerifyScenarios,
+  )
+    ? privateScenarioModule.privateVerifyScenarios
+    : [];
+
+  return privateVerifyScenarios.map((scenario, index) =>
+    normalizePrivateVerifyScenario(
+      scenario,
+      `${optionalPrivateScenarioModulePath}#${index}`,
+    ),
+  );
+}
+
+const privateVerifyScenarios = await loadOptionalPrivateVerifyScenarios();
+const defaultScenarios = [...publicScenarios, ...privateVerifyScenarios];
 const scenarioByName = new Map(defaultScenarios.map(scenario => [scenario.name, scenario]));
 const launchMode = resolveLaunchModeOrThrow();
 const timeoutDefaults = loadTimeoutDefaultsForLaunch({
@@ -193,26 +212,6 @@ function parseScenarioFilterNames(rawValue) {
 
 function log(message) {
   console.log(`[verify] ${message}`);
-}
-
-function filterOptionalHbrScenarios(scenarios) {
-  if (optionalHbrEntryPresent) {
-    return scenarios;
-  }
-
-  const skippedScenarios = scenarios.filter(scenario =>
-    optionalHbrScenarioNames.has(scenario.name),
-  );
-  if (skippedScenarios.length === 0) {
-    return scenarios;
-  }
-
-  log(
-    `skipping optional HBR scenarios because ${optionalHbrEntryPath} is missing: ${skippedScenarios
-      .map(scenario => scenario.name)
-      .join(', ')}`,
-  );
-  return scenarios.filter(scenario => !optionalHbrScenarioNames.has(scenario.name));
 }
 
 function runOrThrow(command, args, options = {}) {
@@ -362,15 +361,15 @@ function verifyPackagedScenarios(scenarios) {
 }
 
 function main() {
-  const scenarios = filterOptionalHbrScenarios(resolveScenariosOrThrow());
+  const scenarios = resolveScenariosOrThrow();
 
   log(`repoRoot=${repoRoot}`);
   log(`frontendRoot=${frontendRoot}`);
   log(`includeSecondaryWindowOnly=${includeSecondaryWindowOnly}`);
   log(`scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
   log(`scenarioCount=${scenarios.length}`);
-  log(`optionalHbrEntryPath=${optionalHbrEntryPath}`);
-  log(`optionalHbrEntryPresent=${optionalHbrEntryPresent}`);
+  log(`optionalPrivateScenarioModulePath=${optionalPrivateScenarioModulePath}`);
+  log(`optionalPrivateScenarioCount=${privateVerifyScenarios.length}`);
   log(`validateOnly=${validateOnly}`);
   log(`preflightOnly=${preflightOnly}`);
   log(`launchMode=${launchMode}`);
@@ -388,11 +387,6 @@ function main() {
 
   if (validateOnly && preflightOnly) {
     throw new Error('`--validate-only` conflicts with `--preflight-only`; choose one execution mode.');
-  }
-
-  if (scenarios.length === 0) {
-    log('No runnable scenarios remain after optional HBR filtering.');
-    return;
   }
 
   if (validateOnly) {

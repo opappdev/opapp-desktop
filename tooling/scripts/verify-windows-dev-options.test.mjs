@@ -37,7 +37,7 @@ test('verify-windows-dev validate-only accepts explicit view-shot scenario filte
 
 test('verify-windows-dev validate-only accepts comma-separated scenario filters', () => {
   const result = runVerifyDevValidateOnly([
-    '--scenario=challenge-advisor-basics,view-shot-current-window',
+    '--scenario=view-shot-current-window,window-capture-current-window',
   ]);
 
   assert.equal(result.status, 0);

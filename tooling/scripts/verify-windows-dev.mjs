@@ -48,49 +48,8 @@ const readinessTimeoutMs = parsePositiveIntegerArg(
   defaultReadinessTimeoutMs,
 );
 const smokeTimeoutMs = parsePositiveIntegerArg(process.argv, '--smoke-ms', defaultSmokeTimeoutMs);
-const optionalHbrEntryPath = path.join(
-  frontendRoot,
-  'apps',
-  'companion-app',
-  '.private-hbr',
-  'index.hbr.js',
-);
-const optionalHbrScenarioNames = new Set(['challenge-advisor-basics']);
-const optionalHbrEntryPresent = existsSync(optionalHbrEntryPath);
 
 const defaultScenarios = [
-  {
-    name: 'challenge-advisor-basics',
-    description:
-      'Metro-backed launcher auto-opens the challenge-advisor surface and runs the dev smoke flow',
-    smokeMarkers: [
-      'InitialOpenSurface surface=hbr.challenge-advisor policy=main presentation=current-window',
-      '[frontend-companion] auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
-      '[frontend-challenge-advisor] dev-smoke-start',
-      '[frontend-challenge-advisor] dev-smoke-track-switched track=score-challenge',
-      '[frontend-challenge-advisor] dev-smoke-track-switched track=stellar-wars',
-      '[frontend-challenge-advisor] dev-smoke-scrolled-end',
-      '[frontend-challenge-advisor] dev-smoke-toggled',
-      '[frontend-challenge-advisor] dev-smoke-settings-opened',
-      '[frontend-challenge-advisor] dev-smoke-settings-focused',
-      '[frontend-challenge-advisor] dev-smoke-settings-closed',
-      '[frontend-challenge-advisor] dev-smoke-scrolled-top',
-      '[frontend-challenge-advisor] dev-smoke-complete',
-    ],
-    launchConfig: {
-      initialOpen: {
-        surface: 'hbr.challenge-advisor',
-        bundle: 'opapp.hbr.workspace',
-        policy: 'main',
-        presentation: 'current-window',
-      },
-      initialOpenProps: {
-        'dev-smoke-scenario': 'challenge-advisor-basics',
-      },
-    },
-    successSummary:
-      'Metro-backed Windows host completed challenge-advisor dev smoke.',
-  },
   {
     name: 'view-shot-current-window',
     description:
@@ -321,27 +280,6 @@ function resolveScenariosOrThrow() {
   return selectedScenarios;
 }
 
-function filterOptionalHbrScenarios(scenarios) {
-  if (optionalHbrEntryPresent) {
-    return scenarios;
-  }
-
-  const skippedScenarios = scenarios.filter(scenario =>
-    optionalHbrScenarioNames.has(scenario.name),
-  );
-  if (skippedScenarios.length === 0) {
-    return scenarios;
-  }
-
-  log(
-    'verify-dev',
-    `skipping optional HBR scenarios because ${optionalHbrEntryPath} is missing: ${skippedScenarios
-      .map(scenario => scenario.name)
-      .join(', ')}`,
-  );
-  return scenarios.filter(scenario => !optionalHbrScenarioNames.has(scenario.name));
-}
-
 function appendConfigSection(content, name, values) {
   if (!values || Object.keys(values).length === 0) {
     return content;
@@ -522,7 +460,7 @@ async function runDevScenario(scenario) {
 }
 
 async function main() {
-  const scenarios = filterOptionalHbrScenarios(resolveScenariosOrThrow());
+  const scenarios = resolveScenariosOrThrow();
 
   ensureWorkspaceTemp();
   clearDevSessions();
@@ -534,19 +472,12 @@ async function main() {
   log('verify-dev', `hostRoot=${hostRoot}`);
   log('verify-dev', `scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
   log('verify-dev', `scenarioCount=${scenarios.length}`);
-  log('verify-dev', `optionalHbrEntryPath=${optionalHbrEntryPath}`);
-  log('verify-dev', `optionalHbrEntryPresent=${optionalHbrEntryPresent}`);
   log('verify-dev', `validateOnly=${validateOnly}`);
   log('verify-dev', `readinessTimeoutMs=${readinessTimeoutMs}`);
   log('verify-dev', `smokeTimeoutMs=${smokeTimeoutMs}`);
 
   if (validateOnly) {
     log('verify-dev', 'validate-only enabled; skipping Metro and host execution.');
-    return;
-  }
-
-  if (scenarios.length === 0) {
-    log('verify-dev', 'No runnable scenarios remain after optional HBR filtering.');
     return;
   }
 
