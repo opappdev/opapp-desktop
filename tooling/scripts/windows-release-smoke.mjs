@@ -550,6 +550,12 @@ const smokeScenarios = {
   'startup-target-main-launcher': {
     description: 'saved launcher startup target overrides a restored main-window settings session',
     preferences: defaultPreferences,
+    startupTarget: {
+      surfaceId: 'companion.main',
+      bundleId: 'opapp.companion.main',
+      policy: 'main',
+      presentation: 'current-window',
+    },
     launchConfig: {},
     successMarkers: [
       ...commonSuccessMarkers,
@@ -557,18 +563,6 @@ const smokeScenarios = {
       '[frontend-companion] session window=window.main tabs=1 active=',
     ],
     async prepareState() {
-      await mkdir(path.dirname(companionStartupTargetPath), {recursive: true});
-      await writeFile(
-        companionStartupTargetPath,
-        JSON.stringify({
-          surfaceId: 'companion.main',
-          bundleId: 'opapp.companion.main',
-          policy: 'main',
-          presentation: 'current-window',
-        }),
-        'utf8',
-      );
-
       await writeFile(
         sessionsPath,
         buildPersistedSessionFile({
@@ -631,6 +625,12 @@ const smokeScenarios = {
   'startup-target-settings': {
     description: 'saved settings startup target overrides a restored main-window launcher session',
     preferences: defaultPreferences,
+    startupTarget: {
+      surfaceId: 'companion.settings',
+      bundleId: 'opapp.companion.main',
+      policy: 'settings',
+      presentation: 'current-window',
+    },
     launchConfig: {},
     successMarkers: [
       'LaunchSurface surface=companion.main policy=main mode=',
@@ -643,18 +643,6 @@ const smokeScenarios = {
       '[frontend-companion] session bundle=opapp.companion.main window=window.main tabs=1 active=',
     ],
     async prepareState() {
-      await mkdir(path.dirname(companionStartupTargetPath), {recursive: true});
-      await writeFile(
-        companionStartupTargetPath,
-        JSON.stringify({
-          surfaceId: 'companion.settings',
-          bundleId: 'opapp.companion.main',
-          policy: 'settings',
-          presentation: 'current-window',
-        }),
-        'utf8',
-      );
-
       await writeFile(
         sessionsPath,
         buildPersistedSessionFile({
@@ -717,6 +705,12 @@ const smokeScenarios = {
   'startup-target-challenge-advisor': {
     description: 'saved challenge-advisor startup target switches the main window into the child bundle during cold start',
     preferences: defaultPreferences,
+    startupTarget: {
+      surfaceId: 'companion.challenge-advisor',
+      bundleId: 'opapp.companion.challenge-advisor',
+      policy: 'main',
+      presentation: 'current-window',
+    },
     launchConfig: {},
     successMarkers: [
       'LaunchSurface surface=companion.main policy=main mode=',
@@ -730,18 +724,6 @@ const smokeScenarios = {
       '[frontend-companion] mounted bundle=opapp.companion.challenge-advisor window=window.main surface=companion.challenge-advisor policy=main',
     ],
     async prepareState() {
-      await mkdir(path.dirname(companionStartupTargetPath), {recursive: true});
-      await writeFile(
-        companionStartupTargetPath,
-        JSON.stringify({
-          surfaceId: 'companion.challenge-advisor',
-          bundleId: 'opapp.companion.challenge-advisor',
-          policy: 'main',
-          presentation: 'current-window',
-        }),
-        'utf8',
-      );
-
       await writeFile(
         sessionsPath,
         buildPersistedSessionFile({
@@ -1977,7 +1959,13 @@ function buildLaunchConfig() {
 }
 
 function buildPreferencesFile() {
-  return `[window]\nmain-mode=${scenario.preferences.mainWindowMode}\nsettings-mode=${scenario.preferences.settingsWindowMode}\n\n[surface]\nsettings-presentation=${scenario.preferences.settingsPresentation}\n`;
+  let content = `[window]\nmain-mode=${scenario.preferences.mainWindowMode}\nsettings-mode=${scenario.preferences.settingsWindowMode}\n\n[surface]\nsettings-presentation=${scenario.preferences.settingsPresentation}\n`;
+
+  if (scenario.startupTarget) {
+    content += `\n[startup-target]\nsurface=${scenario.startupTarget.surfaceId}\nbundle=${scenario.startupTarget.bundleId}\npolicy=${scenario.startupTarget.policy}\npresentation=${scenario.startupTarget.presentation}\n`;
+  }
+
+  return content;
 }
 
 function getInstalledPackageFamilyName() {

@@ -131,6 +131,17 @@ std::wstring NormalizeSettingsPresentation(std::wstring presentation) {
   return presentation;
 }
 
+std::wstring NormalizeStartupTargetPresentation(std::wstring presentation) {
+  if (
+      presentation != L"current-window" &&
+      presentation != L"tab" &&
+      presentation != L"new-window") {
+    return L"current-window";
+  }
+
+  return presentation;
+}
+
 std::wstring GetWindowTitle(LaunchSurfaceConfig const &launchSurface) {
   if (launchSurface.Policy == WindowPolicyId::Settings) {
     return L"Opapp Settings";

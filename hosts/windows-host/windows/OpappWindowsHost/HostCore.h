@@ -33,6 +33,13 @@ struct WindowPreferences {
   std::wstring SettingsPresentation{L"current-window"};
 };
 
+struct StartupTargetPreference {
+  std::wstring SurfaceId;
+  std::wstring BundleId;
+  WindowPolicyId Policy{WindowPolicyId::Main};
+  std::wstring Presentation{L"current-window"};
+};
+
 struct LaunchSurfaceConfig {
   std::wstring WindowId;
   std::wstring SurfaceId;
@@ -87,6 +94,7 @@ winrt::hstring WindowSizeModeName(WindowSizeMode mode);
 std::optional<WindowSizeMode> ParseWindowSizeMode(std::string const &mode);
 std::optional<ParsedWindowPolicy> ParseWindowPolicy(std::string const &policy);
 std::wstring NormalizeSettingsPresentation(std::wstring presentation);
+std::wstring NormalizeStartupTargetPresentation(std::wstring presentation);
 WindowSizeMode ResolveWindowSizeMode(WindowPolicyId policy, WindowPreferences const &preferences) noexcept;
 std::wstring GetWindowTitle(LaunchSurfaceConfig const &launchSurface);
 std::string GetHostLogPath() noexcept;
@@ -105,6 +113,10 @@ bool InitializeWindowPolicyRegistry(std::wstring const &appDirectory, bool bundl
 WindowPreferences LoadWindowPreferences() noexcept;
 bool SaveWindowPreferences(WindowPreferences const &preferences) noexcept;
 std::string SerializeWindowPreferences(WindowPreferences const &preferences);
+std::optional<StartupTargetPreference> LoadStartupTargetPreference() noexcept;
+bool SaveStartupTargetPreference(StartupTargetPreference const &preference) noexcept;
+std::string SerializeStartupTargetPreference(
+    std::optional<StartupTargetPreference> const &preference);
 std::optional<std::wstring> ReadSessionState(std::wstring const &windowId) noexcept;
 bool WriteSessionState(std::wstring const &windowId, std::wstring const &value) noexcept;
 bool DeleteSessionState(std::wstring const &windowId) noexcept;

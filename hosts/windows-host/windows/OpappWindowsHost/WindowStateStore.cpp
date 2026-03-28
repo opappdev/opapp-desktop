@@ -216,4 +216,60 @@ std::string SerializeWindowPreferences(WindowPreferences const &preferences) {
       "\"}";
 }
 
+std::optional<StartupTargetPreference> LoadStartupTargetPreference() noexcept {
+  auto surfaceId = ReadPreferencesValue(L"startup-target", L"surface");
+  auto bundleId = ReadPreferencesValue(L"startup-target", L"bundle");
+  auto policyName = ReadPreferencesValue(L"startup-target", L"policy");
+  auto presentation = ReadPreferencesValue(L"startup-target", L"presentation");
+
+  if (!surfaceId || !bundleId || !policyName || !presentation) {
+    return std::nullopt;
+  }
+
+  if (surfaceId->empty() || bundleId->empty()) {
+    return std::nullopt;
+  }
+
+  auto parsedPolicy = ParseWindowPolicy(ToUtf8(*policyName));
+  if (!parsedPolicy) {
+    return std::nullopt;
+  }
+
+  return StartupTargetPreference{
+      *surfaceId,
+      *bundleId,
+      parsedPolicy->Policy,
+      NormalizeStartupTargetPresentation(*presentation),
+  };
+}
+
+bool SaveStartupTargetPreference(StartupTargetPreference const &preference) noexcept {
+  auto normalizedPresentation =
+      NormalizeStartupTargetPresentation(preference.Presentation);
+
+  return WritePreferencesValue(L"startup-target", L"surface", preference.SurfaceId) &&
+      WritePreferencesValue(L"startup-target", L"bundle", preference.BundleId) &&
+      WritePreferencesValue(
+          L"startup-target",
+          L"policy",
+          WindowPolicyName(preference.Policy).c_str()) &&
+      WritePreferencesValue(
+          L"startup-target",
+          L"presentation",
+          normalizedPresentation);
+}
+
+std::string SerializeStartupTargetPreference(
+    std::optional<StartupTargetPreference> const &preference) {
+  if (!preference) {
+    return std::string{};
+  }
+
+  return std::string("{\"surfaceId\":\"") + ToUtf8(preference->SurfaceId) +
+      "\",\"bundleId\":\"" + ToUtf8(preference->BundleId) +
+      "\",\"policy\":\"" + ToUtf8(preference->Policy) +
+      "\",\"presentation\":\"" +
+      ToUtf8(NormalizeStartupTargetPresentation(preference->Presentation)) + "\"}";
+}
+
 } // namespace OpappWindowsHost

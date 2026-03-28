@@ -131,6 +131,56 @@ struct OpappWindowManagerModule {
     result.Resolve(OpappWindowsHost::SerializeWindowPreferences(preferences));
   }
 
+  REACT_METHOD(GetStartupTargetPreference, L"getStartupTargetPreference")
+  void GetStartupTargetPreference(
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    result.Resolve(
+        OpappWindowsHost::SerializeStartupTargetPreference(
+            OpappWindowsHost::LoadStartupTargetPreference()));
+  }
+
+  REACT_METHOD(SetStartupTargetPreference, L"setStartupTargetPreference")
+  void SetStartupTargetPreference(
+      std::string surfaceId,
+      std::string bundleId,
+      std::string windowPolicy,
+      std::string presentation,
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    if (surfaceId.empty()) {
+      result.Reject(L"Startup target surface id is required.");
+      return;
+    }
+
+    if (bundleId.empty()) {
+      result.Reject(L"Startup target bundle id is required.");
+      return;
+    }
+
+    auto parsedPolicy = OpappWindowsHost::ParseWindowPolicy(windowPolicy);
+    if (!parsedPolicy) {
+      result.Reject(L"Unsupported startup target window policy.");
+      return;
+    }
+
+    auto normalizedPresentation = OpappWindowsHost::NormalizeStartupTargetPresentation(
+        std::wstring(winrt::to_hstring(presentation)));
+
+    OpappWindowsHost::StartupTargetPreference preference{
+        std::wstring(winrt::to_hstring(surfaceId)),
+        std::wstring(winrt::to_hstring(bundleId)),
+        parsedPolicy->Policy,
+        normalizedPresentation,
+    };
+
+    if (!OpappWindowsHost::SaveStartupTargetPreference(preference)) {
+      result.Reject(L"Failed to save startup target preference.");
+      return;
+    }
+
+    result.Resolve(
+        OpappWindowsHost::SerializeStartupTargetPreference(preference));
+  }
+
   REACT_METHOD(GetWindowSessionState, L"getWindowSessionState")
   void GetWindowSessionState(
       std::string windowId,
