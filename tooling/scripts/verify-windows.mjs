@@ -5,6 +5,9 @@ import {fileURLToPath} from 'node:url';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 
 const includeSecondaryWindowOnly = process.argv.includes('--include-secondary-window');
+const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
+const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
+const validateOnly = process.argv.includes('--validate-only');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
 const launchMode = portableFlag ? 'portable' : (launchModeArg === 'portable' ? 'portable' : 'packaged');
@@ -63,6 +66,18 @@ const secondaryOnlyScenario = {
   description: 'startup detached settings window surface-model check',
   args: ['--scenario=secondary-window'],
 };
+const scenarioByName = new Map(defaultScenarios.map(scenario => [scenario.name, scenario]));
+
+function parseScenarioFilterNames(rawValue) {
+  if (!rawValue) {
+    return [];
+  }
+
+  return rawValue
+    .split(',')
+    .map(name => name.trim())
+    .filter(Boolean);
+}
 
 function log(message) {
   console.log(`[verify] ${message}`);
@@ -116,25 +131,77 @@ function runWindowsSmoke(scenario) {
   });
 }
 
-function verifyPackagedScenarios() {
-  const scenarios = includeSecondaryWindowOnly
+function resolveScenariosOrThrow() {
+  const scenarioFilterNames = parseScenarioFilterNames(scenarioFilterArg);
+  const hasScenarioFlag = Boolean(scenarioFilterToken);
+  const hasScenarioFilter = scenarioFilterNames.length > 0;
+
+  if (
+    includeSecondaryWindowOnly &&
+    hasScenarioFilter &&
+    scenarioFilterNames.some(name => name !== secondaryOnlyScenario.name)
+  ) {
+    throw new Error(
+      `--include-secondary-window conflicts with --scenario=${scenarioFilterArg}. ` +
+      `Use --scenario=${secondaryOnlyScenario.name} when selecting a single scenario.`,
+    );
+  }
+
+  if (hasScenarioFlag && scenarioFilterNames.length === 0) {
+    throw new Error('`--scenario=` must include at least one scenario name.');
+  }
+
+  if (hasScenarioFilter) {
+    const knownScenarioNames = [...scenarioByName.keys()].join(', ');
+    const selectedScenarios = [];
+    const seen = new Set();
+    for (const scenarioName of scenarioFilterNames) {
+      const selectedScenario = scenarioByName.get(scenarioName);
+      if (!selectedScenario) {
+        throw new Error(
+          `Unknown --scenario=${scenarioName}. Supported scenarios: ${knownScenarioNames}`,
+        );
+      }
+      if (seen.has(scenarioName)) {
+        continue;
+      }
+      seen.add(scenarioName);
+      selectedScenarios.push(selectedScenario);
+    }
+
+    return selectedScenarios;
+  }
+
+  return includeSecondaryWindowOnly
     ? [secondaryOnlyScenario]
     : defaultScenarios;
+}
 
+function verifyPackagedScenarios(scenarios) {
   for (const scenario of scenarios) {
     runWindowsSmoke(scenario);
   }
 }
 
 function main() {
+  const scenarios = resolveScenariosOrThrow();
+
   log(`repoRoot=${repoRoot}`);
   log(`frontendRoot=${frontendRoot}`);
   log(`includeSecondaryWindowOnly=${includeSecondaryWindowOnly}`);
+  log(`scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
+  log(`scenarioCount=${scenarios.length}`);
+  log(`validateOnly=${validateOnly}`);
   log(`launchMode=${launchMode}`);
   log(`readinessTimeoutMs=${readinessTimeoutMs}`);
 
+  if (validateOnly) {
+    log('validate-only enabled; skipping frontend typecheck and Windows smoke execution.');
+    return;
+  }
+
   typecheckFrontend();
-  verifyPackagedScenarios();
+  verifyPackagedScenarios(scenarios);
 }
 
 main();

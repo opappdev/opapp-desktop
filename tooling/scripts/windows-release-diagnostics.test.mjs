@@ -18,6 +18,12 @@ test('classifyRunWindowsFailure detects cmd spawn EPERM failures', () => {
   assert.equal(classification.code, 'cmd-spawn-eperm');
 });
 
+test('classifyRunWindowsFailure detects cmd spawn EPERM failures without spawnSync marker', () => {
+  const output = 'Command failed with error Unknown: spawn C:\\WINDOWS\\system32\\cmd.exe EPERM';
+  const classification = classifyRunWindowsFailure(output);
+  assert.equal(classification.code, 'cmd-spawn-eperm');
+});
+
 test('classifyRunWindowsFailure detects missing vswhere failures', () => {
   const output = 'Unable to find vswhere at C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
   const classification = classifyRunWindowsFailure(output);

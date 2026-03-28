@@ -377,7 +377,7 @@ const FAILURE_CLASSIFIERS = [
   {
     code: 'cmd-spawn-eperm',
     summary: 'nested cmd spawn rejected (EPERM)',
-    matcher: /spawnSync\s+[^\r\n]*cmd\.exe\s+EPERM/i,
+    matcher: /spawn(?:Sync)?\s+[^\r\n]*cmd\.exe\s+EPERM/i,
   },
   {
     code: 'process-spawn-eperm',
