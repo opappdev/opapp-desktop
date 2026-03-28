@@ -2190,6 +2190,25 @@ async function verifyOtaSideEffects(logContents) {
       `Windows release smoke failed: ota last-run remoteBase was '${otaLastRun.remoteBase ?? 'unknown'}', expected '${otaRemoteArg}'.`,
     );
   }
+  if (typeof otaLastRun.deviceId !== 'string' || !otaLastRun.deviceId) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing a persisted deviceId.',
+    );
+  }
+  if (typeof otaLastRun.inRollout !== 'boolean') {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing boolean inRollout.',
+    );
+  }
+  if (
+    otaLastRun.rolloutPercent !== null &&
+    otaLastRun.rolloutPercent !== undefined &&
+    typeof otaLastRun.rolloutPercent !== 'number'
+  ) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run rolloutPercent must be null/number.',
+    );
+  }
 
   const normalizedLog = normalizeLogContents(logContents);
   if (!normalizedLog.includes('OTA.Native.DeviceId value=')) {
