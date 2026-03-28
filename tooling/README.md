@@ -30,6 +30,8 @@ Windows smoke timeout knobs:
 - `--smoke-ms`: legacy/global timeout fallback for release smoke phases.
 - `--startup-ms`: startup-marker wait timeout in `windows-release-smoke.mjs`.
 - `--scenario-ms`: scenario success-marker wait timeout after startup markers pass.
+- `windows-release-smoke.mjs` now prints per-phase timing utilization and low-headroom hints so real-machine runs can tune `--startup-ms` / `--scenario-ms` with concrete elapsed values.
+- `verify-windows.mjs` now logs each scenario duration and an aggregated `scenario timing summary totalMs=...` line after full runs.
 
 Portable fallback override knobs:
 

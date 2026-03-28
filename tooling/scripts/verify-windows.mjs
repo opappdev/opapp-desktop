@@ -168,10 +168,14 @@ function runWindowsSmoke(scenario) {
     `--startup-ms=${startupTimeoutMs}`,
     `--scenario-ms=${scenarioTimeoutMs}`,
   ];
+  const startMs = Date.now();
   runOrThrow(process.execPath, smokeArgs, {
     cwd: repoRoot,
     env: process.env,
   });
+  const durationMs = Date.now() - startMs;
+  log(`scenario '${scenario.name}' completed in ${durationMs}ms`);
+  return durationMs;
 }
 
 function runWindowsPreflight(scenarios) {
@@ -246,9 +250,14 @@ function resolveScenariosOrThrow() {
 }
 
 function verifyPackagedScenarios(scenarios) {
+  const scenarioTimings = [];
+
   for (const scenario of scenarios) {
-    runWindowsSmoke(scenario);
+    const durationMs = runWindowsSmoke(scenario);
+    scenarioTimings.push({name: scenario.name, durationMs});
   }
+
+  return scenarioTimings;
 }
 
 function main() {
@@ -283,7 +292,9 @@ function main() {
   }
 
   typecheckFrontend();
-  verifyPackagedScenarios(scenarios);
+  const scenarioTimings = verifyPackagedScenarios(scenarios);
+  const totalDurationMs = scenarioTimings.reduce((sum, item) => sum + item.durationMs, 0);
+  log(`scenario timing summary totalMs=${totalDurationMs} scenarioCount=${scenarioTimings.length}`);
 }
 
 main();

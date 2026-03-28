@@ -17,6 +17,11 @@ import {
   formatReleaseProbeForLogs,
   refineReleaseFailureClassification,
 } from './windows-release-diagnostics.mjs';
+import {
+  buildTimingPhaseResult,
+  formatMarkerTimeoutMessage,
+  formatMarkerTimingSummary,
+} from './windows-smoke-timing.mjs';
 
 const scenarioArg = process.argv
   .find(argument => argument.startsWith('--scenario='))
@@ -1311,7 +1316,20 @@ function launchPortableApp() {
   );
 }
 
-async function waitForMarkers(markers, {timeoutMs, phaseLabel}) {
+function logTimingPhaseResult({phaseLabel, elapsedMs, budgetMs, timeoutFlag}) {
+  const {message, hint} = buildTimingPhaseResult({
+    phaseLabel,
+    elapsedMs,
+    budgetMs,
+    timeoutFlag,
+  });
+  log(message);
+  if (hint) {
+    log(hint);
+  }
+}
+
+async function waitForMarkers(markers, {timeoutMs, phaseLabel, timeoutFlag}) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -1344,9 +1362,12 @@ async function waitForMarkers(markers, {timeoutMs, phaseLabel}) {
     console.log(tail);
   }
 
-  throw new Error(
-    `Windows release smoke timed out waiting for ${phaseLabel} in scenario '${scenarioName}' within ${timeoutMs}ms.`,
-  );
+  throw new Error(formatMarkerTimeoutMessage({
+    phaseLabel,
+    scenarioName,
+    timeoutFlag,
+    timeoutMs,
+  }));
 }
 
 async function verifyPersistedSession() {
@@ -1431,14 +1452,44 @@ async function main() {
       launchInstalledApp();
     }
 
+    const markersTimingStartMs = Date.now();
+    const startupPhaseStartMs = Date.now();
     await waitForMarkers(startupMarkers, {
       timeoutMs: startupTimeoutMs,
       phaseLabel: 'startup markers',
+      timeoutFlag: '--startup-ms',
     });
+    const startupPhaseDurationMs = Date.now() - startupPhaseStartMs;
+    logTimingPhaseResult({
+      phaseLabel: 'startup markers',
+      elapsedMs: startupPhaseDurationMs,
+      budgetMs: startupTimeoutMs,
+      timeoutFlag: '--startup-ms',
+    });
+
+    const scenarioPhaseStartMs = Date.now();
     const logContents = await waitForMarkers(successMarkers, {
       timeoutMs: scenarioTimeoutMs,
       phaseLabel: 'scenario success markers',
+      timeoutFlag: '--scenario-ms',
     });
+    const scenarioPhaseDurationMs = Date.now() - scenarioPhaseStartMs;
+    logTimingPhaseResult({
+      phaseLabel: 'scenario success markers',
+      elapsedMs: scenarioPhaseDurationMs,
+      budgetMs: scenarioTimeoutMs,
+      timeoutFlag: '--scenario-ms',
+    });
+
+    const markerTotalDurationMs = Date.now() - markersTimingStartMs;
+    log(formatMarkerTimingSummary({
+      scenarioName,
+      launchMode,
+      startupPhaseDurationMs,
+      scenarioPhaseDurationMs,
+      markerTotalDurationMs,
+    }));
+
     await assertBundledPolicyRegistry(logContents);
     await scenario.verifyLog?.(logContents);
     const tail = logContents.split(/\r?\n/).slice(-120).join('\n');
