@@ -62,6 +62,9 @@
     <ClCompile Include="FilesystemModule.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ViewShotModule.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="AutolinkedNativeModules.g.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
