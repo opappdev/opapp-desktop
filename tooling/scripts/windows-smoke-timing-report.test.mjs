@@ -3,7 +3,9 @@ import test from 'node:test';
 import {
   buildSerializedReport,
   buildDurationRecommendation,
+  buildSuggestedTimeoutDefaults,
   collectVerifyTimingSummaries,
+  formatSuggestedDefaultsTextReport,
   formatTimingTextReport,
   generateTimingReport,
   resolveInputPathsOrThrow,
@@ -43,8 +45,15 @@ test('generateTimingReport computes packaged recommendations from summary logs',
   assert.equal(report.overallRecommendation.startup.recommendedBudgetMs, 14_000);
   assert.equal(report.overallRecommendation.scenario.recommendedBudgetMs, 18_000);
   assert.equal(report.scenarioRecommendations.length, 2);
+  assert.equal(report.suggestedTimeoutDefaults.length, 1);
+  assert.equal(report.suggestedTimeoutDefaults[0].launchMode, 'packaged');
+  assert.equal(report.suggestedTimeoutDefaults[0].readinessMs, 18_000);
+  assert.equal(report.suggestedTimeoutDefaults[0].smokeMs, 18_000);
+  assert.equal(report.suggestedTimeoutDefaults[0].startupMs, 14_000);
+  assert.equal(report.suggestedTimeoutDefaults[0].scenarioMs, 18_000);
   assert.ok(report.verifyTotalRecommendation);
   assert.equal(report.verifyTotalRecommendation.recommendedBudgetMs, 16_111);
+  assert.equal(report.suggestedTimeoutDefaults[0].verifyTotalMs, 16_111);
 });
 
 test('formatTimingTextReport renders a readable timeout recommendation summary', () => {
@@ -140,6 +149,37 @@ test('generateTimingReport includes per-launch verify recommendations for mixed 
   assert.match(output, /launch=portable/);
 });
 
+test('generateTimingReport includes per-launch marker recommendations when launch=all', () => {
+  const report = generateTimingReport({
+    headroomMs: 3_000,
+    launchMode: 'all',
+    logContents: sampleLog,
+    percentileValue: 95,
+  });
+
+  assert.equal(report.markerLaunchModeRecommendations.length, 2);
+  assert.deepEqual(
+    report.markerLaunchModeRecommendations.map(item => item.launchMode),
+    ['packaged', 'portable'],
+  );
+  assert.equal(
+    report.markerLaunchModeRecommendations[0].recommendation.startup.recommendedBudgetMs,
+    12_000,
+  );
+  assert.equal(
+    report.markerLaunchModeRecommendations[1].recommendation.startup.recommendedBudgetMs,
+    13_000,
+  );
+
+  const output = formatTimingTextReport({
+    inputPath: 'D:\\logs\\mixed-marker.log',
+    report,
+  });
+  assert.match(output, /marker recommendations by launch mode/);
+  assert.match(output, /marker launch=packaged/);
+  assert.match(output, /marker launch=portable/);
+});
+
 test('formatTimingTextReport describes verify-only fallback output', () => {
   const report = generateTimingReport({
     allowVerifyOnly: true,
@@ -153,6 +193,10 @@ test('formatTimingTextReport describes verify-only fallback output', () => {
   assert.match(output, /marker timing samples=0/);
   assert.match(output, /startup\/scenario recommendations skipped/);
   assert.match(output, /recommended verify timeout >=17000/);
+  assert.match(output, /suggested timeout defaults/);
+  assert.match(output, /defaults launch=all/);
+  assert.match(output, /verifyTotalMs=17000/);
+  assert.match(output, /startupMs=n\/a/);
 });
 
 test('generateTimingReport fails when selected launch mode has no timing samples', () => {
@@ -205,7 +249,10 @@ test('buildSerializedReport emits json payload with verify summary recommendatio
 
   assert.deepEqual(parsed.inputPaths, ['logs/run-a.log', 'logs/run-b.log']);
   assert.equal(parsed.launchMode, 'packaged');
+  assert.equal(parsed.markerByLaunchMode.length, 0);
   assert.equal(parsed.overall.sampleCount, 2);
+  assert.equal(parsed.suggestedDefaults.length, 1);
+  assert.equal(parsed.suggestedDefaults[0].launchMode, 'packaged');
   assert.equal(parsed.verifyByLaunchMode.length, 0);
   assert.equal(parsed.verifyTotal.recommendedBudgetMs, 16_111);
 });
@@ -224,11 +271,92 @@ test('buildSerializedReport emits verify-by-launch payload when launch markers a
   });
   const parsed = JSON.parse(serialized);
 
+  assert.equal(parsed.markerByLaunchMode.length, 0);
+  assert.equal(parsed.suggestedDefaults.length, 2);
   assert.equal(parsed.verifyByLaunchMode.length, 2);
   assert.deepEqual(
     parsed.verifyByLaunchMode.map(item => item.launchMode),
     ['packaged', 'portable'],
   );
+});
+
+test('buildSerializedReport emits marker-by-launch payload when marker summaries are mixed', () => {
+  const report = generateTimingReport({
+    headroomMs: 3_000,
+    launchMode: 'all',
+    logContents: sampleLog,
+  });
+  const serialized = buildSerializedReport({
+    inputPaths: ['logs/mixed-marker.log'],
+    outputJson: true,
+    report,
+  });
+  const parsed = JSON.parse(serialized);
+
+  assert.equal(parsed.markerByLaunchMode.length, 2);
+  assert.equal(parsed.suggestedDefaults.length, 2);
+  assert.deepEqual(
+    parsed.markerByLaunchMode.map(item => item.launchMode),
+    ['packaged', 'portable'],
+  );
+});
+
+test('buildSerializedReport supports defaults-only json mode', () => {
+  const report = generateTimingReport({
+    allowVerifyOnly: true,
+    launchMode: 'all',
+    logContents: verifyOnlyLog,
+  });
+  const serialized = buildSerializedReport({
+    defaultsOnly: true,
+    inputPaths: ['logs/verify-only.log'],
+    outputJson: true,
+    report,
+  });
+  const parsed = JSON.parse(serialized);
+
+  assert.deepEqual(parsed.inputPaths, ['logs/verify-only.log']);
+  assert.equal(parsed.launchMode, 'all');
+  assert.equal(parsed.suggestedDefaults.length, 1);
+  assert.equal(parsed.suggestedDefaults[0].verifyTotalMs, 17_000);
+  assert.equal(parsed.suggestedDefaults[0].startupMs, null);
+});
+
+test('formatSuggestedDefaultsTextReport emits a compact defaults summary', () => {
+  const report = generateTimingReport({
+    launchMode: 'packaged',
+    logContents: sampleLog,
+  });
+  const output = formatSuggestedDefaultsTextReport({
+    inputPath: 'D:\\logs\\packaged.log',
+    report,
+  });
+
+  assert.match(output, /input=D:\\logs\\packaged\.log/);
+  assert.match(output, /suggested timeout defaults/);
+  assert.match(output, /defaults launch=packaged/);
+  assert.match(output, /smokeMs=18000/);
+});
+
+test('buildSuggestedTimeoutDefaults falls back to launch=all aggregate when per-launch data is missing', () => {
+  const defaults = buildSuggestedTimeoutDefaults({
+    launchMode: 'all',
+    markerLaunchModeRecommendations: [],
+    overallRecommendation: {
+      startup: {recommendedBudgetMs: 15_000},
+      scenario: {recommendedBudgetMs: 19_000},
+    },
+    verifyLaunchModeRecommendations: [],
+    verifyTotalRecommendation: {recommendedBudgetMs: 42_000},
+  });
+
+  assert.equal(defaults.length, 1);
+  assert.equal(defaults[0].launchMode, 'all');
+  assert.equal(defaults[0].readinessMs, 19_000);
+  assert.equal(defaults[0].smokeMs, 19_000);
+  assert.equal(defaults[0].startupMs, 15_000);
+  assert.equal(defaults[0].scenarioMs, 19_000);
+  assert.equal(defaults[0].verifyTotalMs, 42_000);
 });
 
 test('resolveLaunchModeOrThrow validates launch filter options', () => {

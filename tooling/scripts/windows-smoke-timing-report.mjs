@@ -144,6 +144,97 @@ export function buildVerifyLaunchModeRecommendations(
     .filter(Boolean);
 }
 
+export function buildMarkerLaunchModeRecommendations(timingSummaries, recommendationOptions) {
+  return ['packaged', 'portable']
+    .map(launchMode => {
+      const launchTimingSummaries = timingSummaries.filter(
+        summary => summary.launchMode === launchMode,
+      );
+      if (launchTimingSummaries.length === 0) {
+        return null;
+      }
+
+      return {
+        launchMode,
+        recommendation: buildTimingBudgetRecommendation(
+          launchTimingSummaries,
+          recommendationOptions,
+        ),
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildSuggestedDefaultItem({
+  launchMode,
+  markerRecommendation,
+  verifyRecommendation,
+}) {
+  const startupMs = markerRecommendation?.startup?.recommendedBudgetMs ?? null;
+  const scenarioMs = markerRecommendation?.scenario?.recommendedBudgetMs ?? null;
+  const smokeMs =
+    startupMs === null && scenarioMs === null
+      ? null
+      : Math.max(startupMs ?? 0, scenarioMs ?? 0);
+
+  return {
+    launchMode,
+    readinessMs: smokeMs,
+    scenarioMs,
+    smokeMs,
+    startupMs,
+    verifyTotalMs: verifyRecommendation?.recommendedBudgetMs ?? null,
+  };
+}
+
+export function buildSuggestedTimeoutDefaults({
+  launchMode,
+  markerLaunchModeRecommendations,
+  overallRecommendation,
+  verifyLaunchModeRecommendations,
+  verifyTotalRecommendation,
+}) {
+  if (launchMode === 'all') {
+    const markerByLaunchMode = new Map(
+      markerLaunchModeRecommendations.map(item => [item.launchMode, item.recommendation]),
+    );
+    const verifyByLaunchMode = new Map(
+      verifyLaunchModeRecommendations.map(item => [item.launchMode, item.recommendation]),
+    );
+    const perLaunchDefaults = ['packaged', 'portable']
+      .map(candidateLaunchMode => {
+        const markerRecommendation = markerByLaunchMode.get(candidateLaunchMode) ?? null;
+        const verifyRecommendation = verifyByLaunchMode.get(candidateLaunchMode) ?? null;
+        if (!markerRecommendation && !verifyRecommendation) {
+          return null;
+        }
+
+        return buildSuggestedDefaultItem({
+          launchMode: candidateLaunchMode,
+          markerRecommendation,
+          verifyRecommendation,
+        });
+      })
+      .filter(Boolean);
+
+    if (perLaunchDefaults.length > 0) {
+      return perLaunchDefaults;
+    }
+  }
+
+  if (!overallRecommendation && !verifyTotalRecommendation) {
+    return [];
+  }
+
+  return [
+    buildSuggestedDefaultItem({
+      launchMode,
+      markerRecommendation: overallRecommendation,
+      verifyRecommendation: verifyTotalRecommendation,
+    }),
+  ];
+}
+
 export function generateTimingReport({
   allowVerifyOnly = false,
   headroomMs = 5_000,
@@ -160,19 +251,32 @@ export function generateTimingReport({
     verifyTimingSummaries.map(summary => summary.totalDurationMs),
     recommendationOptions,
   );
+  const markerLaunchModeRecommendations =
+    selectedLaunchMode === 'all'
+      ? buildMarkerLaunchModeRecommendations(timingSummaries, recommendationOptions)
+      : [];
   const verifyLaunchModeRecommendations = buildVerifyLaunchModeRecommendations(
     verifyTimingSummaries,
     recommendationOptions,
   );
   if (timingSummaries.length === 0) {
     if (allowVerifyOnly && verifyTotalRecommendation) {
+      const suggestedTimeoutDefaults = buildSuggestedTimeoutDefaults({
+        launchMode: selectedLaunchMode,
+        markerLaunchModeRecommendations: [],
+        overallRecommendation: null,
+        verifyLaunchModeRecommendations,
+        verifyTotalRecommendation,
+      });
       return {
         headroomMs,
         launchMode: selectedLaunchMode,
+        markerLaunchModeRecommendations: [],
         overallRecommendation: null,
         percentileLabel: formatPercentileLabel(percentileValue),
         percentileValue,
         scenarioRecommendations: [],
+        suggestedTimeoutDefaults,
         verifyLaunchModeRecommendations,
         verifyTotalRecommendation,
       };
@@ -186,16 +290,56 @@ export function generateTimingReport({
     );
   }
 
+  const overallRecommendation = buildTimingBudgetRecommendation(
+    timingSummaries,
+    recommendationOptions,
+  );
+  const suggestedTimeoutDefaults = buildSuggestedTimeoutDefaults({
+    launchMode: selectedLaunchMode,
+    markerLaunchModeRecommendations,
+    overallRecommendation,
+    verifyLaunchModeRecommendations,
+    verifyTotalRecommendation,
+  });
   return {
     headroomMs,
     launchMode: selectedLaunchMode,
-    overallRecommendation: buildTimingBudgetRecommendation(timingSummaries, recommendationOptions),
+    markerLaunchModeRecommendations,
+    overallRecommendation,
     percentileLabel: formatPercentileLabel(percentileValue),
     percentileValue,
     scenarioRecommendations: buildScenarioRecommendationMap(timingSummaries, recommendationOptions),
+    suggestedTimeoutDefaults,
     verifyLaunchModeRecommendations,
     verifyTotalRecommendation,
   };
+}
+
+function formatOptionalDuration(value) {
+  return value === null ? 'n/a' : String(value);
+}
+
+export function formatSuggestedDefaultsTextReport({inputPath, report}) {
+  const lines = [`[timing-report] input=${inputPath}`];
+
+  if (report.suggestedTimeoutDefaults.length === 0) {
+    lines.push('[timing-report] no suggested timeout defaults available for the selected inputs.');
+    return lines.join('\n');
+  }
+
+  lines.push('[timing-report] suggested timeout defaults:');
+  for (const item of report.suggestedTimeoutDefaults) {
+    lines.push(
+      `[timing-report] defaults launch=${item.launchMode} ` +
+        `readinessMs=${formatOptionalDuration(item.readinessMs)} ` +
+        `smokeMs=${formatOptionalDuration(item.smokeMs)} ` +
+        `startupMs=${formatOptionalDuration(item.startupMs)} ` +
+        `scenarioMs=${formatOptionalDuration(item.scenarioMs)} ` +
+        `verifyTotalMs=${formatOptionalDuration(item.verifyTotalMs)}`,
+    );
+  }
+
+  return lines.join('\n');
 }
 
 export function formatTimingTextReport({inputPath, report}) {
@@ -218,6 +362,19 @@ export function formatTimingTextReport({inputPath, report}) {
         `percentile=${report.percentileLabel} headroomMs=${report.headroomMs}`,
       '[timing-report] no marker timing summary lines found; startup/scenario recommendations skipped.',
     );
+  }
+
+  if (report.launchMode === 'all' && report.markerLaunchModeRecommendations.length > 0) {
+    lines.push('[timing-report] marker recommendations by launch mode:');
+    for (const item of report.markerLaunchModeRecommendations) {
+      lines.push(
+        `[timing-report] marker launch=${item.launchMode} samples=${item.recommendation.sampleCount} ` +
+          `startup${report.percentileLabel}=${item.recommendation.startup.percentileMs}ms ` +
+          `scenario${report.percentileLabel}=${item.recommendation.scenario.percentileMs}ms ` +
+          `recommended --startup-ms>=${item.recommendation.startup.recommendedBudgetMs} ` +
+          `--scenario-ms>=${item.recommendation.scenario.recommendedBudgetMs}`,
+      );
+    }
   }
 
   if (report.scenarioRecommendations.length > 0) {
@@ -251,19 +408,54 @@ export function formatTimingTextReport({inputPath, report}) {
     }
   }
 
+  if (report.suggestedTimeoutDefaults.length > 0) {
+    lines.push('[timing-report] suggested timeout defaults:');
+    for (const item of report.suggestedTimeoutDefaults) {
+      lines.push(
+        `[timing-report] defaults launch=${item.launchMode} ` +
+          `readinessMs=${formatOptionalDuration(item.readinessMs)} ` +
+          `smokeMs=${formatOptionalDuration(item.smokeMs)} ` +
+          `startupMs=${formatOptionalDuration(item.startupMs)} ` +
+          `scenarioMs=${formatOptionalDuration(item.scenarioMs)} ` +
+          `verifyTotalMs=${formatOptionalDuration(item.verifyTotalMs)}`,
+      );
+    }
+  }
+
   return lines.join('\n');
 }
 
-export function buildSerializedReport({inputPaths, outputJson, report}) {
+export function buildSerializedReport({
+  defaultsOnly = false,
+  inputPaths,
+  outputJson,
+  report,
+}) {
+  const inputPathLabel = inputPaths.length === 1 ? inputPaths[0] : `${inputPaths.length} files`;
+
   if (outputJson) {
+    if (defaultsOnly) {
+      return JSON.stringify(
+        {
+          inputPaths,
+          launchMode: report.launchMode,
+          suggestedDefaults: report.suggestedTimeoutDefaults,
+        },
+        null,
+        2,
+      );
+    }
+
     return JSON.stringify(
       {
         headroomMs: report.headroomMs,
         inputPaths,
         launchMode: report.launchMode,
+        markerByLaunchMode: report.markerLaunchModeRecommendations,
         overall: report.overallRecommendation,
         percentile: report.percentileValue,
         scenarioRecommendations: report.scenarioRecommendations,
+        suggestedDefaults: report.suggestedTimeoutDefaults,
         verifyByLaunchMode: report.verifyLaunchModeRecommendations,
         verifyTotal: report.verifyTotalRecommendation,
       },
@@ -272,8 +464,15 @@ export function buildSerializedReport({inputPaths, outputJson, report}) {
     );
   }
 
+  if (defaultsOnly) {
+    return formatSuggestedDefaultsTextReport({
+      inputPath: inputPathLabel,
+      report,
+    });
+  }
+
   return formatTimingTextReport({
-    inputPath: inputPaths.length === 1 ? inputPaths[0] : `${inputPaths.length} files`,
+    inputPath: inputPathLabel,
     report,
   });
 }
@@ -316,6 +515,7 @@ async function writeOutputFileIfRequested(outputPath, outputText) {
 
 async function main(argv = process.argv) {
   const allowVerifyOnly = argv.includes('--allow-verify-only');
+  const defaultsOnly = argv.includes('--defaults-only');
   const launchMode = findArgValue(argv, '--launch') ?? 'all';
   const outputJson = argv.includes('--json');
   const outputPath = resolveOutputPath(argv);
@@ -333,6 +533,7 @@ async function main(argv = process.argv) {
     percentileValue,
   });
   const serializedReport = buildSerializedReport({
+    defaultsOnly,
     inputPaths,
     outputJson,
     report,
