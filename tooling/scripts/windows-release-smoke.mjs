@@ -96,6 +96,7 @@ const supportedScenarioNames = [
   'settings-default-current-window',
   'settings-default-new-window',
   'save-main-window-preferences',
+  'view-shot-current-window',
   'secondary-window',
 ];
 
@@ -163,6 +164,12 @@ function normalizeLogContents(logContents) {
 
 function assertLogDoesNotContain(logContents, marker, reason) {
   if (normalizeLogContents(logContents).includes(marker)) {
+    throw new Error(`Windows release smoke failed: ${reason}`);
+  }
+}
+
+function assertLogContainsRegex(logContents, regex, reason) {
+  if (!regex.test(normalizeLogContents(logContents))) {
     throw new Error(`Windows release smoke failed: ${reason}`);
   }
 }
@@ -664,6 +671,57 @@ const smokeScenarios = {
       if (!preferencesFile.includes('main-mode=compact')) {
         throw new Error('Windows release smoke failed: saving preferences did not persist compact mode for the main window.');
       }
+    },
+  },
+  'view-shot-current-window': {
+    description: 'auto-open view-shot lab in the current window and run screenshot smoke',
+    preferences: defaultPreferences,
+    launchConfig: {
+      initialOpen: {
+        surface: 'companion.view-shot',
+        policy: 'tool',
+        presentation: 'current-window',
+      },
+      initialOpenProps: {
+        'dev-smoke-scenario': 'view-shot-basics',
+      },
+    },
+    successMarkers: [
+      ...commonSuccessMarkers,
+      'InitialOpenSurface surface=companion.view-shot policy=tool presentation=current-window',
+      '[frontend-companion] auto-open window=window.main surface=companion.view-shot presentation=current-window',
+      '[frontend-companion] render window=window.main surface=companion.view-shot policy=tool',
+      '[frontend-companion] mounted window=window.main surface=companion.view-shot policy=tool',
+      '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.view-shot',
+      '[frontend-view-shot] dev-smoke-start',
+      '[frontend-view-shot] dev-smoke-capture-ref uri=',
+      '[frontend-view-shot] dev-smoke-capture-screen uri=',
+      '[frontend-view-shot] dev-smoke-release-complete',
+      '[frontend-view-shot] dev-smoke-complete',
+    ],
+    async verifyLog(logContents) {
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-view-shot\] dev-smoke-capture-ref uri=.*OPApp[\\/]+view-shot[\\/]+/i,
+        'view-shot smoke did not produce a tmpfile captureRef artifact under the managed host directory.',
+      );
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-view-shot\] dev-smoke-capture-screen uri=.*OPApp[\\/]+view-shot[\\/]+/i,
+        'view-shot smoke did not produce a tmpfile captureScreen artifact under the managed host directory.',
+      );
+    },
+    verifyPersistedSession(sessionFile) {
+      if (!sessionFile.includes('[session]') || !sessionFile.includes('window.main=')) {
+        throw new Error('Windows release smoke failed: main window session was not persisted during view-shot smoke.');
+      }
+
+      assertPersistedSessionContains(
+        sessionFile,
+        'window.main',
+        'companion.view-shot',
+        'view-shot smoke did not persist the view-shot lab surface in the main window session.',
+      );
     },
   },
   'secondary-window': {

@@ -136,6 +136,11 @@ std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept {
     config.Presentation = *presentation;
   }
 
+  if (auto devSmokeScenario =
+          ReadLaunchConfigValue(L"initial-open-props", L"dev-smoke-scenario")) {
+    config.DevSmokeScenario = *devSmokeScenario;
+  }
+
   if (auto smokeSaveMainWindowMode =
           ReadLaunchConfigValue(L"initial-open-props", L"smoke-save-main-window-mode")) {
     config.SmokeSaveMainWindowMode = *smokeSaveMainWindowMode;

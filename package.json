@@ -28,6 +28,7 @@
     "smoke:windows:current-window": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=settings-default-current-window",
     "smoke:windows:settings-default-new-window": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=settings-default-new-window",
     "smoke:windows:save-main-window-preferences": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=save-main-window-preferences",
+    "smoke:windows:view-shot": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=view-shot-current-window",
     "smoke:windows:surface-model": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=secondary-window",
     "verify:windows:portable": "node ./tooling/scripts/verify-windows.mjs --launch=portable",
     "verify:windows:portable:validate": "node ./tooling/scripts/verify-windows.mjs --launch=portable --validate-only",

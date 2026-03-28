@@ -59,6 +59,12 @@ test('windows-release-smoke validate-only accepts explicit secondary-window port
   assert.equal(result.status, 0);
 });
 
+test('windows-release-smoke validate-only accepts explicit view-shot current-window scenario', () => {
+  const result = runSmokeValidateOnly(['--scenario=view-shot-current-window']);
+
+  assert.equal(result.status, 0);
+});
+
 test('windows-release-smoke validate-only accepts --portable with --launch=portable', () => {
   const result = runSmokeValidateOnly(['--portable', '--launch=portable']);
 

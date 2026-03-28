@@ -44,6 +44,7 @@ struct AutoOpenSurfaceConfig {
   std::wstring SurfaceId;
   WindowPolicyId Policy{WindowPolicyId::Main};
   std::wstring Presentation{L"current-window"};
+  std::optional<std::wstring> DevSmokeScenario;
   std::optional<std::wstring> SmokeSaveMainWindowMode;
   std::optional<std::wstring> SmokeSaveSettingsWindowMode;
   std::optional<std::wstring> SmokeSaveSettingsPresentation;

@@ -439,11 +439,17 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
         writer.WriteString(autoOpenSurface->Presentation);
 
         if (
+            autoOpenSurface->DevSmokeScenario ||
             autoOpenSurface->SmokeSaveMainWindowMode ||
             autoOpenSurface->SmokeSaveSettingsWindowMode ||
             autoOpenSurface->SmokeSaveSettingsPresentation) {
           writer.WritePropertyName(L"autoOpenInitialProps");
           writer.WriteObjectBegin();
+
+          if (autoOpenSurface->DevSmokeScenario) {
+            writer.WritePropertyName(L"devSmokeScenario");
+            writer.WriteString(*autoOpenSurface->DevSmokeScenario);
+          }
 
           if (autoOpenSurface->SmokeSaveMainWindowMode) {
             writer.WritePropertyName(L"smokeSaveMainWindowMode");

@@ -51,6 +51,11 @@ const defaultScenarios = [
     args: ['--scenario=save-main-window-preferences', '--skip-prepare'],
   },
   {
+    name: 'view-shot-current-window',
+    description: 'packaged auto-open view-shot lab runs captureRef/captureScreen smoke in the current window',
+    args: ['--scenario=view-shot-current-window', '--skip-prepare'],
+  },
+  {
     name: 'secondary-window',
     description: 'startup detached settings window surface-model check',
     args: ['--scenario=secondary-window'],

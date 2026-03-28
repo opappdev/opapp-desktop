@@ -48,13 +48,13 @@ function withTimeoutDefaultsFile(content, run) {
 }
 
 test('verify-windows validate-only accepts supported single-scenario filters', () => {
-  const result = runVerifyValidateOnly(['--scenario=secondary-window']);
+  const result = runVerifyValidateOnly(['--scenario=view-shot-current-window']);
 
   assert.equal(result.status, 0);
 });
 
 test('verify-windows validate-only accepts comma-separated scenario filters', () => {
-  const result = runVerifyValidateOnly(['--scenario=tab-session,secondary-window']);
+  const result = runVerifyValidateOnly(['--scenario=tab-session,view-shot-current-window']);
 
   assert.equal(result.status, 0);
 });
