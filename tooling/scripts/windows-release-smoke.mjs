@@ -69,6 +69,7 @@ const otaCacheRoot = path.join(repoRoot, '.ota-cache');
 const otaLastRunPath = path.join(otaCacheRoot, 'last-run.json');
 const otaStatePath = path.join(otaCacheRoot, 'ota-state.json');
 const otaChannelPath = path.join(otaCacheRoot, 'channel.json');
+const otaDeviceIdPath = path.join(otaCacheRoot, 'device-id.json');
 const userDataRoot = path.join(
   process.env.LOCALAPPDATA || path.join(workspaceRoot, '.tmp'),
   'OPApp',
@@ -2122,6 +2123,26 @@ async function waitForOtaChannel({timeoutMs, timeoutFlag}) {
   }));
 }
 
+async function waitForOtaDeviceId({timeoutMs, timeoutFlag}) {
+  const startMs = Date.now();
+  while (Date.now() - startMs < timeoutMs) {
+    if (await fileExists(otaDeviceIdPath)) {
+      const otaDevice = JSON.parse(await readFile(otaDeviceIdPath, 'utf8'));
+      if (typeof otaDevice?.deviceId === 'string' && otaDevice.deviceId) {
+        return otaDevice;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  throw new Error(formatMarkerTimeoutMessage({
+    phaseLabel: 'ota-device-id write',
+    scenarioName,
+    timeoutFlag,
+    timeoutMs,
+  }));
+}
+
 async function waitForOtaLastRun({timeoutMs, timeoutFlag}) {
   const startMs = Date.now();
   while (Date.now() - startMs < timeoutMs) {
@@ -2169,6 +2190,22 @@ async function verifyOtaSideEffects(logContents) {
       `Windows release smoke failed: ota last-run remoteBase was '${otaLastRun.remoteBase ?? 'unknown'}', expected '${otaRemoteArg}'.`,
     );
   }
+
+  const normalizedLog = normalizeLogContents(logContents);
+  if (!normalizedLog.includes('OTA.Native.DeviceId value=')) {
+    throw new Error(
+      'Windows release smoke failed: native OTA log is missing the persisted device-id marker.',
+    );
+  }
+  if (!normalizedLog.includes('OTA.Native.Rollout percent=')) {
+    throw new Error(
+      'Windows release smoke failed: native OTA log is missing rollout decision markers.',
+    );
+  }
+  await waitForOtaDeviceId({
+    timeoutMs: scenarioTimeoutMs,
+    timeoutFlag: '--scenario-ms',
+  });
 
   if (otaChannelArg) {
     const otaChannel = await waitForOtaChannel({

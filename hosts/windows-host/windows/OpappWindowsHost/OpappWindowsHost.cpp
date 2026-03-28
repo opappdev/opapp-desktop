@@ -13,8 +13,11 @@
 #include "NativeModules.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cwctype>
 #include <filesystem>
@@ -372,6 +375,126 @@ void InsertOptionalStringField(
   }
 }
 
+std::wstring ResolveOtaChannel(
+    std::filesystem::path const &cacheRoot,
+    std::optional<std::wstring> const &channelOverride) {
+  auto channelPath = cacheRoot / L"channel.json";
+  if (channelOverride && !channelOverride->empty()) {
+    winrt::Windows::Data::Json::JsonObject channelObject;
+    InsertStringField(channelObject, L"channel", *channelOverride);
+    InsertStringField(channelObject, L"updatedAt", NowIso8601Utc());
+    if (!WriteJsonFile(channelPath, channelObject)) {
+      AppendLog("OTA.Native.ChannelPersistFailed path=" + ToUtf8(channelPath.wstring()));
+    } else {
+      AppendLog("OTA.Native.ChannelPersisted value=" + ToUtf8(*channelOverride));
+    }
+    return *channelOverride;
+  }
+
+  if (auto channelObject = ReadJsonFile(channelPath)) {
+    try {
+      std::wstring persistedChannel = channelObject->GetNamedString(L"channel", L"").c_str();
+      if (!persistedChannel.empty()) {
+        AppendLog("OTA.Native.ChannelLoaded value=" + ToUtf8(persistedChannel));
+        return persistedChannel;
+      }
+    } catch (...) {
+      AppendLog("OTA.Native.ChannelInvalid path=" + ToUtf8(channelPath.wstring()));
+    }
+  }
+
+  AppendLog("OTA.Native.ChannelDefaulted value=stable");
+  return std::wstring(L"stable");
+}
+
+std::optional<std::wstring> ReadPersistedOtaDeviceId(std::filesystem::path const &cacheRoot) noexcept {
+  try {
+    auto deviceIdPath = cacheRoot / L"device-id.json";
+    auto deviceIdObject = ReadJsonFile(deviceIdPath);
+    if (!deviceIdObject) {
+      return std::nullopt;
+    }
+
+    std::wstring deviceId = deviceIdObject->GetNamedString(L"deviceId", L"").c_str();
+    if (deviceId.empty()) {
+      return std::nullopt;
+    }
+
+    std::transform(
+        deviceId.begin(),
+        deviceId.end(),
+        deviceId.begin(),
+        [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return deviceId;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::wstring> GenerateUuidV4() noexcept {
+  std::array<unsigned char, 16> bytes{};
+  if (BCryptGenRandom(
+          nullptr,
+          bytes.data(),
+          static_cast<ULONG>(bytes.size()),
+          BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+    return std::nullopt;
+  }
+
+  bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0F) | 0x40);
+  bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3F) | 0x80);
+
+  wchar_t buffer[37] = {};
+  auto written = swprintf_s(
+      buffer,
+      std::size(buffer),
+      L"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+      bytes[0],
+      bytes[1],
+      bytes[2],
+      bytes[3],
+      bytes[4],
+      bytes[5],
+      bytes[6],
+      bytes[7],
+      bytes[8],
+      bytes[9],
+      bytes[10],
+      bytes[11],
+      bytes[12],
+      bytes[13],
+      bytes[14],
+      bytes[15]);
+  if (written <= 0) {
+    return std::nullopt;
+  }
+
+  return std::wstring(buffer);
+}
+
+std::optional<std::wstring> GetOrCreateOtaDeviceId(std::filesystem::path const &cacheRoot) noexcept {
+  if (auto persistedDeviceId = ReadPersistedOtaDeviceId(cacheRoot)) {
+    return persistedDeviceId;
+  }
+
+  auto generatedDeviceId = GenerateUuidV4();
+  if (!generatedDeviceId) {
+    return std::nullopt;
+  }
+
+  auto deviceIdPath = cacheRoot / L"device-id.json";
+  winrt::Windows::Data::Json::JsonObject deviceIdObject;
+  InsertStringField(deviceIdObject, L"deviceId", *generatedDeviceId);
+  InsertStringField(deviceIdObject, L"createdAt", NowIso8601Utc());
+  if (!WriteJsonFile(deviceIdPath, deviceIdObject)) {
+    AppendLog("OTA.Native.DeviceIdPersistFailed path=" + ToUtf8(deviceIdPath.wstring()));
+    return std::nullopt;
+  }
+
+  AppendLog("OTA.Native.DeviceIdPersisted path=" + ToUtf8(deviceIdPath.wstring()));
+  return generatedDeviceId;
+}
+
 std::optional<std::filesystem::path> ResolveRepoRootFromAppDirectory(std::wstring const &appDirectory) {
   try {
     auto currentPath = std::filesystem::path(appDirectory);
@@ -559,6 +682,134 @@ std::optional<std::string> ComputeSha256Hex(std::filesystem::path const &filePat
   }
 }
 
+std::optional<std::string> ComputeSha256HexForString(std::string const &value) {
+  BCRYPT_ALG_HANDLE algorithmHandle = nullptr;
+  BCRYPT_HASH_HANDLE hashHandle = nullptr;
+  std::vector<uint8_t> hashObject;
+  std::vector<uint8_t> hashValue;
+
+  auto cleanup = [&]() noexcept {
+    if (hashHandle) {
+      BCryptDestroyHash(hashHandle);
+      hashHandle = nullptr;
+    }
+    if (algorithmHandle) {
+      BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+      algorithmHandle = nullptr;
+    }
+  };
+
+  try {
+    if (BCryptOpenAlgorithmProvider(&algorithmHandle, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    DWORD objectSize = 0;
+    DWORD bytesWritten = 0;
+    if (BCryptGetProperty(
+            algorithmHandle,
+            BCRYPT_OBJECT_LENGTH,
+            reinterpret_cast<PUCHAR>(&objectSize),
+            sizeof(objectSize),
+            &bytesWritten,
+            0) != 0 ||
+        objectSize == 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    DWORD hashSize = 0;
+    if (BCryptGetProperty(
+            algorithmHandle,
+            BCRYPT_HASH_LENGTH,
+            reinterpret_cast<PUCHAR>(&hashSize),
+            sizeof(hashSize),
+            &bytesWritten,
+            0) != 0 ||
+        hashSize == 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    hashObject.resize(objectSize);
+    hashValue.resize(hashSize);
+
+    if (BCryptCreateHash(
+            algorithmHandle,
+            &hashHandle,
+            hashObject.data(),
+            objectSize,
+            nullptr,
+            0,
+            0) != 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    if (BCryptHashData(
+            hashHandle,
+            reinterpret_cast<PUCHAR>(const_cast<char *>(value.data())),
+            static_cast<ULONG>(value.size()),
+            0) != 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    if (BCryptFinishHash(hashHandle, hashValue.data(), hashSize, 0) != 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    std::ostringstream hashHex;
+    hashHex << std::hex << std::setfill('0');
+    for (auto byte : hashValue) {
+      hashHex << std::setw(2) << static_cast<int>(byte);
+    }
+
+    cleanup();
+    return hashHex.str();
+  } catch (...) {
+    cleanup();
+    return std::nullopt;
+  }
+}
+
+std::optional<int32_t> ParseRolloutPercent(winrt::Windows::Data::Json::JsonObject const &bundleInfoObject) noexcept {
+  if (!bundleInfoObject.HasKey(L"rolloutPercent")) {
+    return std::nullopt;
+  }
+
+  try {
+    auto rawRolloutPercent = bundleInfoObject.GetNamedNumber(L"rolloutPercent", 100.0);
+    if (!std::isfinite(rawRolloutPercent)) {
+      return std::nullopt;
+    }
+
+    auto roundedRolloutPercent = static_cast<int32_t>(std::lround(rawRolloutPercent));
+    return std::clamp<int32_t>(roundedRolloutPercent, 0, 100);
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<int32_t> ComputeRolloutBucket(
+    std::wstring const &bundleId,
+    std::wstring const &deviceId) noexcept {
+  try {
+    auto hashInput = ToUtf8(bundleId) + ":" + ToUtf8(deviceId);
+    auto hashHex = ComputeSha256HexForString(hashInput);
+    if (!hashHex || hashHex->size() < 8) {
+      return std::nullopt;
+    }
+
+    auto bucketSeed = std::stoul(hashHex->substr(0, 8), nullptr, 16);
+    return static_cast<int32_t>(bucketSeed % 100);
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 bool VerifyBundleChecksum(
     winrt::Windows::Data::Json::JsonObject const &manifestObject,
     std::filesystem::path const &bundlePath) {
@@ -689,14 +940,14 @@ void RunNativeOtaUpdate(
     std::optional<std::wstring> channel,
     bool forceUpdate) noexcept {
   auto normalizedRemoteUrl = TrimTrailingSlashes(remoteUrl);
-  auto resolvedChannel =
-      (channel && !channel->empty()) ? *channel : std::wstring(L"stable");
+  auto resolvedChannel = std::wstring(L"stable");
   auto cacheRoot = ResolveOtaCacheRoot(appDirectory);
 
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
 
     std::filesystem::create_directories(cacheRoot);
+    resolvedChannel = ResolveOtaChannel(cacheRoot, channel);
     AppendLog("OTA.Native.Start remoteUrl=" + ToUtf8(normalizedRemoteUrl));
     AppendLog("OTA.Native.CacheRoot path=" + ToUtf8(cacheRoot.wstring()));
     AppendLog("OTA.Native.Channel value=" + ToUtf8(resolvedChannel));
@@ -830,13 +1081,67 @@ void RunNativeOtaUpdate(
       return;
     }
 
-    auto shouldUpdate = forceUpdate;
-    if (!shouldUpdate) {
+    auto resolvedDeviceId = GetOrCreateOtaDeviceId(cacheRoot);
+    if (!resolvedDeviceId) {
+      AppendLog("OTA.Native.DeviceIdResolutionFailed");
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          latestVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+    AppendLog("OTA.Native.DeviceId value=" + ToUtf8(*resolvedDeviceId));
+
+    auto rolloutPercent = ParseRolloutPercent(*bundleInfoObject);
+    auto inRollout = true;
+    if (rolloutPercent && *rolloutPercent < 100) {
+      auto rolloutBucket = ComputeRolloutBucket(*resolvedBundleId, *resolvedDeviceId);
+      if (!rolloutBucket) {
+        AppendLog("OTA.Native.RolloutBucketFailed");
+        WriteOtaLastRun(
+            cacheRoot,
+            normalizedRemoteUrl,
+            L"failed",
+            resolvedBundleId,
+            resolvedChannel,
+            currentVersion,
+            latestVersion,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt);
+        return;
+      }
+      inRollout = *rolloutBucket < *rolloutPercent;
+      AppendLog(
+          "OTA.Native.Rollout percent=" + std::to_string(*rolloutPercent) +
+          " bucket=" + std::to_string(*rolloutBucket) +
+          " inRollout=" + (inRollout ? std::string("true") : std::string("false")));
+    } else if (rolloutPercent) {
+      AppendLog(
+          "OTA.Native.Rollout percent=" + std::to_string(*rolloutPercent) +
+          " inRollout=true");
+    } else {
+      AppendLog("OTA.Native.Rollout percent=100 inRollout=true");
+    }
+
+    auto shouldUpdate = inRollout && forceUpdate;
+    if (!shouldUpdate && inRollout) {
       shouldUpdate = !currentVersion || latestVersion > *currentVersion;
     }
 
     if (!shouldUpdate) {
-      AppendLog("OTA.Native.UpToDate bundleId=" + ToUtf8(*resolvedBundleId) + " version=" + ToUtf8(latestVersion));
+      auto reason = inRollout ? "version" : "rollout";
+      AppendLog(
+          "OTA.Native.UpToDate reason=" + std::string(reason) +
+          " bundleId=" + ToUtf8(*resolvedBundleId) +
+          " version=" + ToUtf8(latestVersion));
       WriteOtaLastRun(
           cacheRoot,
           normalizedRemoteUrl,
