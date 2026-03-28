@@ -2,9 +2,9 @@ import {unlink} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {
-  classifyDeterministicCommandFailure,
   clearHostLaunchConfig,
   clearHostLog,
+  detectDeterministicCommandFailureFromHost,
   describeMetroOutcome,
   ensureMetroRunning,
   ensureWorkspaceTemp,
@@ -14,6 +14,7 @@ import {
   log,
   readFileTail,
   readHostLogTail,
+  resolveHostCommandOutputPath,
   spawnCmdAsync,
   stopHostProcesses,
   tempRoot,
@@ -92,27 +93,6 @@ function describeHostWaitFailure(result, phase, hostChild, timeoutMs = defaultRe
   return `Windows dev host did not reach ${phase} within ${timeoutMs}ms.${spawnModeDetail}`;
 }
 
-function resolveHostCommandOutputPath(hostChild) {
-  const candidatePath = hostChild?.opappOutputCapturePath;
-  return typeof candidatePath === 'string' && candidatePath.length > 0
-    ? candidatePath
-    : hostCommandOutputPath;
-}
-
-async function detectDeterministicCommandFailure(hostChild) {
-  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild);
-  const commandTail = await readFileTail(activeCommandOutputPath, 80);
-  const classification = classifyDeterministicCommandFailure(commandTail);
-  if (!classification) {
-    return null;
-  }
-
-  return {
-    ...classification,
-    commandOutputPath: activeCommandOutputPath,
-  };
-}
-
 async function buildHostWaitFailureMessage(
   result,
   phase,
@@ -120,7 +100,7 @@ async function buildHostWaitFailureMessage(
   {hostTailLines = 80, commandTailLines = 120, timeoutMs = defaultReadinessTimeoutMs} = {},
 ) {
   const hostTail = await readHostLogTail(hostTailLines);
-  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild);
+  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild, hostCommandOutputPath);
   const commandTail = await readFileTail(activeCommandOutputPath, commandTailLines);
   let detail = describeHostWaitFailure(result, phase, hostChild, timeoutMs);
   if (hostTail) {
@@ -161,7 +141,10 @@ async function launchHost({label = 'host'} = {}) {
 
   const ready = await waitForHostLogMarkers(readinessMarkers, readinessTimeoutMs, {
     failFastOnFatalFrontendError: true,
-    failFastCheck: () => detectDeterministicCommandFailure(hostChild),
+    failFastCheck: () =>
+      detectDeterministicCommandFailureFromHost(hostChild, {
+        fallbackOutputPath: hostCommandOutputPath,
+      }),
   });
   if (ready.status !== 'matched') {
     throw new Error(

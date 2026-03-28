@@ -680,6 +680,35 @@ export function classifyDeterministicCommandFailure(outputText) {
   };
 }
 
+export function resolveHostCommandOutputPath(hostChild, fallbackOutputPath = null) {
+  const candidatePath = hostChild?.opappOutputCapturePath;
+  if (typeof candidatePath === 'string' && candidatePath.length > 0) {
+    return candidatePath;
+  }
+  return fallbackOutputPath;
+}
+
+export async function detectDeterministicCommandFailureFromHost(
+  hostChild,
+  {fallbackOutputPath = null, tailLines = 80} = {},
+) {
+  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild, fallbackOutputPath);
+  if (!activeCommandOutputPath) {
+    return null;
+  }
+
+  const commandTail = await readFileTail(activeCommandOutputPath, tailLines);
+  const classification = classifyDeterministicCommandFailure(commandTail);
+  if (!classification) {
+    return null;
+  }
+
+  return {
+    ...classification,
+    commandOutputPath: activeCommandOutputPath,
+  };
+}
+
 export async function waitForHostLogMarkers(
   markers,
   timeoutMs = 60000,

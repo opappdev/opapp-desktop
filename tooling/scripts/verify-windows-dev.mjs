@@ -2,11 +2,11 @@ import {unlink} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {
-  classifyDeterministicCommandFailure,
   clearDevSessions,
   clearHostLaunchConfig,
   devSessionsPath,
   clearHostLog,
+  detectDeterministicCommandFailureFromHost,
   describeMetroOutcome,
   ensureMetroRunning,
   ensureWorkspaceTemp,
@@ -15,6 +15,7 @@ import {
   log,
   readFileTail,
   readHostLogTail,
+  resolveHostCommandOutputPath,
   spawnCmdAsync,
   writeHostLaunchConfig,
   stopHostProcesses,
@@ -76,27 +77,6 @@ function describeHostWaitFailure(result, phase, hostChild, timeoutMs = defaultRe
   return `Windows dev verify timed out waiting for ${phase} within ${timeoutMs}ms.${spawnModeDetail}`;
 }
 
-function resolveHostCommandOutputPath(hostChild) {
-  const candidatePath = hostChild?.opappOutputCapturePath;
-  return typeof candidatePath === 'string' && candidatePath.length > 0
-    ? candidatePath
-    : hostCommandOutputPath;
-}
-
-async function detectDeterministicCommandFailure(hostChild) {
-  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild);
-  const commandTail = await readFileTail(activeCommandOutputPath, 80);
-  const classification = classifyDeterministicCommandFailure(commandTail);
-  if (!classification) {
-    return null;
-  }
-
-  return {
-    ...classification,
-    commandOutputPath: activeCommandOutputPath,
-  };
-}
-
 async function clearOptionalFile(targetPath) {
   try {
     await unlink(targetPath);
@@ -112,7 +92,7 @@ async function buildHostWaitFailureMessage(
   {hostTailLines = 80, commandTailLines = 80, timeoutMs = defaultReadinessTimeoutMs} = {},
 ) {
   const hostTail = await readHostLogTail(hostTailLines);
-  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild);
+  const activeCommandOutputPath = resolveHostCommandOutputPath(hostChild, hostCommandOutputPath);
   const commandTail = await readFileTail(activeCommandOutputPath, commandTailLines);
   let detail = describeHostWaitFailure(result, phase, hostChild, timeoutMs);
   if (hostTail) {
@@ -165,7 +145,10 @@ async function main() {
 
     const ready = await waitForHostLogMarkers(readinessMarkers, readinessTimeoutMs, {
       failFastOnFatalFrontendError: true,
-      failFastCheck: () => detectDeterministicCommandFailure(hostChild),
+      failFastCheck: () =>
+        detectDeterministicCommandFailureFromHost(hostChild, {
+          fallbackOutputPath: hostCommandOutputPath,
+        }),
     });
     if (ready.status !== 'matched') {
       throw new Error(
@@ -179,7 +162,10 @@ async function main() {
 
     const smokeReady = await waitForHostLogMarkers(smokeMarkers, smokeTimeoutMs, {
       failFastOnFatalFrontendError: true,
-      failFastCheck: () => detectDeterministicCommandFailure(hostChild),
+      failFastCheck: () =>
+        detectDeterministicCommandFailureFromHost(hostChild, {
+          fallbackOutputPath: hostCommandOutputPath,
+        }),
     });
     if (smokeReady.status !== 'matched') {
       throw new Error(

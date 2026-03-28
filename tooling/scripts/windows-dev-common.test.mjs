@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
   classifyDeterministicCommandFailure,
+  detectDeterministicCommandFailureFromHost,
+  resolveHostCommandOutputPath,
   resolveOutputCaptureCandidates,
 } from './windows-dev-common.mjs';
 
@@ -48,4 +52,40 @@ test('classifyDeterministicCommandFailure ignores EPERM lines that do not mentio
   );
 
   assert.equal(classification, null);
+});
+
+test('resolveHostCommandOutputPath prefers capture path from host child', () => {
+  const resolved = resolveHostCommandOutputPath(
+    {opappOutputCapturePath: 'D:\\tmp\\captured.log'},
+    'D:\\tmp\\fallback.log',
+  );
+  assert.equal(resolved, path.normalize('D:\\tmp\\captured.log'));
+});
+
+test('resolveHostCommandOutputPath falls back to requested path when host child has none', () => {
+  const resolved = resolveHostCommandOutputPath({}, 'D:\\tmp\\fallback.log');
+  assert.equal(resolved, path.normalize('D:\\tmp\\fallback.log'));
+});
+
+test('detectDeterministicCommandFailureFromHost returns classification with fallback path', async () => {
+  const tempPath = path.join(
+    os.tmpdir(),
+    `opapp-dev-common-${Date.now()}-${Math.random().toString(16).slice(2)}.log`,
+  );
+
+  try {
+    await fsp.writeFile(tempPath, 'Error: spawnSync C:\\\\WINDOWS\\\\system32\\\\cmd.exe EPERM', 'utf8');
+    const result = await detectDeterministicCommandFailureFromHost(
+      {},
+      {fallbackOutputPath: tempPath},
+    );
+
+    assert.deepEqual(result, {
+      code: 'cmd-spawn-eperm',
+      summary: 'nested cmd spawn rejected (EPERM)',
+      commandOutputPath: path.normalize(tempPath),
+    });
+  } finally {
+    await fsp.rm(tempPath, {force: true});
+  }
 });
