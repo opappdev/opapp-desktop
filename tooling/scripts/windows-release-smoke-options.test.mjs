@@ -65,6 +65,12 @@ test('windows-release-smoke validate-only accepts explicit view-shot current-win
   assert.equal(result.status, 0);
 });
 
+test('windows-release-smoke validate-only accepts explicit startup-target launcher scenario', () => {
+  const result = runSmokeValidateOnly(['--scenario=startup-target-main-launcher']);
+
+  assert.equal(result.status, 0);
+});
+
 test('windows-release-smoke validate-only accepts --portable with --launch=portable', () => {
   const result = runSmokeValidateOnly(['--portable', '--launch=portable']);
 

@@ -36,6 +36,11 @@ const defaultScenarios = [
     args: ['--scenario=restore-tab-session', '--skip-prepare', '--preserve-state'],
   },
   {
+    name: 'startup-target-main-launcher',
+    description: 'saved launcher startup target wins over a restored main-window settings session',
+    args: ['--scenario=startup-target-main-launcher', '--skip-prepare'],
+  },
+  {
     name: 'settings-default-new-window',
     description: 'saved settings preference opens the default settings entry in a detached window and seeds a detached session',
     args: ['--scenario=settings-default-new-window', '--skip-prepare', '--preserve-state', '--reset-sessions'],

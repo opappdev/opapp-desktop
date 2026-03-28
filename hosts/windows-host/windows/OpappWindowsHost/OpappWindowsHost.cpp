@@ -396,7 +396,15 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     auto reactNativeWin32App{winrt::Microsoft::ReactNative::ReactNativeAppBuilder().Build()};
     AppendLog("WinMain.BuildReactNativeApp.Done");
     auto reactNativeHost = reactNativeWin32App.ReactNativeHost();
-    InitializeWindowManager(reactNativeHost);
+    InitializeWindowManager(
+        reactNativeHost,
+        std::wstring(appDirectory),
+#if BUNDLE
+        true
+#else
+        false
+#endif
+    );
     AppendLog("WinMain.WindowManagerInitialized");
 
     auto settings{reactNativeHost.InstanceSettings()};

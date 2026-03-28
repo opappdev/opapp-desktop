@@ -53,10 +53,20 @@ const logPath = path.join(tempRoot, 'opapp-windows-host.log');
 const launchConfigPath = path.join(tempRoot, 'opapp-windows-host.launch.ini');
 const preferencesPath = path.join(tempRoot, 'opapp-windows-host.preferences.ini');
 const sessionsPath = path.join(tempRoot, 'opapp-windows-host.sessions.ini');
+const userDataRoot = path.join(
+  process.env.LOCALAPPDATA || path.join(workspaceRoot, '.tmp'),
+  'OPApp',
+);
+const companionStartupTargetPath = path.join(
+  userDataRoot,
+  'startup',
+  'companion-startup-target.json',
+);
 const cliPath = path.join(hostRoot, 'node_modules', '@react-native-community', 'cli', 'build', 'bin.js');
 const packageName = 'OpappWindowsHost';
 const applicationId = 'App';
 const windowPolicyRegistryPath = path.join(frontendRoot, 'contracts', 'windowing', 'src', 'window-policy-registry.json');
+const missingOptionalFile = Symbol('missingOptionalFile');
 const launchMode = resolveLaunchModeOrThrow();
 const timeoutDefaults = loadTimeoutDefaultsForLaunch({
   argv: process.argv,
@@ -93,10 +103,12 @@ const supportedScenarioNames = [
   'main-window-bootstrap-compact',
   'tab-session',
   'restore-tab-session',
+  'startup-target-main-launcher',
   'restore-settings-window',
   'settings-default-current-window',
   'settings-default-new-window',
   'save-main-window-preferences',
+  'challenge-advisor-current-window',
   'view-shot-current-window',
   'window-capture-current-window',
   'secondary-window',
@@ -183,6 +195,38 @@ function extractLoggedPath(logContents, regex, reason) {
   }
 
   return match[1].trim();
+}
+
+async function snapshotOptionalTextFile(filePath) {
+  try {
+    return await readFile(filePath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return missingOptionalFile;
+    }
+
+    throw error;
+  }
+}
+
+async function restoreOptionalTextFile(filePath, snapshot) {
+  if (snapshot === missingOptionalFile) {
+    await rm(filePath, {force: true});
+    return;
+  }
+
+  await mkdir(path.dirname(filePath), {recursive: true});
+  await writeFile(filePath, snapshot, 'utf8');
+}
+
+function buildPersistedSessionFile(sessionEntries) {
+  let content = '[session]\n';
+
+  for (const [windowId, payload] of Object.entries(sessionEntries)) {
+    content += `${windowId}=${JSON.stringify(payload)}\n`;
+  }
+
+  return content;
 }
 
 async function getWindowPolicyRegistry() {
@@ -330,6 +374,21 @@ function getPersistedSessionPayload(sessionFile, windowId) {
   return null;
 }
 
+function parsePersistedSessionDescriptor(sessionFile, windowId) {
+  const payload = getPersistedSessionPayload(sessionFile, windowId);
+  if (!payload) {
+    throw new Error(`Windows release smoke failed: missing persisted session for ${windowId}.`);
+  }
+
+  try {
+    return JSON.parse(payload);
+  } catch (error) {
+    throw new Error(
+      `Windows release smoke failed: persisted session for ${windowId} was not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 function assertPersistedSessionContains(sessionFile, windowId, marker, reason) {
   const payload = getPersistedSessionPayload(sessionFile, windowId);
   if (!payload) {
@@ -348,6 +407,22 @@ function assertPersistedSessionDoesNotContain(sessionFile, windowId, marker, rea
   }
 
   if (payload.includes(marker)) {
+    throw new Error(`Windows release smoke failed: ${reason}`);
+  }
+}
+
+function assertPersistedSessionHasSurfaceId(sessionFile, windowId, surfaceId, reason) {
+  const descriptor = parsePersistedSessionDescriptor(sessionFile, windowId);
+  const tabs = Array.isArray(descriptor?.tabs) ? descriptor.tabs : [];
+  if (!tabs.some(tab => tab?.surfaceId === surfaceId)) {
+    throw new Error(`Windows release smoke failed: ${reason}`);
+  }
+}
+
+function assertPersistedSessionLacksSurfaceId(sessionFile, windowId, surfaceId, reason) {
+  const descriptor = parsePersistedSessionDescriptor(sessionFile, windowId);
+  const tabs = Array.isArray(descriptor?.tabs) ? descriptor.tabs : [];
+  if (tabs.some(tab => tab?.surfaceId === surfaceId)) {
     throw new Error(`Windows release smoke failed: ${reason}`);
   }
 }
@@ -453,7 +528,7 @@ const smokeScenarios = {
         throw new Error('Windows release smoke failed: restored tab session should not rely on an initial-open launch config.');
       }
 
-      if (normalized.includes('[frontend-companion] auto-open window=window.main')) {
+      if (normalized.includes('[frontend-companion] auto-open bundle=opapp.companion.main window=window.main')) {
         throw new Error('Windows release smoke failed: restored tab session unexpectedly replayed the auto-open path.');
       }
 
@@ -467,6 +542,87 @@ const smokeScenarios = {
       if (!sessionFile.includes('companion.settings')) {
         throw new Error('Windows release smoke failed: restored main window session is missing the settings tab.');
       }
+    },
+  },
+  'startup-target-main-launcher': {
+    description: 'saved launcher startup target overrides a restored main-window settings session',
+    preferences: defaultPreferences,
+    launchConfig: {},
+    successMarkers: [
+      ...commonSuccessMarkers,
+      '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=companion.main presentation=current-window targetBundle=opapp.companion.main',
+      '[frontend-companion] session window=window.main tabs=1 active=',
+    ],
+    async prepareState() {
+      await mkdir(path.dirname(companionStartupTargetPath), {recursive: true});
+      await writeFile(
+        companionStartupTargetPath,
+        JSON.stringify({
+          surfaceId: 'companion.main',
+          bundleId: 'opapp.companion.main',
+          policy: 'main',
+          presentation: 'current-window',
+        }),
+        'utf8',
+      );
+
+      await writeFile(
+        sessionsPath,
+        buildPersistedSessionFile({
+          'window.main': {
+            windowId: 'window.main',
+            activeTabId: 'tab:companion.settings:1',
+            tabs: [
+              {
+                tabId: 'tab:companion.settings:1',
+                surfaceId: 'companion.settings',
+                policy: 'settings',
+              },
+            ],
+          },
+        }),
+        'utf8',
+      );
+    },
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+      if (normalized.includes('InitialOpenSurface surface=')) {
+        throw new Error(
+          'Windows release smoke failed: startup target override should not rely on an initial-open launch config.',
+        );
+      }
+
+      if (
+        normalized.includes(
+          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.settings policy=settings',
+        )
+      ) {
+        throw new Error(
+          'Windows release smoke failed: startup target override still rendered the restored settings surface in the main window.',
+        );
+      }
+
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-companion\] session bundle=opapp\.companion\.main window=window\.main tabs=1 active=\S+ entries=[^\r\n]*companion\.main/i,
+        'startup target override did not settle the main window session on the launcher surface.',
+      );
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.main',
+        'startup target override did not persist the launcher surface back into the main window session.',
+      );
+      assertPersistedSessionLacksSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.settings',
+        'startup target override left the restored settings surface in the main window session.',
+      );
     },
   },
   'settings-default-current-window': {
@@ -546,19 +702,19 @@ const smokeScenarios = {
         throw new Error('Windows release smoke failed: detached settings window session was not persisted for default new-window preference.');
       }
 
-      assertPersistedSessionContains(
+      assertPersistedSessionHasSurfaceId(
         sessionFile,
         'window.main',
         'companion.main',
         'main window session is missing the main surface for default new-window settings flow.',
       );
-      assertPersistedSessionDoesNotContain(
+      assertPersistedSessionLacksSurfaceId(
         sessionFile,
         'window.main',
         'companion.settings',
         'main window session unexpectedly persisted the settings surface for default new-window settings flow.',
       );
-      assertPersistedSessionContains(
+      assertPersistedSessionHasSurfaceId(
         sessionFile,
         'window.secondary.dynamic.1',
         'companion.settings',
@@ -589,7 +745,7 @@ const smokeScenarios = {
         throw new Error('Windows release smoke failed: restored detached settings window should not rely on an initial-open launch config.');
       }
 
-      if (normalized.includes('[frontend-companion] auto-open window=window.main')) {
+      if (normalized.includes('[frontend-companion] auto-open bundle=opapp.companion.main window=window.main')) {
         throw new Error('Windows release smoke failed: restored detached settings window unexpectedly replayed the auto-open path.');
       }
 
@@ -615,19 +771,19 @@ const smokeScenarios = {
         throw new Error('Windows release smoke failed: restored detached settings window session is missing from persisted session state.');
       }
 
-      assertPersistedSessionContains(
+      assertPersistedSessionHasSurfaceId(
         sessionFile,
         'window.main',
         'companion.main',
         'main window session is missing the main surface during detached settings restore.',
       );
-      assertPersistedSessionDoesNotContain(
+      assertPersistedSessionLacksSurfaceId(
         sessionFile,
         'window.main',
         'companion.settings',
         'main window session unexpectedly persisted the settings surface during detached settings restore.',
       );
-      assertPersistedSessionContains(
+      assertPersistedSessionHasSurfaceId(
         sessionFile,
         'window.secondary.dynamic.1',
         'companion.settings',
@@ -682,6 +838,57 @@ const smokeScenarios = {
       if (!preferencesFile.includes('main-mode=compact')) {
         throw new Error('Windows release smoke failed: saving preferences did not persist compact mode for the main window.');
       }
+    },
+  },
+  'challenge-advisor-current-window': {
+    description: 'main bundle auto-open switches the current window into the challenge-advisor child bundle',
+    preferences: defaultPreferences,
+    launchConfig: {
+      initialOpen: {
+        surface: 'companion.challenge-advisor',
+        bundle: 'opapp.companion.challenge-advisor',
+        policy: 'main',
+        presentation: 'current-window',
+      },
+    },
+    successMarkers: [
+      ...commonSuccessMarkers,
+      'InitialOpenSurface surface=companion.challenge-advisor policy=main presentation=current-window',
+      '[frontend-companion] auto-open window=window.main surface=companion.challenge-advisor presentation=current-window targetBundle=opapp.companion.challenge-advisor',
+      'BundleSwitchPrepared window=window.main bundle=opapp.companion.challenge-advisor surface=companion.challenge-advisor policy=main',
+      'BundleSwitchReloadRequested window=window.main bundle=opapp.companion.challenge-advisor',
+      '[frontend-companion] render bundle=opapp.companion.challenge-advisor window=window.main surface=companion.challenge-advisor policy=main',
+      '[frontend-companion] mounted bundle=opapp.companion.challenge-advisor window=window.main surface=companion.challenge-advisor policy=main',
+    ],
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+      if (!normalized.includes('Bundle\\bundles\\opapp.companion.challenge-advisor')) {
+        throw new Error(
+          'Windows release smoke failed: bundle switch did not point the host at the staged challenge-advisor bundle root.',
+        );
+      }
+
+      if (normalized.includes('surface-fallback bundle=opapp.companion.challenge-advisor')) {
+        throw new Error(
+          'Windows release smoke failed: challenge-advisor child bundle rendered through the fallback surface path.',
+        );
+      }
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.challenge-advisor',
+        'main window session is missing the challenge-advisor surface after bundle switching.',
+      );
+      assertPersistedSessionContains(
+        sessionFile,
+        'window.main',
+        'opapp.companion.challenge-advisor',
+        'main window session is missing the challenge-advisor bundle id after bundle switching.',
+      );
     },
   },
   'view-shot-current-window': {
@@ -771,7 +978,7 @@ const smokeScenarios = {
         throw new Error('Windows release smoke failed: main window session was not persisted during view-shot smoke.');
       }
 
-      assertPersistedSessionContains(
+      assertPersistedSessionHasSurfaceId(
         sessionFile,
         'window.main',
         'companion.view-shot',
@@ -859,7 +1066,7 @@ const smokeScenarios = {
         throw new Error('Windows release smoke failed: main window session was not persisted during window-capture smoke.');
       }
 
-      assertPersistedSessionContains(
+      assertPersistedSessionHasSurfaceId(
         sessionFile,
         'window.main',
         'companion.window-capture',
@@ -900,6 +1107,51 @@ const smokeScenarios = {
     },
   },
 };
+
+function normalizeCompanionMarker(marker) {
+  if (!marker.includes('[frontend-companion]')) {
+    return marker;
+  }
+
+  let normalizedMarker = marker
+    .replace(
+      '[frontend-companion] render window=',
+      '[frontend-companion] render bundle=opapp.companion.main window=',
+    )
+    .replace(
+      '[frontend-companion] mounted window=',
+      '[frontend-companion] mounted bundle=opapp.companion.main window=',
+    )
+    .replace(
+      '[frontend-companion] session window=',
+      '[frontend-companion] session bundle=opapp.companion.main window=',
+    )
+    .replace(
+      '[frontend-companion] auto-open window=',
+      '[frontend-companion] auto-open bundle=opapp.companion.main window=',
+    );
+
+  if (
+    normalizedMarker.includes('[frontend-companion] auto-open bundle=opapp.companion.main') &&
+    !normalizedMarker.includes('targetBundle=')
+  ) {
+    normalizedMarker += ' targetBundle=opapp.companion.main';
+  }
+
+  return normalizedMarker;
+}
+
+for (const smokeScenario of Object.values(smokeScenarios)) {
+  smokeScenario.successMarkers = smokeScenario.successMarkers.map(
+    normalizeCompanionMarker,
+  );
+
+  if (smokeScenario.startupMarkers) {
+    smokeScenario.startupMarkers = smokeScenario.startupMarkers.map(
+      normalizeCompanionMarker,
+    );
+  }
+}
 
 const scenario = smokeScenarios[scenarioName];
 
@@ -1447,6 +1699,9 @@ function buildLaunchConfig() {
 
   if (scenario.launchConfig.initialOpen) {
     content += `\n[initial-open]\nsurface=${scenario.launchConfig.initialOpen.surface}\npolicy=${scenario.launchConfig.initialOpen.policy}\npresentation=${scenario.launchConfig.initialOpen.presentation}\n`;
+    if (scenario.launchConfig.initialOpen.bundle) {
+      content += `bundle=${scenario.launchConfig.initialOpen.bundle}\n`;
+    }
   }
 
   if (scenario.launchConfig.initialOpenProps) {
@@ -1636,6 +1891,8 @@ async function main() {
   }
 
   let runError = null;
+  let scenarioState = null;
+  let startupTargetSnapshot = missingOptionalFile;
 
   await stopHostProcess();
   await removeIfPresent(logPath);
@@ -1655,12 +1912,20 @@ async function main() {
       await preparePackagedApp();
     }
 
-    log('writing launch config for release smoke');
-    await writeFile(launchConfigPath, buildLaunchConfig(), 'utf8');
+      log('writing launch config for release smoke');
+      await writeFile(launchConfigPath, buildLaunchConfig(), 'utf8');
+      startupTargetSnapshot = await snapshotOptionalTextFile(
+        companionStartupTargetPath,
+      );
+      await rm(companionStartupTargetPath, {force: true});
 
-    if (launchMode === 'portable') {
-      if (!(await fileExists(portableExePath))) {
-        throw new Error(`Windows release smoke failed: portable exe not found at ${portableExePath}.`);
+      if (scenario.prepareState) {
+        scenarioState = await scenario.prepareState();
+      }
+
+      if (launchMode === 'portable') {
+        if (!(await fileExists(portableExePath))) {
+          throw new Error(`Windows release smoke failed: portable exe not found at ${portableExePath}.`);
       }
 
       launchPortableApp();
@@ -1728,6 +1993,15 @@ async function main() {
     if (!preserveState) {
       await removeIfPresent(sessionsPath);
     }
+
+    if (scenario.cleanupState) {
+      await scenario.cleanupState(scenarioState);
+    }
+
+    await restoreOptionalTextFile(
+      companionStartupTargetPath,
+      startupTargetSnapshot,
+    );
   }
 
   if (runError) {

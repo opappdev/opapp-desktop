@@ -136,6 +136,10 @@ std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept {
     config.Presentation = *presentation;
   }
 
+  if (auto bundleId = GetStartupOverride(L"initial-open", L"bundle", L"OPAPP_INITIAL_OPEN_BUNDLE_ID")) {
+    config.BundleId = *bundleId;
+  }
+
   if (auto devSmokeScenario =
           ReadLaunchConfigValue(L"initial-open-props", L"dev-smoke-scenario")) {
     config.DevSmokeScenario = *devSmokeScenario;

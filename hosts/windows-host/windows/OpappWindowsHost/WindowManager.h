@@ -15,11 +15,18 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
     LaunchSurfaceConfig const &launchSurface,
     std::optional<AutoOpenSurfaceConfig> const &autoOpenSurface = std::nullopt) noexcept;
 
-void InitializeWindowManager(winrt::Microsoft::ReactNative::ReactNativeHost const &reactNativeHost) noexcept;
+void InitializeWindowManager(
+    winrt::Microsoft::ReactNative::ReactNativeHost const &reactNativeHost,
+    std::wstring const &appDirectory,
+    bool bundledRuntime) noexcept;
 std::optional<std::string> GetCurrentManagedWindowPayload() noexcept;
 bool FocusManagedWindow(std::wstring const &windowId) noexcept;
 bool CloseManagedWindow(std::wstring const &windowId) noexcept;
 std::optional<std::string> OpenManagedWindow(LaunchSurfaceConfig const &launchSurface) noexcept;
+std::optional<std::string> SwitchMainWindowToBundle(
+    std::wstring const &windowId,
+    std::wstring const &bundleId,
+    std::wstring const &sessionPayload) noexcept;
 std::optional<std::string> QueueManagedWindowOpen(
     winrt::Microsoft::ReactNative::IReactDispatcher const &uiDispatcher,
     LaunchSurfaceConfig const &launchSurface) noexcept;

@@ -2,6 +2,8 @@
 #include "WindowManager.h"
 #include "NativeModules.h"
 
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
@@ -16,6 +18,35 @@ template <typename TValue, typename TGetter>
 std::optional<TValue> TryJsonValue(TGetter &&getter) noexcept {
   try {
     return getter();
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::wstring> ReadBundleManifestEntryFile(std::wstring const &bundleRoot) noexcept {
+  try {
+    auto manifestPath = std::filesystem::path(bundleRoot) / L"bundle-manifest.json";
+    std::ifstream stream(manifestPath, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    auto jsonObject = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
+    auto entryFileHstr = jsonObject.GetNamedString(L"entryFile");
+    std::wstring entryFile(entryFileHstr.c_str(), entryFileHstr.size());
+
+    constexpr std::wstring_view kBundleSuffix = L".bundle";
+    if (entryFile.size() > kBundleSuffix.size() &&
+        entryFile.substr(entryFile.size() - kBundleSuffix.size()) == kBundleSuffix) {
+      entryFile = entryFile.substr(0, entryFile.size() - kBundleSuffix.size());
+    }
+
+    if (entryFile.empty()) {
+      return std::nullopt;
+    }
+
+    return entryFile;
   } catch (...) {
     return std::nullopt;
   }
@@ -229,11 +260,38 @@ struct WindowManagerState {
   std::optional<LaunchSurfaceConfig> MainLaunchSurface;
   std::map<HWND, std::shared_ptr<HostedSurfaceWindow>> HostedWindows;
   std::set<std::wstring> PendingSessionCleanupWindowIds;
+  std::wstring AppDirectory;
+  bool BundledRuntime{false};
+  std::wstring CurrentBundleId{L"opapp.companion.main"};
 };
 
 WindowManagerState &GetWindowManagerState() noexcept {
   static WindowManagerState state{};
   return state;
+}
+
+std::optional<std::wstring> ResolveBundleRootPath(
+    WindowManagerState const &state,
+    std::wstring const &bundleId) noexcept {
+  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+    return std::nullopt;
+  }
+
+  try {
+    auto bundleRoot = std::filesystem::path(state.AppDirectory) / L"Bundle";
+    if (!bundleId.empty() && bundleId != L"opapp.companion.main") {
+      bundleRoot /= L"bundles";
+      bundleRoot /= bundleId;
+    }
+
+    if (!std::filesystem::exists(bundleRoot)) {
+      return std::nullopt;
+    }
+
+    return bundleRoot.wstring();
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 
 std::optional<HWND> TryGetMainWindowHandle() noexcept {
@@ -437,6 +495,10 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
         writer.WriteString(WindowPolicyName(autoOpenSurface->Policy));
         writer.WritePropertyName(L"autoOpenPresentation");
         writer.WriteString(autoOpenSurface->Presentation);
+        if (autoOpenSurface->BundleId) {
+          writer.WritePropertyName(L"autoOpenBundleId");
+          writer.WriteString(*autoOpenSurface->BundleId);
+        }
 
         if (
             autoOpenSurface->DevSmokeScenario ||
@@ -477,9 +539,15 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
   };
 }
 
-void InitializeWindowManager(winrt::Microsoft::ReactNative::ReactNativeHost const &reactNativeHost) noexcept {
+void InitializeWindowManager(
+    winrt::Microsoft::ReactNative::ReactNativeHost const &reactNativeHost,
+    std::wstring const &appDirectory,
+    bool bundledRuntime) noexcept {
   auto &state = GetWindowManagerState();
   state.ReactNativeHost = reactNativeHost;
+  state.AppDirectory = appDirectory;
+  state.BundledRuntime = bundledRuntime;
+  state.CurrentBundleId = L"opapp.companion.main";
 }
 
 std::optional<std::string> GetCurrentManagedWindowPayload() noexcept {
@@ -595,6 +663,69 @@ std::optional<std::string> OpenManagedWindow(LaunchSurfaceConfig const &launchSu
   AppendLog(
       "SecondaryWindowOpened surface=" + ToUtf8(launchSurface.SurfaceId) + " policy=" +
       ToUtf8(launchSurface.Policy) + " mode=" + ToUtf8(launchSurface.MetricsMode));
+  return std::nullopt;
+}
+
+std::optional<std::string> SwitchMainWindowToBundle(
+    std::wstring const &windowId,
+    std::wstring const &bundleId,
+    std::wstring const &sessionPayload) noexcept {
+  auto &state = GetWindowManagerState();
+  if (!state.ReactNativeHost) {
+    return "Window manager is not initialized.";
+  }
+
+  if (!state.MainLaunchSurface || state.MainLaunchSurface->WindowId != windowId) {
+    return "Only the main window supports bundle switching.";
+  }
+
+  if (!state.BundledRuntime) {
+    return "Bundle switching is only supported in bundled runtime.";
+  }
+
+  auto activeTarget = ExtractActiveSessionTargetFromPayload(sessionPayload);
+  if (!activeTarget) {
+    return "Invalid session payload.";
+  }
+
+  auto bundleRootPath = ResolveBundleRootPath(state, bundleId);
+  if (!bundleRootPath) {
+    return "Unable to resolve the target bundle root.";
+  }
+
+  auto entryFile = ReadBundleManifestEntryFile(*bundleRootPath);
+  if (!entryFile && bundleId != L"opapp.companion.main") {
+    return "Target bundle manifest is missing the entry file.";
+  }
+
+  if (!WriteSessionState(windowId, sessionPayload)) {
+    return "Failed to persist the target window session.";
+  }
+
+  state.MainLaunchSurface->SurfaceId = activeTarget->SurfaceId;
+  state.MainLaunchSurface->Policy = activeTarget->Policy;
+  state.MainLaunchSurface->MetricsMode =
+      ResolveWindowSizeMode(activeTarget->Policy, LoadWindowPreferences());
+  state.CurrentBundleId = bundleId.empty() ? L"opapp.companion.main" : bundleId;
+
+  if (state.MainAppWindow) {
+    state.MainAppWindow.Title(GetWindowTitle(*state.MainLaunchSurface));
+    ApplyAppWindowPlacement(state.MainAppWindow, *state.MainLaunchSurface, "WindowRectUpdated");
+  }
+
+  auto instanceSettings = state.ReactNativeHost.InstanceSettings();
+  auto jsBundleFile = entryFile.value_or(L"index.windows");
+  instanceSettings.BundleRootPath(bundleRootPath->c_str());
+  instanceSettings.JavaScriptBundleFile(jsBundleFile.c_str());
+
+  AppendLog(
+      "BundleSwitchPrepared window=" + ToUtf8(windowId) + " bundle=" + ToUtf8(state.CurrentBundleId) +
+      " surface=" + ToUtf8(activeTarget->SurfaceId) + " policy=" + ToUtf8(activeTarget->Policy) +
+      " root=" + ToUtf8(*bundleRootPath) + " file=" + ToUtf8(jsBundleFile));
+
+  state.ReactNativeHost.ReloadInstance();
+  AppendLog(
+      "BundleSwitchReloadRequested window=" + ToUtf8(windowId) + " bundle=" + ToUtf8(state.CurrentBundleId));
   return std::nullopt;
 }
 

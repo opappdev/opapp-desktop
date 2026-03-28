@@ -154,6 +154,34 @@ struct OpappWindowManagerModule {
     result.Resolve();
   }
 
+  REACT_METHOD(SwitchCurrentWindowBundle, L"switchCurrentWindowBundle")
+  void SwitchCurrentWindowBundle(
+      std::string windowId,
+      std::string bundleId,
+      std::string sessionPayload,
+      winrt::Microsoft::ReactNative::ReactPromise<void> &&result) noexcept {
+    auto reactContext = m_reactContext;
+    auto targetWindowId = std::wstring(winrt::to_hstring(windowId));
+    auto targetBundleId = std::wstring(winrt::to_hstring(bundleId));
+    auto targetSessionPayload = std::wstring(winrt::to_hstring(sessionPayload));
+
+    reactContext.UIDispatcher().Post([targetWindowId,
+                                      targetBundleId,
+                                      targetSessionPayload,
+                                      result = std::move(result)]() mutable {
+      auto error = OpappWindowsHost::SwitchMainWindowToBundle(
+          targetWindowId,
+          targetBundleId,
+          targetSessionPayload);
+      if (error) {
+        result.Reject(winrt::to_hstring(*error).c_str());
+        return;
+      }
+
+      result.Resolve();
+    });
+  }
+
   REACT_METHOD(GetDiagnosticsLogPath, L"getDiagnosticsLogPath")
   void GetDiagnosticsLogPath(
       winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {

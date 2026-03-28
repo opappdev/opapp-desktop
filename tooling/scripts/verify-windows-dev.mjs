@@ -51,8 +51,10 @@ const defaultScenarios = [
   {
     name: 'challenge-advisor-basics',
     description:
-      'Metro-backed main surface runs the challenge-advisor dev smoke flow',
+      'Metro-backed launcher auto-opens the challenge-advisor surface and runs the dev smoke flow',
     smokeMarkers: [
+      'InitialOpenSurface surface=companion.challenge-advisor policy=main presentation=current-window',
+      '[frontend-companion] auto-open bundle=opapp.companion.main window=window.main surface=companion.challenge-advisor presentation=current-window targetBundle=opapp.companion.main',
       '[frontend-challenge-advisor] dev-smoke-start',
       '[frontend-challenge-advisor] dev-smoke-track-switched track=score-challenge',
       '[frontend-challenge-advisor] dev-smoke-track-switched track=stellar-wars',
@@ -65,7 +67,12 @@ const defaultScenarios = [
       '[frontend-challenge-advisor] dev-smoke-complete',
     ],
     launchConfig: {
-      mainProps: {
+      initialOpen: {
+        surface: 'companion.challenge-advisor',
+        policy: 'main',
+        presentation: 'current-window',
+      },
+      initialOpenProps: {
         'dev-smoke-scenario': 'challenge-advisor-basics',
       },
     },
@@ -78,10 +85,10 @@ const defaultScenarios = [
       'Metro-backed auto-open view-shot lab runs captureRef/captureScreen smoke in the current window',
     smokeMarkers: [
       'InitialOpenSurface surface=companion.view-shot policy=tool presentation=current-window',
-      '[frontend-companion] auto-open window=window.main surface=companion.view-shot presentation=current-window',
-      '[frontend-companion] render window=window.main surface=companion.view-shot policy=tool',
-      '[frontend-companion] mounted window=window.main surface=companion.view-shot policy=tool',
-      '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.view-shot',
+      '[frontend-companion] auto-open bundle=opapp.companion.main window=window.main surface=companion.view-shot presentation=current-window targetBundle=opapp.companion.main',
+      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.view-shot policy=tool',
+      '[frontend-companion] mounted bundle=opapp.companion.main window=window.main surface=companion.view-shot policy=tool',
+      '[frontend-companion] session bundle=opapp.companion.main window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.view-shot',
       '[frontend-view-shot] dev-smoke-start',
       '[frontend-view-shot] dev-smoke-capture-ref uri=',
       '[frontend-view-shot] dev-smoke-inspection-ref uri=',
@@ -164,10 +171,10 @@ const defaultScenarios = [
       'Metro-backed auto-open window-capture lab runs foreground WGC smoke in the current window',
     smokeMarkers: [
       'InitialOpenSurface surface=companion.window-capture policy=tool presentation=current-window',
-      '[frontend-companion] auto-open window=window.main surface=companion.window-capture presentation=current-window',
-      '[frontend-companion] render window=window.main surface=companion.window-capture policy=tool',
-      '[frontend-companion] mounted window=window.main surface=companion.window-capture policy=tool',
-      '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.window-capture',
+      '[frontend-companion] auto-open bundle=opapp.companion.main window=window.main surface=companion.window-capture presentation=current-window targetBundle=opapp.companion.main',
+      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.window-capture policy=tool',
+      '[frontend-companion] mounted bundle=opapp.companion.main window=window.main surface=companion.window-capture policy=tool',
+      '[frontend-companion] session bundle=opapp.companion.main window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.window-capture',
       '[frontend-window-capture] dev-smoke-start',
       '[frontend-window-capture] dev-smoke-list count=',
       '[frontend-window-capture] dev-smoke-capture-window backend=wgc size=',
