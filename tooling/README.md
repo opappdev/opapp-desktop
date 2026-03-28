@@ -35,12 +35,16 @@ Windows verification entrypoints:
 - `npm run verify:windows:ci-preflight`: packaged preflight probe with CI-oriented timeout args.
 - `npm run verify:windows:portable:ci-preflight`: portable preflight probe with CI-oriented timeout args.
 - `npm run report:windows:timing -- --input=<log-path>[,<log-path-2>] [--input=<log-path-3>] [--launch=all|packaged|portable] [--percentile=95] [--headroom-ms=5000] [--allow-verify-only] [--defaults-only] [--output=<report-path>]`: parse and aggregate `timing summary` lines across one or more logs, then print recommended `--startup-ms` / `--scenario-ms`（可选写入文件）。
+- `npm run test:windows:release-diagnostics`: single-process diagnostics assertions for environments where `node --test` runner spawning is restricted.
 - `npm run smoke:windows:validate`: validate direct release-smoke packaged args only.
 - `npm run smoke:windows:portable:validate`: validate direct release-smoke portable args only.
 - `npm run smoke:windows:preflight`: packaged release preflight probe only (no bundle/build/launch).
 - `npm run smoke:windows:portable:preflight`: portable release preflight probe only.
 - `node ./tooling/scripts/windows-release-smoke.mjs --validate-only ...`: validate direct smoke args without running bundle/build/launch.
 - `node ./tooling/scripts/windows-release-smoke.mjs --preflight-only ...`: collect release probe diagnostics without running bundle/build/launch.
+- preflight now fails fast with `local-sdk-acl-denied` when `C:\Users\<user>\AppData\Local\Microsoft SDKs` exists but is unreadable; this surfaces the real MSBuild blocker before bundle/build/deploy.
+- if you intentionally need the full upstream MSBuild failure after that diagnosis, rerun once with `OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1`.
+- if `Get-Acl 'C:\Users\<user>\AppData\Local\Microsoft SDKs'` is also unauthorized in the current session, inspect/fix that directory from an elevated or less-restricted Windows session before retrying verify.
 
 Windows smoke timeout knobs:
 
@@ -72,3 +76,4 @@ Portable fallback override knobs:
 
 - `OPAPP_WINDOWS_MSBUILD_PATH`: explicit `msbuild.exe` candidate for portable fallback.
 - `OPAPP_WINDOWS_RELEASE_FORCE_MSBUILD_FALLBACK=1`: ignore local SDK ACL blocker and force a fallback build attempt.
+- `OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1`: keep running past preflight blockers to capture raw upstream MSBuild output when diagnosing environment issues.

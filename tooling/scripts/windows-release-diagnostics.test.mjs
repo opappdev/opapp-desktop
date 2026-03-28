@@ -30,6 +30,13 @@ test('classifyRunWindowsFailure detects missing vswhere failures', () => {
   assert.equal(classification.code, 'vswhere-missing');
 });
 
+test('classifyRunWindowsFailure detects unreadable local Microsoft SDK path failures', () => {
+  const output =
+    'Microsoft.Common.CurrentVersion.targets(93,5): error MSB4184: 无法计算表达式“[Microsoft.Build.Utilities.ToolLocationHelper]::GetPlatformSDKLocation(UAP, 10.0.22621.0)”。对路径“C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs”的访问被拒绝。';
+  const classification = classifyRunWindowsFailure(output);
+  assert.equal(classification.code, 'local-sdk-acl-denied');
+});
+
 test('formatReleaseProbeForLogs renders concise probe lines', () => {
   const lines = formatReleaseProbeForLogs({
     cmdPath: 'C:\\Windows\\System32\\cmd.exe',
@@ -60,6 +67,7 @@ test('formatReleaseProbeForLogs renders concise probe lines', () => {
   assert(lines.some(line => line.includes('msbuild candidates=1 available=1')));
   assert(lines.some(line => line.includes('local sdk path=C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs')));
   assert(lines.some(line => line.includes('accessible=no')));
+  assert(lines.some(line => line.includes('local sdk access-error=Access to the path is denied.')));
 });
 
 test('formatReleaseProbeForLogs marks msbuild candidates as unknown when vswhere capture is blocked', () => {
@@ -112,6 +120,43 @@ test('formatReleaseFailureDiagnostics includes classification and actionable hin
   assert(diagnostics.includes("Get-Acl 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs'"));
 });
 
+test('formatReleaseFailureDiagnostics includes local-sdk-acl-denied guidance', () => {
+  const diagnostics = formatReleaseFailureDiagnostics({
+    args: [],
+    classification: {
+      code: 'local-sdk-acl-denied',
+      summary: 'Local Microsoft SDKs ACL blocks MSBuild SDK resolution',
+    },
+    command: 'node.exe',
+    failureSummary:
+      'release preflight blocked execution: Local Microsoft SDKs path is not readable (C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs): Access is denied.',
+    probe: {
+      cmdPath: 'C:\\Windows\\System32\\cmd.exe',
+      cmdExists: true,
+      cmdProbe: {ok: true, status: 0},
+      minimumVisualStudioVersion: null,
+      visualStudioVersion: null,
+      vswherePath: 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe',
+      vswhereExists: true,
+      vswhereProbe: {ok: true, status: 0},
+      msbuildCandidates: [],
+      localMicrosoftSdkProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        exists: true,
+        accessible: false,
+        errorMessage: 'Access is denied.',
+      },
+    },
+    result: {status: null, error: {code: 'LOCAL_MICROSOFT_SDKS_UNREADABLE'}},
+  });
+
+  assert(diagnostics.includes('Failure classification: local-sdk-acl-denied'));
+  assert(diagnostics.includes('ToolLocationHelper cannot read the per-user `Local Microsoft SDKs` directory.'));
+  assert(diagnostics.includes('Portable MSBuild fallback does not bypass this class of failure'));
+  assert(diagnostics.includes('OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1'));
+  assert(diagnostics.includes('If `Get-Acl` is also unauthorized in the current session'));
+});
+
 test('getBlockingReleaseProbeFailure reports cmd EPERM as blocking', () => {
   const blockingFailure = getBlockingReleaseProbeFailure({
     cmdPath: 'C:\\Windows\\System32\\cmd.exe',
@@ -134,6 +179,30 @@ test('getBlockingReleaseProbeFailure reports cmd EPERM as blocking', () => {
   assert(blockingFailure);
   assert.equal(blockingFailure.code, 'EPERM');
   assert(blockingFailure.reason.includes('cmd probe failed'));
+});
+
+test('getBlockingReleaseProbeFailure reports unreadable local sdk path as blocking', () => {
+  const blockingFailure = getBlockingReleaseProbeFailure({
+    cmdPath: 'C:\\Windows\\System32\\cmd.exe',
+    cmdExists: true,
+    cmdProbe: {ok: true, status: 0},
+    minimumVisualStudioVersion: null,
+    visualStudioVersion: null,
+    vswherePath: 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe',
+    vswhereExists: true,
+    vswhereProbe: {ok: true, status: 0},
+    msbuildCandidates: [],
+    localMicrosoftSdkProbe: {
+      path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+      exists: true,
+      accessible: false,
+      errorMessage: 'Access is denied.',
+    },
+  });
+
+  assert(blockingFailure);
+  assert.equal(blockingFailure.code, 'LOCAL_MICROSOFT_SDKS_UNREADABLE');
+  assert(blockingFailure.reason.includes('Local Microsoft SDKs path is not readable'));
 });
 
 test('getPortableMsbuildFallbackBlocker reports unreadable local sdk path', () => {

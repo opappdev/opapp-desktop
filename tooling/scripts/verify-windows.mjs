@@ -226,8 +226,14 @@ function runOrThrow(command, args, options = {}) {
     ...options,
   });
 
+  if (result.error) {
+    throw result.error;
+  }
+
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status ?? 1}`);
+    throw new Error(
+      `Subprocess failed with exit code ${result.status ?? 1}; see inherited output above for details.`,
+    );
   }
 }
 
@@ -442,6 +448,11 @@ function main() {
   log(`scenario timing summary totalMs=${totalDurationMs} scenarioCount=${scenarioTimings.length}`);
 }
 
-main();
+Promise.resolve()
+  .then(() => main())
+  .catch(error => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
 
 

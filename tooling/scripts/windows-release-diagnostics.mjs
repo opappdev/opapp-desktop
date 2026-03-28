@@ -375,6 +375,12 @@ export function collectPortableMsbuildFallbackProfiles({
 
 const FAILURE_CLASSIFIERS = [
   {
+    code: 'local-sdk-acl-denied',
+    summary: 'Local Microsoft SDKs ACL blocks MSBuild SDK resolution',
+    matcher:
+      /Local Microsoft SDKs path is not readable|Microsoft SDKs.+(?:Access is denied|访问被拒绝)|Get(?:PlatformSDKLocation|LatestSDKTargetPlatformVersion)\([^)]+\).*?(?:Access is denied|访问被拒绝)/i,
+  },
+  {
     code: 'cmd-spawn-eperm',
     summary: 'nested cmd spawn rejected (EPERM)',
     matcher: /spawn(?:Sync)?\s+[^\r\n]*cmd\.exe\s+EPERM/i,
@@ -458,6 +464,11 @@ export function formatReleaseProbeForLogs(probe) {
       `local sdk path=${probe.localMicrosoftSdkProbe.path} exists=${toYesNo(probe.localMicrosoftSdkProbe.exists)} ` +
         `accessible=${toYesNo(probe.localMicrosoftSdkProbe.accessible)}`,
     );
+    if (probe.localMicrosoftSdkProbe.exists && !probe.localMicrosoftSdkProbe.accessible) {
+      lines.push(
+        `local sdk access-error=${truncateOneLine(probe.localMicrosoftSdkProbe.errorMessage ?? 'access denied', 160)}`,
+      );
+    }
   }
 
   if (probe.msbuildCandidatesUnknown) {
@@ -486,7 +497,20 @@ export function formatReleaseProbeForLogs(probe) {
 function buildActionHints(classification, probe) {
   const hints = [];
 
-  if (classification.code === 'cmd-spawn-eperm') {
+  if (classification.code === 'local-sdk-acl-denied') {
+    hints.push(
+      'MSBuild SDK resolution is blocked before restore/build because ToolLocationHelper cannot read the per-user `Local Microsoft SDKs` directory.',
+    );
+    hints.push(
+      'Fix the ACL on that directory or rerun on a machine/profile where `C:\\Users\\<user>\\AppData\\Local\\Microsoft SDKs` is readable.',
+    );
+    hints.push(
+      'Portable MSBuild fallback does not bypass this class of failure, because the same SDK discovery API runs inside MSBuild evaluation.',
+    );
+    hints.push(
+      'If you need the full upstream MSBuild output after confirming the preflight diagnosis, rerun once with `OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1`.',
+    );
+  } else if (classification.code === 'cmd-spawn-eperm') {
     hints.push(
       '@react-native-windows/cli failed while spawning nested cmd.exe during vswhere probing, which usually points to sandbox/endpoint policy restrictions.',
     );
@@ -538,6 +562,9 @@ function buildActionHints(classification, probe) {
     hints.push(
       `Inspect ACL details before retrying portable fallback: powershell -NoProfile -Command "Get-Acl '${sdkPath}' | Format-List"`,
     );
+    hints.push(
+      'If `Get-Acl` is also unauthorized in the current session, inspect/fix the directory from an elevated or less-restricted Windows session before retrying verify.',
+    );
   }
 
   return hints;
@@ -579,6 +606,16 @@ export function getBlockingReleaseProbeFailure(probe) {
       code: probe.vswhereProbe.errorCode ?? 'VSWHERE_PROBE_FAILED',
       reason: formatProbeFailure('vswhere', probe.vswhereProbe),
       classifierHint: probe.vswhereProbe.errorMessage ?? probe.vswhereProbe.stderr ?? probe.vswhereProbe.errorCode ?? '',
+    };
+  }
+
+  if (probe.localMicrosoftSdkProbe?.exists && !probe.localMicrosoftSdkProbe.accessible) {
+    const sdkPath = probe.localMicrosoftSdkProbe.path;
+    const sdkError = probe.localMicrosoftSdkProbe.errorMessage ?? 'access denied';
+    return {
+      code: 'LOCAL_MICROSOFT_SDKS_UNREADABLE',
+      reason: `Local Microsoft SDKs path is not readable (${sdkPath}): ${sdkError}`,
+      classifierHint: `Local Microsoft SDKs path is not readable (${sdkPath}): ${sdkError}`,
     };
   }
 
