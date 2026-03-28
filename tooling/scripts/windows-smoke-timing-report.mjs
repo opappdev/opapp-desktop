@@ -119,6 +119,31 @@ export function collectVerifyTimingSummaries(logContents, selectedLaunchMode = '
   return verifySummaries;
 }
 
+export function buildVerifyLaunchModeRecommendations(
+  verifyTimingSummaries,
+  recommendationOptions,
+) {
+  return ['packaged', 'portable']
+    .map(launchMode => {
+      const recommendation = buildDurationRecommendation(
+        verifyTimingSummaries
+          .filter(summary => summary.launchMode === launchMode)
+          .map(summary => summary.totalDurationMs),
+        recommendationOptions,
+      );
+
+      if (!recommendation) {
+        return null;
+      }
+
+      return {
+        launchMode,
+        recommendation,
+      };
+    })
+    .filter(Boolean);
+}
+
 export function generateTimingReport({
   allowVerifyOnly = false,
   headroomMs = 5_000,
@@ -135,6 +160,10 @@ export function generateTimingReport({
     verifyTimingSummaries.map(summary => summary.totalDurationMs),
     recommendationOptions,
   );
+  const verifyLaunchModeRecommendations = buildVerifyLaunchModeRecommendations(
+    verifyTimingSummaries,
+    recommendationOptions,
+  );
   if (timingSummaries.length === 0) {
     if (allowVerifyOnly && verifyTotalRecommendation) {
       return {
@@ -144,6 +173,7 @@ export function generateTimingReport({
         percentileLabel: formatPercentileLabel(percentileValue),
         percentileValue,
         scenarioRecommendations: [],
+        verifyLaunchModeRecommendations,
         verifyTotalRecommendation,
       };
     }
@@ -163,6 +193,7 @@ export function generateTimingReport({
     percentileLabel: formatPercentileLabel(percentileValue),
     percentileValue,
     scenarioRecommendations: buildScenarioRecommendationMap(timingSummaries, recommendationOptions),
+    verifyLaunchModeRecommendations,
     verifyTotalRecommendation,
   };
 }
@@ -209,6 +240,17 @@ export function formatTimingTextReport({inputPath, report}) {
     );
   }
 
+  if (report.launchMode === 'all' && report.verifyLaunchModeRecommendations.length > 0) {
+    lines.push('[timing-report] verify-total recommendations by launch mode:');
+    for (const item of report.verifyLaunchModeRecommendations) {
+      lines.push(
+        `[timing-report] verify-total launch=${item.launchMode} ${report.percentileLabel}=${item.recommendation.percentileMs}ms ` +
+          `max=${item.recommendation.maxMs}ms ` +
+          `recommended verify timeout >=${item.recommendation.recommendedBudgetMs}`,
+      );
+    }
+  }
+
   return lines.join('\n');
 }
 
@@ -222,6 +264,7 @@ export function buildSerializedReport({inputPaths, outputJson, report}) {
         overall: report.overallRecommendation,
         percentile: report.percentileValue,
         scenarioRecommendations: report.scenarioRecommendations,
+        verifyByLaunchMode: report.verifyLaunchModeRecommendations,
         verifyTotal: report.verifyTotalRecommendation,
       },
       null,

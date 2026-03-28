@@ -114,6 +114,32 @@ test('generateTimingReport verify-only recommendations respect --launch when log
   assert.equal(portableReport.verifyTotalRecommendation.recommendedBudgetMs, 25_000);
 });
 
+test('generateTimingReport includes per-launch verify recommendations for mixed logs', () => {
+  const report = generateTimingReport({
+    allowVerifyOnly: true,
+    headroomMs: 3_000,
+    launchMode: 'all',
+    logContents: mixedLaunchVerifyLog,
+    percentileValue: 95,
+  });
+
+  assert.equal(report.verifyLaunchModeRecommendations.length, 2);
+  assert.deepEqual(
+    report.verifyLaunchModeRecommendations.map(item => item.launchMode),
+    ['packaged', 'portable'],
+  );
+  assert.equal(report.verifyLaunchModeRecommendations[0].recommendation.recommendedBudgetMs, 17_000);
+  assert.equal(report.verifyLaunchModeRecommendations[1].recommendation.recommendedBudgetMs, 25_000);
+
+  const output = formatTimingTextReport({
+    inputPath: 'D:\\logs\\verify-mixed.log',
+    report,
+  });
+  assert.match(output, /verify-total recommendations by launch mode/);
+  assert.match(output, /launch=packaged/);
+  assert.match(output, /launch=portable/);
+});
+
 test('formatTimingTextReport describes verify-only fallback output', () => {
   const report = generateTimingReport({
     allowVerifyOnly: true,
@@ -180,7 +206,29 @@ test('buildSerializedReport emits json payload with verify summary recommendatio
   assert.deepEqual(parsed.inputPaths, ['logs/run-a.log', 'logs/run-b.log']);
   assert.equal(parsed.launchMode, 'packaged');
   assert.equal(parsed.overall.sampleCount, 2);
+  assert.equal(parsed.verifyByLaunchMode.length, 0);
   assert.equal(parsed.verifyTotal.recommendedBudgetMs, 16_111);
+});
+
+test('buildSerializedReport emits verify-by-launch payload when launch markers are present', () => {
+  const report = generateTimingReport({
+    allowVerifyOnly: true,
+    headroomMs: 3_000,
+    launchMode: 'all',
+    logContents: mixedLaunchVerifyLog,
+  });
+  const serialized = buildSerializedReport({
+    inputPaths: ['logs/mixed.log'],
+    outputJson: true,
+    report,
+  });
+  const parsed = JSON.parse(serialized);
+
+  assert.equal(parsed.verifyByLaunchMode.length, 2);
+  assert.deepEqual(
+    parsed.verifyByLaunchMode.map(item => item.launchMode),
+    ['packaged', 'portable'],
+  );
 });
 
 test('resolveLaunchModeOrThrow validates launch filter options', () => {
