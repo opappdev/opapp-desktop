@@ -12,9 +12,17 @@
 #include "AutolinkedNativeModules.g.h"
 #include "NativeModules.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <thread>
+#include <urlmon.h>
+#include <vector>
 #include <winrt/Windows.Data.Json.h>
+
+#pragma comment(lib, "urlmon.lib")
 
 using namespace OpappWindowsHost;
 
@@ -72,6 +80,30 @@ std::optional<std::wstring> ReadBundleManifestVersion(std::wstring const &bundle
     }
 
     return version;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+// Reads bundle-manifest.json from bundleRoot and returns the bundleId field, or
+// nullopt if the manifest cannot be read or parsed.
+std::optional<std::wstring> ReadBundleManifestBundleId(std::wstring const &bundleRoot) noexcept {
+  try {
+    auto manifestPath = std::filesystem::path(bundleRoot) / L"bundle-manifest.json";
+    std::ifstream stream(manifestPath, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    auto jsonObject = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
+    auto bundleIdHstr = jsonObject.GetNamedString(L"bundleId");
+    std::wstring bundleId(bundleIdHstr.c_str(), bundleIdHstr.size());
+    if (bundleId.empty()) {
+      return std::nullopt;
+    }
+
+    return bundleId;
   } catch (...) {
     return std::nullopt;
   }
@@ -230,14 +262,647 @@ std::optional<std::wstring> ResolveToolingScriptPath(
   }
 }
 
-std::optional<std::wstring> ResolveOtaScriptPath(std::wstring const &appDirectory) noexcept {
-  return ResolveToolingScriptPath(appDirectory, L"ota-updater.mjs");
+std::string FormatHResult(HRESULT hr) {
+  std::ostringstream stream;
+  stream << "0x" << std::hex << std::uppercase << static_cast<unsigned long>(hr);
+  return stream.str();
 }
 
-// Spawns `node ota-updater.mjs --mode=update --remote=<remoteUrl> --platform=windows`
-// as a fully detached background process (CREATE_NO_WINDOW | DETACHED_PROCESS).
+std::wstring TrimTrailingSlashes(std::wstring value) {
+  while (!value.empty() && (value.back() == L'/' || value.back() == L'\\')) {
+    value.pop_back();
+  }
+  return value;
+}
+
+std::wstring NowIso8601Utc() {
+  SYSTEMTIME systemTime{};
+  GetSystemTime(&systemTime);
+
+  std::wostringstream stream;
+  stream << std::setfill(L'0')
+         << std::setw(4) << systemTime.wYear << L"-"
+         << std::setw(2) << systemTime.wMonth << L"-"
+         << std::setw(2) << systemTime.wDay << L"T"
+         << std::setw(2) << systemTime.wHour << L":"
+         << std::setw(2) << systemTime.wMinute << L":"
+         << std::setw(2) << systemTime.wSecond << L"."
+         << std::setw(3) << systemTime.wMilliseconds << L"Z";
+  return stream.str();
+}
+
+std::optional<std::wstring> ReadEnvironmentString(std::wstring const &name) noexcept {
+  DWORD required = GetEnvironmentVariableW(name.c_str(), nullptr, 0);
+  if (required == 0) {
+    return std::nullopt;
+  }
+
+  std::wstring value(required > 0 ? required - 1 : 0, L'\0');
+  if (required > 1) {
+    GetEnvironmentVariableW(name.c_str(), value.data(), required);
+  }
+  return value;
+}
+
+bool WriteUtf8File(std::filesystem::path const &path, std::string const &contents) {
+  try {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    stream.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+    return stream.good();
+  } catch (...) {
+    return false;
+  }
+}
+
+std::optional<std::string> ReadUtf8File(std::filesystem::path const &path) {
+  try {
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    return std::string((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<winrt::Windows::Data::Json::JsonObject> ReadJsonFile(std::filesystem::path const &path) {
+  auto contents = ReadUtf8File(path);
+  if (!contents) {
+    return std::nullopt;
+  }
+
+  try {
+    return winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(*contents));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+bool WriteJsonFile(
+    std::filesystem::path const &path,
+    winrt::Windows::Data::Json::JsonObject const &jsonObject) {
+  auto jsonString = winrt::to_string(jsonObject.Stringify()) + "\n";
+  return WriteUtf8File(path, jsonString);
+}
+
+void InsertStringField(
+    winrt::Windows::Data::Json::JsonObject &target,
+    std::wstring const &key,
+    std::wstring const &value) {
+  target.Insert(key, winrt::Windows::Data::Json::JsonValue::CreateStringValue(value));
+}
+
+void InsertOptionalStringField(
+    winrt::Windows::Data::Json::JsonObject &target,
+    std::wstring const &key,
+    std::optional<std::wstring> const &value) {
+  if (value && !value->empty()) {
+    target.Insert(key, winrt::Windows::Data::Json::JsonValue::CreateStringValue(*value));
+  } else {
+    target.Insert(key, winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+  }
+}
+
+std::optional<std::filesystem::path> ResolveRepoRootFromAppDirectory(std::wstring const &appDirectory) {
+  try {
+    auto currentPath = std::filesystem::path(appDirectory);
+    while (!currentPath.empty()) {
+      auto toolingScriptsPath = currentPath / L"tooling" / L"scripts";
+      auto hostRootPath = currentPath / L"hosts" / L"windows-host";
+      if (std::filesystem::exists(toolingScriptsPath) && std::filesystem::exists(hostRootPath)) {
+        return currentPath;
+      }
+
+      auto parentPath = currentPath.parent_path();
+      if (parentPath == currentPath) {
+        break;
+      }
+      currentPath = parentPath;
+    }
+  } catch (...) {
+    // Fall through to std::nullopt.
+  }
+
+  return std::nullopt;
+}
+
+std::filesystem::path ResolveOtaCacheRoot(std::wstring const &appDirectory) {
+  if (auto repoRoot = ResolveRepoRootFromAppDirectory(appDirectory)) {
+    return *repoRoot / L".ota-cache";
+  }
+
+  if (auto localAppData = ReadEnvironmentString(L"LOCALAPPDATA")) {
+    return std::filesystem::path(*localAppData) / L"OPApp" / L".ota-cache";
+  }
+
+  wchar_t tempPath[MAX_PATH] = {};
+  auto tempLength = GetTempPathW(MAX_PATH, tempPath);
+  if (tempLength > 0 && tempLength <= MAX_PATH) {
+    return std::filesystem::path(tempPath) / L"OPApp" / L".ota-cache";
+  }
+
+  return std::filesystem::path(appDirectory) / L".ota-cache";
+}
+
+bool DownloadUrlToFile(
+    std::wstring const &url,
+    std::filesystem::path const &targetPath,
+    std::string const &phaseLabel,
+    bool required = true) {
+  try {
+    std::filesystem::create_directories(targetPath.parent_path());
+  } catch (...) {
+    AppendLog(
+        phaseLabel + ".Failed pathCreate target=" + ToUtf8(targetPath.wstring()));
+    return false;
+  }
+
+  auto hr = URLDownloadToFileW(nullptr, url.c_str(), targetPath.wstring().c_str(), 0, nullptr);
+  if (FAILED(hr)) {
+    if (required) {
+      AppendLog(
+          phaseLabel + ".Failed hr=" + FormatHResult(hr) +
+          " url=" + ToUtf8(url));
+    } else {
+      AppendLog(
+          phaseLabel + ".SkippedOptional hr=" + FormatHResult(hr) +
+          " url=" + ToUtf8(url));
+    }
+    return false;
+  }
+
+  AppendLog(
+      phaseLabel + ".OK url=" + ToUtf8(url) +
+      " target=" + ToUtf8(targetPath.wstring()));
+  return true;
+}
+
+bool ReplaceDirectoryWithCopy(
+    std::filesystem::path const &sourceDirectory,
+    std::filesystem::path const &targetDirectory,
+    std::optional<std::wstring> const &sourceKindOverride = std::nullopt) {
+  std::filesystem::path tempDirectory;
+  try {
+    auto parentDirectory = targetDirectory.parent_path();
+    auto tempSuffix = std::to_wstring(GetTickCount64());
+    tempDirectory =
+        parentDirectory /
+        (targetDirectory.filename().wstring() + L".__ota_tmp__" + tempSuffix);
+
+    std::filesystem::create_directories(parentDirectory);
+    std::error_code ignoredError;
+    std::filesystem::remove_all(tempDirectory, ignoredError);
+    std::filesystem::copy(
+        sourceDirectory,
+        tempDirectory,
+        std::filesystem::copy_options::recursive |
+            std::filesystem::copy_options::overwrite_existing);
+    if (sourceKindOverride && !sourceKindOverride->empty()) {
+      auto stagedManifestPath = tempDirectory / L"bundle-manifest.json";
+      auto stagedManifestObject = ReadJsonFile(stagedManifestPath);
+      if (!stagedManifestObject) {
+        AppendLog("OTA.Native.ManifestPatchFailed reason=parse");
+        return false;
+      }
+
+      InsertStringField(*stagedManifestObject, L"sourceKind", *sourceKindOverride);
+      if (!WriteJsonFile(stagedManifestPath, *stagedManifestObject)) {
+        AppendLog("OTA.Native.ManifestPatchFailed reason=write");
+        return false;
+      }
+      AppendLog("OTA.Native.ManifestPatch.OK sourceKind=" + ToUtf8(*sourceKindOverride));
+    }
+    std::filesystem::remove_all(targetDirectory, ignoredError);
+    std::filesystem::rename(tempDirectory, targetDirectory);
+    return true;
+  } catch (...) {
+    std::error_code ignoredError;
+    if (!tempDirectory.empty()) {
+      std::filesystem::remove_all(tempDirectory, ignoredError);
+    }
+    return false;
+  }
+}
+
+void WriteOtaLastRun(
+    std::filesystem::path const &cacheRoot,
+    std::wstring const &remoteUrl,
+    std::wstring const &status,
+    std::optional<std::wstring> const &bundleId,
+    std::optional<std::wstring> const &channel,
+    std::optional<std::wstring> const &currentVersion,
+    std::optional<std::wstring> const &latestVersion,
+    std::optional<std::wstring> const &version,
+    std::optional<std::wstring> const &previousVersion,
+    std::optional<std::wstring> const &stagedAt) {
+  winrt::Windows::Data::Json::JsonObject lastRunObject;
+  InsertStringField(lastRunObject, L"mode", L"update");
+  InsertStringField(lastRunObject, L"remoteBase", remoteUrl);
+  InsertStringField(lastRunObject, L"status", status);
+  InsertOptionalStringField(lastRunObject, L"bundleId", bundleId);
+  InsertOptionalStringField(lastRunObject, L"channel", channel);
+  InsertOptionalStringField(lastRunObject, L"currentVersion", currentVersion);
+  InsertOptionalStringField(lastRunObject, L"latestVersion", latestVersion);
+  InsertOptionalStringField(lastRunObject, L"version", version);
+  InsertOptionalStringField(lastRunObject, L"previousVersion", previousVersion);
+  InsertOptionalStringField(lastRunObject, L"stagedAt", stagedAt);
+  InsertStringField(lastRunObject, L"recordedAt", NowIso8601Utc());
+  WriteJsonFile(cacheRoot / L"last-run.json", lastRunObject);
+}
+
+void RunNativeOtaUpdate(
+    std::wstring appDirectory,
+    std::wstring remoteUrl,
+    std::wstring hostBundleDir,
+    std::optional<std::wstring> currentVersion,
+    std::optional<std::wstring> channel,
+    bool forceUpdate) noexcept {
+  auto normalizedRemoteUrl = TrimTrailingSlashes(remoteUrl);
+  auto resolvedChannel =
+      (channel && !channel->empty()) ? *channel : std::wstring(L"stable");
+  auto cacheRoot = ResolveOtaCacheRoot(appDirectory);
+
+  try {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+
+    std::filesystem::create_directories(cacheRoot);
+    AppendLog("OTA.Native.Start remoteUrl=" + ToUtf8(normalizedRemoteUrl));
+    AppendLog("OTA.Native.CacheRoot path=" + ToUtf8(cacheRoot.wstring()));
+    AppendLog("OTA.Native.Channel value=" + ToUtf8(resolvedChannel));
+
+    auto indexUrl = normalizedRemoteUrl + L"/index.json";
+    auto indexPath = cacheRoot / L"index.json";
+    if (!DownloadUrlToFile(indexUrl, indexPath, "OTA.Native.DownloadIndex")) {
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          std::nullopt,
+          resolvedChannel,
+          currentVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    auto indexObject = ReadJsonFile(indexPath);
+    if (!indexObject) {
+      AppendLog("OTA.Native.IndexParseFailed path=" + ToUtf8(indexPath.wstring()));
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          std::nullopt,
+          resolvedChannel,
+          currentVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    auto bundlesObject = indexObject->GetNamedObject(L"bundles", nullptr);
+    if (!bundlesObject) {
+      AppendLog("OTA.Native.IndexMissingBundles");
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          std::nullopt,
+          resolvedChannel,
+          currentVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    std::vector<std::wstring> indexedBundleIds;
+    for (auto const &entry : bundlesObject) {
+      indexedBundleIds.emplace_back(entry.Key().c_str());
+    }
+
+    auto localBundleId = ReadBundleManifestBundleId(hostBundleDir);
+    std::optional<std::wstring> resolvedBundleId;
+    if (localBundleId && bundlesObject.HasKey(winrt::hstring(*localBundleId))) {
+      resolvedBundleId = *localBundleId;
+    } else if (indexedBundleIds.size() == 1) {
+      resolvedBundleId = indexedBundleIds.front();
+    }
+
+    if (!resolvedBundleId) {
+      AppendLog("OTA.Native.BundleResolutionFailed localBundleId=" + (localBundleId ? ToUtf8(*localBundleId) : "null"));
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          std::nullopt,
+          resolvedChannel,
+          currentVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    auto bundleInfoObject = bundlesObject.GetNamedObject(winrt::hstring(*resolvedBundleId), nullptr);
+    if (!bundleInfoObject) {
+      AppendLog("OTA.Native.BundleInfoMissing bundleId=" + ToUtf8(*resolvedBundleId));
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    std::wstring latestVersion =
+        bundleInfoObject.GetNamedString(L"latestVersion", L"").c_str();
+    if (auto channelsObject = bundleInfoObject.GetNamedObject(L"channels", nullptr)) {
+      std::wstring channelVersion =
+          channelsObject.GetNamedString(winrt::hstring(resolvedChannel), L"").c_str();
+      if (!channelVersion.empty()) {
+        latestVersion = channelVersion;
+      } else if (resolvedChannel != L"stable") {
+        std::wstring stableVersion =
+            channelsObject.GetNamedString(L"stable", L"").c_str();
+        if (!stableVersion.empty()) {
+          latestVersion = stableVersion;
+        }
+      }
+    }
+
+    if (latestVersion.empty()) {
+      AppendLog("OTA.Native.LatestVersionMissing bundleId=" + ToUtf8(*resolvedBundleId));
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    auto shouldUpdate = forceUpdate;
+    if (!shouldUpdate) {
+      shouldUpdate = !currentVersion || latestVersion > *currentVersion;
+    }
+
+    if (!shouldUpdate) {
+      AppendLog("OTA.Native.UpToDate bundleId=" + ToUtf8(*resolvedBundleId) + " version=" + ToUtf8(latestVersion));
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"up-to-date",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          latestVersion,
+          latestVersion,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    auto artifactBaseUrl =
+        normalizedRemoteUrl + L"/" + *resolvedBundleId + L"/" + latestVersion + L"/windows";
+    auto manifestPath = cacheRoot / *resolvedBundleId / latestVersion / L"windows" / L"bundle-manifest.json";
+    if (!DownloadUrlToFile(
+            artifactBaseUrl + L"/bundle-manifest.json",
+            manifestPath,
+            "OTA.Native.DownloadManifest")) {
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          latestVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    auto manifestObject = ReadJsonFile(manifestPath);
+    if (!manifestObject) {
+      AppendLog("OTA.Native.ManifestParseFailed path=" + ToUtf8(manifestPath.wstring()));
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          latestVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    std::wstring entryFileName =
+        manifestObject->GetNamedString(L"entryFile", L"").c_str();
+    if (entryFileName.empty()) {
+      AppendLog("OTA.Native.ManifestMissingEntryFile");
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          latestVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    auto stagedDirectory = manifestPath.parent_path();
+    auto entryFilePath = stagedDirectory / entryFileName;
+    if (!DownloadUrlToFile(
+            artifactBaseUrl + L"/" + entryFileName,
+            entryFilePath,
+            "OTA.Native.DownloadEntryFile")) {
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          latestVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    DownloadUrlToFile(
+        artifactBaseUrl + L"/window-policy-registry.json",
+        stagedDirectory / L"window-policy-registry.json",
+        "OTA.Native.DownloadPolicyRegistry",
+        false);
+
+    std::optional<std::wstring> previousSnapshotVersion =
+        ReadBundleManifestVersion(hostBundleDir);
+    std::optional<std::filesystem::path> previousSnapshotDir;
+    std::optional<std::wstring> previousSnapshotAt;
+    if (previousSnapshotVersion) {
+      auto snapshotDir =
+          cacheRoot / *resolvedBundleId / L"previous" / L"windows";
+      if (!ReplaceDirectoryWithCopy(std::filesystem::path(hostBundleDir), snapshotDir)) {
+        AppendLog("OTA.Native.SnapshotFailed snapshotDir=" + ToUtf8(snapshotDir.wstring()));
+        WriteOtaLastRun(
+            cacheRoot,
+            normalizedRemoteUrl,
+            L"failed",
+            resolvedBundleId,
+            resolvedChannel,
+            currentVersion,
+            latestVersion,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt);
+        return;
+      }
+      previousSnapshotDir = snapshotDir;
+      previousSnapshotAt = NowIso8601Utc();
+      AppendLog(
+          "OTA.Native.Snapshot.OK version=" + ToUtf8(*previousSnapshotVersion) +
+          " snapshotDir=" + ToUtf8(snapshotDir.wstring()));
+    } else {
+      AppendLog("OTA.Native.SnapshotSkipped reason=manifest-unavailable");
+    }
+
+    if (!ReplaceDirectoryWithCopy(
+            stagedDirectory,
+            std::filesystem::path(hostBundleDir),
+            std::wstring(L"sibling-staging"))) {
+      AppendLog("OTA.Native.ApplyFailed hostBundleDir=" + ToUtf8(hostBundleDir));
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          latestVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    auto nowIso = NowIso8601Utc();
+    winrt::Windows::Data::Json::JsonObject otaStateObject;
+    InsertStringField(otaStateObject, L"bundleId", *resolvedBundleId);
+    InsertStringField(otaStateObject, L"version", latestVersion);
+    InsertStringField(otaStateObject, L"platform", L"windows");
+    InsertStringField(otaStateObject, L"manifestDir", stagedDirectory.wstring());
+    InsertStringField(otaStateObject, L"downloadedAt", nowIso);
+    InsertStringField(otaStateObject, L"stagedAt", nowIso);
+    InsertStringField(otaStateObject, L"hostBundleDir", hostBundleDir);
+    if (previousSnapshotDir && previousSnapshotAt) {
+      winrt::Windows::Data::Json::JsonObject previousSnapshotObject;
+      if (previousSnapshotVersion && !previousSnapshotVersion->empty()) {
+        InsertStringField(previousSnapshotObject, L"version", *previousSnapshotVersion);
+      } else {
+        previousSnapshotObject.Insert(
+            L"version",
+            winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+      InsertStringField(previousSnapshotObject, L"snapshotDir", previousSnapshotDir->wstring());
+      InsertStringField(previousSnapshotObject, L"snapshotAt", *previousSnapshotAt);
+      otaStateObject.Insert(
+          L"previousSnapshot",
+          winrt::Windows::Data::Json::JsonValue::Parse(previousSnapshotObject.Stringify()));
+    }
+    WriteJsonFile(cacheRoot / L"ota-state.json", otaStateObject);
+
+    auto previousVersionForLastRun = previousSnapshotVersion ? previousSnapshotVersion : currentVersion;
+    WriteOtaLastRun(
+        cacheRoot,
+        normalizedRemoteUrl,
+        L"updated",
+        resolvedBundleId,
+        resolvedChannel,
+        currentVersion,
+        latestVersion,
+        latestVersion,
+        previousVersionForLastRun,
+        nowIso);
+    AppendLog(
+        "OTA.Native.Updated bundleId=" + ToUtf8(*resolvedBundleId) +
+        " version=" + ToUtf8(latestVersion));
+  } catch (winrt::hresult_error const &error) {
+    AppendLog(
+        "OTA.Native.HResultError code=" + std::to_string(static_cast<int32_t>(error.code().value)) +
+        " message=" + ToUtf8(error.message()));
+    WriteOtaLastRun(
+        cacheRoot,
+        normalizedRemoteUrl,
+        L"failed",
+        std::nullopt,
+        resolvedChannel,
+        currentVersion,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
+  } catch (std::exception const &error) {
+    AppendLog(std::string("OTA.Native.StdException message=") + error.what());
+    WriteOtaLastRun(
+        cacheRoot,
+        normalizedRemoteUrl,
+        L"failed",
+        std::nullopt,
+        resolvedChannel,
+        currentVersion,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
+  } catch (...) {
+    AppendLog("OTA.Native.UnknownException");
+    WriteOtaLastRun(
+        cacheRoot,
+        normalizedRemoteUrl,
+        L"failed",
+        std::nullopt,
+        resolvedChannel,
+        currentVersion,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt);
+  }
+}
+
+// Spawns the native OTA updater worker in a detached background thread.
 //
-// WinMain does not wait for the child process to exit.  The staged bundle takes
+// WinMain does not wait for the worker thread to exit. The staged bundle takes
 // effect on the next application launch (RFC-010 Phase 2).
 void SpawnOtaUpdateProcess(
     std::wstring const &appDirectory,
@@ -261,48 +926,28 @@ void SpawnOtaUpdateProcess(
   }
   AppendLog(logLine);
 
-  auto scriptPath = ResolveOtaScriptPath(appDirectory);
-  if (!scriptPath) {
-    AppendLog("OTA.SpawnUpdateProcess.ScriptNotFound appDirectory=" + ToUtf8(appDirectory));
+  if (!hostBundleDir || hostBundleDir->empty()) {
+    AppendLog("OTA.SpawnUpdateProcess.HostBundleDirMissing");
     return;
   }
 
-  std::wstring cmdLine = std::wstring(L"node.exe \"") + *scriptPath +
-      L"\" --mode=update --remote=\"" + remoteUrl + L"\" --platform=windows";
-  if (hostBundleDir) {
-    cmdLine += L" --host-bundle-dir=\"" + *hostBundleDir + L"\"";
-  }
-  if (currentVersion) {
-    cmdLine += L" --current-version=\"" + *currentVersion + L"\"";
-  }
-  if (channel) {
-    cmdLine += L" --channel=\"" + *channel + L"\"";
-  }
-  if (forceUpdate) {
-    cmdLine += L" --force";
-  }
-
-  STARTUPINFOW si{};
-  si.cb = sizeof(si);
-  PROCESS_INFORMATION pi{};
-  BOOL ok = CreateProcessW(
-      nullptr,
-      cmdLine.data(),
-      nullptr,
-      nullptr,
-      FALSE,
-      CREATE_NO_WINDOW | DETACHED_PROCESS,
-      nullptr,
-      appDirectory.c_str(),
-      &si,
-      &pi);
-
-  if (ok) {
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    AppendLog("OTA.SpawnUpdateProcess.OK pid=" + std::to_string(pi.dwProcessId));
-  } else {
-    AppendLog("OTA.SpawnUpdateProcess.Failed error=" + std::to_string(GetLastError()));
+  try {
+    std::thread(
+        [appDirectory, remoteUrl, hostBundleDir, currentVersion, channel, forceUpdate]() noexcept {
+          RunNativeOtaUpdate(
+              appDirectory,
+              remoteUrl,
+              *hostBundleDir,
+              currentVersion,
+              channel,
+              forceUpdate);
+        })
+        .detach();
+    AppendLog("OTA.SpawnUpdateProcess.OK mode=native-thread");
+  } catch (std::exception const &error) {
+    AppendLog(std::string("OTA.SpawnUpdateProcess.Failed exception=") + error.what());
+  } catch (...) {
+    AppendLog("OTA.SpawnUpdateProcess.Failed exception=unknown");
   }
 }
 
