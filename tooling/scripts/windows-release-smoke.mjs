@@ -79,7 +79,7 @@ const companionStartupTargetPath = path.join(
   'startup',
   'companion-startup-target.json',
 );
-const cliPath = path.join(hostRoot, 'node_modules', '@react-native-community', 'cli', 'build', 'bin.js');
+const runWindowsCliWrapperPath = path.join(repoRoot, 'tooling', 'scripts', 'run-windows-cli-wrapper.cjs');
 const packageName = 'OpappWindowsHost';
 const applicationId = 'App';
 const windowPolicyRegistryPath = path.join(frontendRoot, 'contracts', 'windowing', 'src', 'window-policy-registry.json');
@@ -1853,8 +1853,7 @@ async function preparePackagedApp() {
   const releaseBuildProbe = runReleasePreflightOrThrow();
 
   const releaseArgs = [
-    cliPath,
-    'run-windows',
+    runWindowsCliWrapperPath,
     '--release',
     '--no-packager',
     '--no-launch',
@@ -2299,7 +2298,7 @@ async function main() {
   log(`otaStatePath=${otaStatePath}`);
   log(`launchConfigPath=${launchConfigPath}`);
   log(`preferencesPath=${preferencesPath}`);
-  log(`cliPath=${cliPath}`);
+  log(`runWindowsCliWrapperPath=${runWindowsCliWrapperPath}`);
   log(`scenario=${scenarioName}`);
   log(`scenarioDescription=${scenario.description}`);
   log(`optionalPrivateScenarioModulePath=${optionalPrivateScenarioModulePath}`);

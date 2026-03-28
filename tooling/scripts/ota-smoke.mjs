@@ -38,6 +38,8 @@ import {applyOtaUpdate, checkForUpdate, downloadOtaUpdate, readOtaState, rollbac
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
 const BUNDLE_ID = 'opapp.smoke.bundle';
+const MAIN_BUNDLE_ID = 'opapp.companion.main';
+const NESTED_BUNDLE_ID = 'opapp.hbr.workspace';
 const PLATFORM = 'smoke';
 
 // ---------------------------------------------------------------------------
@@ -442,8 +444,72 @@ async function main() {
       'rollback does not leak files from older snapshots into the restored bundle',
     );
 
-    // ── 10. download → apply → rollback (full HTTP end-to-end) ────────────
-    process.stdout.write('\n10. download \u2192 apply \u2192 rollback (full HTTP end-to-end)\n');
+    // ── 10. Main bundle apply preserves nested bundles ─────────────────────
+    process.stdout.write('\n10. main bundle apply preserves nested bundles\n');
+
+    const mainApplyCacheDir = path.join(tmpBase, 'main-apply-cache');
+    const mainHostBundleDir = path.join(tmpBase, 'main-host-bundle');
+
+    await _createFakeBundle(mainApplyCacheDir, MAIN_BUNDLE_ID, '0.2.0', PLATFORM);
+    await mkdir(mainHostBundleDir, {recursive: true});
+    await writeFile(
+      path.join(mainHostBundleDir, 'bundle-manifest.json'),
+      JSON.stringify(
+        {
+          bundleId: MAIN_BUNDLE_ID,
+          version: '0.1.0',
+          platform: PLATFORM,
+          entryFile: 'bundle.js',
+          sourceKind: 'local-build',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf8',
+    );
+    await writeFile(path.join(mainHostBundleDir, 'bundle.js'), '// host main bundle: 0.1.0\n', 'utf8');
+    await writeFile(path.join(mainHostBundleDir, 'only-in-host-main.txt'), 'main\n', 'utf8');
+    const nestedBundleDir = path.join(mainHostBundleDir, 'bundles', NESTED_BUNDLE_ID);
+    await mkdir(nestedBundleDir, {recursive: true});
+    await writeFile(
+      path.join(nestedBundleDir, 'bundle-manifest.json'),
+      JSON.stringify(
+        {
+          bundleId: NESTED_BUNDLE_ID,
+          version: '0.9.0',
+          platform: PLATFORM,
+          entryFile: 'index.private.windows.bundle',
+          sourceKind: 'sibling-staging',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(nestedBundleDir, 'index.private.windows.bundle'),
+      '// nested workspace bundle\n',
+      'utf8',
+    );
+
+    await applyOtaUpdate({
+      cacheDir: mainApplyCacheDir,
+      hostBundleDir: mainHostBundleDir,
+      platform: PLATFORM,
+      bundleId: MAIN_BUNDLE_ID,
+      version: '0.2.0',
+    });
+    ok(
+      await _exists(path.join(mainHostBundleDir, 'bundles', NESTED_BUNDLE_ID, 'index.private.windows.bundle')),
+      'main bundle apply keeps the existing nested private bundle when staged OTA payload omits bundles/',
+    );
+    ok(
+      !(await _exists(path.join(mainHostBundleDir, 'only-in-host-main.txt'))),
+      'main bundle apply still removes stale top-level files while preserving nested bundles',
+    );
+
+    // ── 11. download → apply → rollback (full HTTP end-to-end) ────────────
+    process.stdout.write('\n11. download \u2192 apply \u2192 rollback (full HTTP end-to-end)\n');
 
     // The registry still has BUNDLE_ID@0.1.0 and @0.2.0 with no channels/rollout
     // (state from section 8). Use a fresh cache and host dir for isolation.

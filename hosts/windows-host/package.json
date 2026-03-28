@@ -3,8 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "windows": "npx @react-native-community/cli run-windows --no-packager --logging --no-telemetry",
-    "build:windows": "npx @react-native-community/cli run-windows --no-packager --no-launch --logging --no-telemetry"
+    "windows": "node ../../tooling/scripts/run-windows-cli-wrapper.cjs --no-packager --logging --no-telemetry",
+    "build:windows": "node ../../tooling/scripts/run-windows-cli-wrapper.cjs --no-packager --no-launch --logging --no-telemetry"
   },
   "dependencies": {
     "react": "19.1.1",

@@ -46,6 +46,7 @@
  *                           Defaults to the persisted channel choice, or 'stable'.
  */
 
+import {existsSync} from 'node:fs';
 import {cp, mkdir, readFile, rename, rm, writeFile} from 'node:fs/promises';
 import {createHash, randomUUID} from 'node:crypto';
 import path from 'node:path';
