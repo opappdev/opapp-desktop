@@ -71,6 +71,12 @@ test('windows-release-smoke validate-only accepts explicit startup-target launch
   assert.equal(result.status, 0);
 });
 
+test('windows-release-smoke validate-only accepts explicit legacy startup-target launcher scenario', () => {
+  const result = runSmokeValidateOnly(['--scenario=legacy-startup-target-main-launcher']);
+
+  assert.equal(result.status, 0);
+});
+
 test('windows-release-smoke validate-only accepts explicit startup-target settings scenario', () => {
   const result = runSmokeValidateOnly(['--scenario=startup-target-settings']);
 
@@ -79,6 +85,12 @@ test('windows-release-smoke validate-only accepts explicit startup-target settin
 
 test('windows-release-smoke validate-only accepts explicit startup-target challenge-advisor scenario', () => {
   const result = runSmokeValidateOnly(['--scenario=startup-target-challenge-advisor']);
+
+  assert.equal(result.status, 0);
+});
+
+test('windows-release-smoke validate-only accepts explicit legacy startup-target challenge-advisor scenario', () => {
+  const result = runSmokeValidateOnly(['--scenario=legacy-startup-target-challenge-advisor']);
 
   assert.equal(result.status, 0);
 });

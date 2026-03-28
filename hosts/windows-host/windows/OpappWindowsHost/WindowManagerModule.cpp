@@ -190,6 +190,17 @@ struct OpappWindowManagerModule {
         OpappWindowsHost::SerializeStartupTargetPreference(preference));
   }
 
+  REACT_METHOD(ClearStartupTargetPreference, L"clearStartupTargetPreference")
+  void ClearStartupTargetPreference(
+      winrt::Microsoft::ReactNative::ReactPromise<void> &&result) noexcept {
+    if (!OpappWindowsHost::DeleteStartupTargetPreference()) {
+      result.Reject(L"Failed to clear startup target preference.");
+      return;
+    }
+
+    result.Resolve();
+  }
+
   REACT_METHOD(GetWindowSessionState, L"getWindowSessionState")
   void GetWindowSessionState(
       std::string windowId,

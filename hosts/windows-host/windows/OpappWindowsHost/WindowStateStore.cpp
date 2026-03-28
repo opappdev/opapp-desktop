@@ -112,6 +112,14 @@ bool WritePreferencesValue(
              GetPreferencesPath().c_str()) != FALSE;
 }
 
+bool DeletePreferencesSection(std::wstring const &section) noexcept {
+  return WritePrivateProfileStringW(
+             section.c_str(),
+             nullptr,
+             nullptr,
+             GetPreferencesPath().c_str()) != FALSE;
+}
+
 } // namespace
 
 std::optional<std::wstring> ReadSessionState(std::wstring const &windowId) noexcept {
@@ -257,6 +265,10 @@ bool SaveStartupTargetPreference(StartupTargetPreference const &preference) noex
           L"startup-target",
           L"presentation",
           normalizedPresentation);
+}
+
+bool DeleteStartupTargetPreference() noexcept {
+  return DeletePreferencesSection(L"startup-target");
 }
 
 std::string SerializeStartupTargetPreference(

@@ -28,6 +28,7 @@ const optionalHbrEntryPath = path.join(
 );
 const optionalHbrScenarioNames = new Set([
   'startup-target-challenge-advisor',
+  'legacy-startup-target-challenge-advisor',
   'launcher-open-challenge-advisor',
   'challenge-advisor-current-window',
 ]);
@@ -55,6 +56,12 @@ const defaultScenarios = [
     args: ['--scenario=startup-target-main-launcher', '--skip-prepare'],
   },
   {
+    name: 'legacy-startup-target-main-launcher',
+    description:
+      'legacy startup-target file migrates into native preferences before restoring the main launcher over a stored settings session',
+    args: ['--scenario=legacy-startup-target-main-launcher', '--skip-prepare'],
+  },
+  {
     name: 'startup-target-settings',
     description: 'saved settings startup target wins over a restored main-window launcher session',
     args: ['--scenario=startup-target-settings', '--skip-prepare'],
@@ -63,6 +70,12 @@ const defaultScenarios = [
     name: 'startup-target-challenge-advisor',
     description: 'saved challenge-advisor startup target wins over a restored main-window launcher session',
     args: ['--scenario=startup-target-challenge-advisor', '--skip-prepare'],
+  },
+  {
+    name: 'legacy-startup-target-challenge-advisor',
+    description:
+      'legacy startup-target file migrates into native preferences before switching the main window into the challenge-advisor child bundle',
+    args: ['--scenario=legacy-startup-target-challenge-advisor', '--skip-prepare'],
   },
   {
     name: 'launcher-open-challenge-advisor',

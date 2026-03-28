@@ -115,6 +115,7 @@ bool SaveWindowPreferences(WindowPreferences const &preferences) noexcept;
 std::string SerializeWindowPreferences(WindowPreferences const &preferences);
 std::optional<StartupTargetPreference> LoadStartupTargetPreference() noexcept;
 bool SaveStartupTargetPreference(StartupTargetPreference const &preference) noexcept;
+bool DeleteStartupTargetPreference() noexcept;
 std::string SerializeStartupTargetPreference(
     std::optional<StartupTargetPreference> const &preference);
 std::optional<std::wstring> ReadSessionState(std::wstring const &windowId) noexcept;

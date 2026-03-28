@@ -111,8 +111,10 @@ const supportedScenarioNames = [
   'tab-session',
   'restore-tab-session',
   'startup-target-main-launcher',
+  'legacy-startup-target-main-launcher',
   'startup-target-settings',
   'startup-target-challenge-advisor',
+  'legacy-startup-target-challenge-advisor',
   'launcher-open-challenge-advisor',
   'restore-settings-window',
   'settings-default-current-window',
@@ -125,6 +127,7 @@ const supportedScenarioNames = [
 ];
 const optionalHbrScenarioNames = new Set([
   'startup-target-challenge-advisor',
+  'legacy-startup-target-challenge-advisor',
   'launcher-open-challenge-advisor',
   'challenge-advisor-current-window',
 ]);
@@ -635,6 +638,112 @@ const smokeScenarios = {
       );
     },
   },
+  'legacy-startup-target-main-launcher': {
+    description:
+      'legacy startup target file migrates into native preferences before overriding a restored main-window settings session',
+    preferences: defaultPreferences,
+    launchConfig: {},
+    successMarkers: [
+      ...commonSuccessMarkers,
+      '[frontend-companion] startup-target-migration action=migrate bundle=opapp.companion.main surface=companion.main',
+      '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=companion.main presentation=current-window targetBundle=opapp.companion.main',
+      '[frontend-companion] session window=window.main tabs=1 active=',
+    ],
+    async prepareState() {
+      await writeFile(
+        sessionsPath,
+        buildPersistedSessionFile({
+          'window.main': {
+            windowId: 'window.main',
+            activeTabId: 'tab:companion.settings:1',
+            tabs: [
+              {
+                tabId: 'tab:companion.settings:1',
+                surfaceId: 'companion.settings',
+                policy: 'settings',
+              },
+            ],
+          },
+        }),
+        'utf8',
+      );
+      await writeFile(
+        companionStartupTargetPath,
+        JSON.stringify({
+          surfaceId: 'companion.main',
+          bundleId: 'opapp.companion.main',
+          policy: 'main',
+          presentation: 'current-window',
+        }),
+        'utf8',
+      );
+    },
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+      if (normalized.includes('InitialOpenSurface surface=')) {
+        throw new Error(
+          'Windows release smoke failed: legacy launcher startup target migration should not rely on an initial-open launch config.',
+        );
+      }
+
+      if (
+        normalized.includes(
+          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.settings policy=settings',
+        )
+      ) {
+        throw new Error(
+          'Windows release smoke failed: legacy launcher startup target migration still rendered the restored settings surface in the main window.',
+        );
+      }
+
+      if (await fileExists(companionStartupTargetPath)) {
+        throw new Error(
+          'Windows release smoke failed: legacy launcher startup target file was not deleted after migration.',
+        );
+      }
+
+      const preferencesFile = await readFile(preferencesPath, 'utf8');
+      if (!preferencesFile.includes('[startup-target]')) {
+        throw new Error(
+          'Windows release smoke failed: legacy launcher startup target migration did not persist a native startup-target section.',
+        );
+      }
+
+      if (!preferencesFile.includes('surface=companion.main')) {
+        throw new Error(
+          'Windows release smoke failed: native startup-target preference is missing the migrated launcher surface id.',
+        );
+      }
+
+      if (!preferencesFile.includes('bundle=opapp.companion.main')) {
+        throw new Error(
+          'Windows release smoke failed: native startup-target preference is missing the migrated launcher bundle id.',
+        );
+      }
+
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-companion\] session bundle=opapp\.companion\.main window=window\.main tabs=1 active=\S+ entries=[^\r\n]*companion\.main/i,
+        'legacy launcher startup target migration did not settle the main window session on the launcher surface.',
+      );
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.main',
+        'legacy launcher startup target migration did not persist the launcher surface back into the main window session.',
+      );
+      assertPersistedSessionLacksSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.settings',
+        'legacy launcher startup target migration left the restored settings surface in the main window session.',
+      );
+    },
+  },
   'startup-target-settings': {
     description: 'saved settings startup target overrides a restored main-window launcher session',
     preferences: defaultPreferences,
@@ -805,6 +914,130 @@ const smokeScenarios = {
         'window.main',
         'companion.main',
         'startup target challenge-advisor override left the restored launcher surface in the main window session.',
+      );
+    },
+  },
+  'legacy-startup-target-challenge-advisor': {
+    description:
+      'legacy startup target file migrates into native preferences before switching the main window into the child bundle during cold start',
+    preferences: defaultPreferences,
+    launchConfig: {},
+    successMarkers: [
+      'LaunchSurface surface=companion.main policy=main mode=',
+      'InstanceLoaded failed=false',
+      'NativeLogger[1] Running "OpappWindowsHost"',
+      'BundleManifestSource=manifest',
+      '[frontend-companion] startup-target-migration action=migrate bundle=opapp.hbr.workspace surface=hbr.challenge-advisor',
+      '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
+      'BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main',
+      'BundleSwitchReloadRequested window=window.main bundle=opapp.hbr.workspace',
+      '[frontend-companion] render bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
+      '[frontend-companion] mounted bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
+    ],
+    async prepareState() {
+      await writeFile(
+        sessionsPath,
+        buildPersistedSessionFile({
+          'window.main': {
+            windowId: 'window.main',
+            activeTabId: 'tab:companion.main:1',
+            tabs: [
+              {
+                tabId: 'tab:companion.main:1',
+                surfaceId: 'companion.main',
+                policy: 'main',
+              },
+            ],
+          },
+        }),
+        'utf8',
+      );
+      await writeFile(
+        companionStartupTargetPath,
+        JSON.stringify({
+          surfaceId: 'hbr.challenge-advisor',
+          bundleId: 'opapp.hbr.workspace',
+          policy: 'main',
+          presentation: 'current-window',
+        }),
+        'utf8',
+      );
+    },
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+      if (normalized.includes('InitialOpenSurface surface=')) {
+        throw new Error(
+          'Windows release smoke failed: legacy startup target migration should not rely on an initial-open launch config.',
+        );
+      }
+
+      if (!normalized.includes('Bundle\\bundles\\opapp.hbr.workspace')) {
+        throw new Error(
+          'Windows release smoke failed: legacy startup target migration did not point the host at the staged child bundle root.',
+        );
+      }
+
+      if (
+        normalized.includes(
+          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
+        )
+      ) {
+        throw new Error(
+          'Windows release smoke failed: legacy startup target migration still rendered the restored launcher surface in the main window.',
+        );
+      }
+
+      if (normalized.includes('surface-fallback bundle=opapp.hbr.workspace')) {
+        throw new Error(
+          'Windows release smoke failed: legacy startup target migration rendered through the fallback surface path.',
+        );
+      }
+
+      if (await fileExists(companionStartupTargetPath)) {
+        throw new Error(
+          'Windows release smoke failed: legacy startup target file was not deleted after migration.',
+        );
+      }
+
+      const preferencesFile = await readFile(preferencesPath, 'utf8');
+      if (!preferencesFile.includes('[startup-target]')) {
+        throw new Error(
+          'Windows release smoke failed: legacy startup target migration did not persist a native startup-target section.',
+        );
+      }
+
+      if (!preferencesFile.includes('surface=hbr.challenge-advisor')) {
+        throw new Error(
+          'Windows release smoke failed: native startup-target preference is missing the migrated challenge-advisor surface id.',
+        );
+      }
+
+      if (!preferencesFile.includes('bundle=opapp.hbr.workspace')) {
+        throw new Error(
+          'Windows release smoke failed: native startup-target preference is missing the migrated child bundle id.',
+        );
+      }
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        'hbr.challenge-advisor',
+        'legacy startup target migration did not persist the challenge-advisor surface into the main window session.',
+      );
+      assertPersistedSessionContains(
+        sessionFile,
+        'window.main',
+        'opapp.hbr.workspace',
+        'legacy startup target migration did not persist the challenge-advisor bundle id into the main window session.',
+      );
+      assertPersistedSessionLacksSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.main',
+        'legacy startup target migration left the restored launcher surface in the main window session.',
       );
     },
   },
