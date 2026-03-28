@@ -619,6 +619,29 @@ bool CloseManagedWindow(std::wstring const &windowId) noexcept {
   return false;
 }
 
+bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept {
+  auto &state = GetWindowManagerState();
+  if (!state.BundledRuntime) {
+    return true;
+  }
+
+  auto normalizedBundleId = bundleId;
+  if (normalizedBundleId.empty()) {
+    normalizedBundleId = L"opapp.companion.main";
+  }
+
+  auto bundleRootPath = ResolveBundleRootPath(state, normalizedBundleId);
+  if (!bundleRootPath) {
+    return false;
+  }
+
+  if (normalizedBundleId == L"opapp.companion.main") {
+    return true;
+  }
+
+  return ReadBundleManifestEntryFile(*bundleRootPath).has_value();
+}
+
 std::optional<std::string> OpenManagedWindow(LaunchSurfaceConfig const &launchSurface) noexcept {
   auto &state = GetWindowManagerState();
   if (!state.ReactNativeHost) {

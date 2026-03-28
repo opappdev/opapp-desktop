@@ -1,4 +1,5 @@
 import {spawnSync} from 'node:child_process';
+import {existsSync} from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath} from 'node:url';
@@ -18,6 +19,19 @@ const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
 const frontendRoot = path.join(workspaceRoot, 'opapp-frontend');
 const smokeScriptPath = path.join(repoRoot, 'tooling', 'scripts', 'windows-release-smoke.mjs');
+const optionalHbrEntryPath = path.join(
+  frontendRoot,
+  'apps',
+  'companion-app',
+  '.private-hbr',
+  'index.hbr.js',
+);
+const optionalHbrScenarioNames = new Set([
+  'startup-target-challenge-advisor',
+  'launcher-open-challenge-advisor',
+  'challenge-advisor-current-window',
+]);
+const optionalHbrEntryPresent = existsSync(optionalHbrEntryPath);
 
 const defaultScenarios = [
   {
@@ -54,6 +68,11 @@ const defaultScenarios = [
     name: 'launcher-open-challenge-advisor',
     description: 'main bundle launcher opens the challenge-advisor child bundle through its interaction path',
     args: ['--scenario=launcher-open-challenge-advisor', '--skip-prepare'],
+  },
+  {
+    name: 'challenge-advisor-current-window',
+    description: 'main bundle auto-open switches the current window into the challenge-advisor child bundle',
+    args: ['--scenario=challenge-advisor-current-window', '--skip-prepare'],
   },
   {
     name: 'settings-default-new-window',
@@ -161,6 +180,26 @@ function parseScenarioFilterNames(rawValue) {
 
 function log(message) {
   console.log(`[verify] ${message}`);
+}
+
+function filterOptionalHbrScenarios(scenarios) {
+  if (optionalHbrEntryPresent) {
+    return scenarios;
+  }
+
+  const skippedScenarios = scenarios.filter(scenario =>
+    optionalHbrScenarioNames.has(scenario.name),
+  );
+  if (skippedScenarios.length === 0) {
+    return scenarios;
+  }
+
+  log(
+    `skipping optional HBR scenarios because ${optionalHbrEntryPath} is missing: ${skippedScenarios
+      .map(scenario => scenario.name)
+      .join(', ')}`,
+  );
+  return scenarios.filter(scenario => !optionalHbrScenarioNames.has(scenario.name));
 }
 
 function runOrThrow(command, args, options = {}) {
@@ -310,13 +349,15 @@ function verifyPackagedScenarios(scenarios) {
 }
 
 function main() {
-  const scenarios = resolveScenariosOrThrow();
+  const scenarios = filterOptionalHbrScenarios(resolveScenariosOrThrow());
 
   log(`repoRoot=${repoRoot}`);
   log(`frontendRoot=${frontendRoot}`);
   log(`includeSecondaryWindowOnly=${includeSecondaryWindowOnly}`);
   log(`scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
   log(`scenarioCount=${scenarios.length}`);
+  log(`optionalHbrEntryPath=${optionalHbrEntryPath}`);
+  log(`optionalHbrEntryPresent=${optionalHbrEntryPresent}`);
   log(`validateOnly=${validateOnly}`);
   log(`preflightOnly=${preflightOnly}`);
   log(`launchMode=${launchMode}`);
@@ -334,6 +375,11 @@ function main() {
 
   if (validateOnly && preflightOnly) {
     throw new Error('`--validate-only` conflicts with `--preflight-only`; choose one execution mode.');
+  }
+
+  if (scenarios.length === 0) {
+    log('No runnable scenarios remain after optional HBR filtering.');
+    return;
   }
 
   if (validateOnly) {

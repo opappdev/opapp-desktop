@@ -22,6 +22,7 @@ void InitializeWindowManager(
 std::optional<std::string> GetCurrentManagedWindowPayload() noexcept;
 bool FocusManagedWindow(std::wstring const &windowId) noexcept;
 bool CloseManagedWindow(std::wstring const &windowId) noexcept;
+bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept;
 std::optional<std::string> OpenManagedWindow(LaunchSurfaceConfig const &launchSurface) noexcept;
 std::optional<std::string> SwitchMainWindowToBundle(
     std::wstring const &windowId,

@@ -77,6 +77,12 @@ test('verify-windows validate-only accepts launcher interaction challenge-adviso
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts current-window challenge-advisor scenario filter', () => {
+  const result = runVerifyValidateOnly(['--scenario=challenge-advisor-current-window']);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only accepts comma-separated scenario filters', () => {
   const result = runVerifyValidateOnly(['--scenario=tab-session,view-shot-current-window']);
 

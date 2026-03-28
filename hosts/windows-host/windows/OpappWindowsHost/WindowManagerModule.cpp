@@ -81,6 +81,15 @@ struct OpappWindowManagerModule {
     result.Resolve(currentWindow ? *currentWindow : std::string{});
   }
 
+  REACT_METHOD(CanOpenBundle, L"canOpenBundle")
+  void CanOpenBundle(
+      std::string bundleId,
+      winrt::Microsoft::ReactNative::ReactPromise<bool> &&result) noexcept {
+    result.Resolve(
+        OpappWindowsHost::CanOpenBundleTarget(
+            std::wstring(winrt::to_hstring(bundleId))));
+  }
+
   REACT_METHOD(GetWindowSession, L"getWindowSession")
   void GetWindowSession(
       std::string windowId,
