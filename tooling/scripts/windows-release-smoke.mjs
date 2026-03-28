@@ -106,6 +106,7 @@ const supportedScenarioNames = [
   'startup-target-main-launcher',
   'startup-target-settings',
   'startup-target-challenge-advisor',
+  'launcher-open-challenge-advisor',
   'restore-settings-window',
   'settings-default-current-window',
   'settings-default-new-window',
@@ -1078,6 +1079,67 @@ const smokeScenarios = {
       );
     },
   },
+  'launcher-open-challenge-advisor': {
+    description: 'main bundle launcher opens the challenge-advisor child bundle through its own interaction path',
+    preferences: defaultPreferences,
+    launchConfig: {
+      mainProps: {
+        'dev-smoke-scenario': 'launcher-open-challenge-advisor',
+      },
+    },
+    successMarkers: [
+      ...commonSuccessMarkers,
+      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
+      '[frontend-bundle-launcher] dev-smoke-start window=window.main target=challenge-advisor',
+      '[frontend-bundle-launcher] dev-smoke-selected target=challenge-advisor bundle=opapp.companion.challenge-advisor',
+      'BundleSwitchPrepared window=window.main bundle=opapp.companion.challenge-advisor surface=companion.challenge-advisor policy=main',
+      'BundleSwitchReloadRequested window=window.main bundle=opapp.companion.challenge-advisor',
+      '[frontend-companion] render bundle=opapp.companion.challenge-advisor window=window.main surface=companion.challenge-advisor policy=main',
+      '[frontend-companion] mounted bundle=opapp.companion.challenge-advisor window=window.main surface=companion.challenge-advisor policy=main',
+    ],
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+      if (normalized.includes('InitialOpenSurface surface=companion.challenge-advisor')) {
+        throw new Error(
+          'Windows release smoke failed: launcher interaction scenario still relied on initial-open challenge-advisor launch config.',
+        );
+      }
+
+      if (normalized.includes('[frontend-companion] startup-target-auto-open')) {
+        throw new Error(
+          'Windows release smoke failed: launcher interaction scenario was hijacked by startup-target auto-open.',
+        );
+      }
+
+      if (!normalized.includes('Bundle\\bundles\\opapp.companion.challenge-advisor')) {
+        throw new Error(
+          'Windows release smoke failed: launcher interaction bundle switch did not point the host at the staged challenge-advisor bundle root.',
+        );
+      }
+
+      if (normalized.includes('surface-fallback bundle=opapp.companion.challenge-advisor')) {
+        throw new Error(
+          'Windows release smoke failed: launcher interaction rendered the challenge-advisor child bundle through the fallback surface path.',
+        );
+      }
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.challenge-advisor',
+        'launcher interaction did not persist the challenge-advisor surface into the main window session.',
+      );
+      assertPersistedSessionContains(
+        sessionFile,
+        'window.main',
+        'opapp.companion.challenge-advisor',
+        'launcher interaction did not persist the challenge-advisor bundle id into the main window session.',
+      );
+    },
+  },
   'view-shot-current-window': {
     description: 'auto-open view-shot lab in the current window and run screenshot smoke',
     preferences: defaultPreferences,
@@ -1895,6 +1957,14 @@ function buildLaunchConfig() {
     content += '\n[initial-open-props]\n';
 
     for (const [key, value] of Object.entries(scenario.launchConfig.initialOpenProps)) {
+      content += `${key}=${value}\n`;
+    }
+  }
+
+  if (scenario.launchConfig.mainProps) {
+    content += '\n[main-props]\n';
+
+    for (const [key, value] of Object.entries(scenario.launchConfig.mainProps)) {
       content += `${key}=${value}\n`;
     }
   }

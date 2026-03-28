@@ -83,6 +83,12 @@ test('windows-release-smoke validate-only accepts explicit startup-target challe
   assert.equal(result.status, 0);
 });
 
+test('windows-release-smoke validate-only accepts explicit launcher interaction challenge-advisor scenario', () => {
+  const result = runSmokeValidateOnly(['--scenario=launcher-open-challenge-advisor']);
+
+  assert.equal(result.status, 0);
+});
+
 test('windows-release-smoke validate-only accepts --portable with --launch=portable', () => {
   const result = runSmokeValidateOnly(['--portable', '--launch=portable']);
 

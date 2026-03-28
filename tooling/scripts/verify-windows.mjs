@@ -51,6 +51,11 @@ const defaultScenarios = [
     args: ['--scenario=startup-target-challenge-advisor', '--skip-prepare'],
   },
   {
+    name: 'launcher-open-challenge-advisor',
+    description: 'main bundle launcher opens the challenge-advisor child bundle through its interaction path',
+    args: ['--scenario=launcher-open-challenge-advisor', '--skip-prepare'],
+  },
+  {
     name: 'settings-default-new-window',
     description: 'saved settings preference opens the default settings entry in a detached window and seeds a detached session',
     args: ['--scenario=settings-default-new-window', '--skip-prepare', '--preserve-state', '--reset-sessions'],
@@ -174,6 +179,14 @@ function runCmdOrThrow(args, options = {}) {
   runOrThrow('cmd.exe', ['/d', '/s', '/c', ...args], options);
 }
 
+function resolveSmokeArgsForRun(scenario, scenarioIndex) {
+  if (scenarioIndex !== 0) {
+    return scenario.args;
+  }
+
+  return scenario.args.filter(argument => argument !== '--skip-prepare');
+}
+
 function typecheckFrontend() {
   log(`typechecking frontend at ${frontendRoot}`);
 
@@ -192,11 +205,12 @@ function typecheckFrontend() {
   });
 }
 
-function runWindowsSmoke(scenario) {
+function runWindowsSmoke(scenario, scenarioIndex) {
   log(`running ${launchMode} Windows smoke: ${scenario.name} (${scenario.description})`);
+  const scenarioArgs = resolveSmokeArgsForRun(scenario, scenarioIndex);
   const smokeArgs = [
     smokeScriptPath,
-    ...scenario.args,
+    ...scenarioArgs,
     `--launch=${launchMode}`,
     `--readiness-ms=${readinessTimeoutMs}`,
     `--smoke-ms=${smokeTimeoutMs}`,
@@ -287,8 +301,8 @@ function resolveScenariosOrThrow() {
 function verifyPackagedScenarios(scenarios) {
   const scenarioTimings = [];
 
-  for (const scenario of scenarios) {
-    const durationMs = runWindowsSmoke(scenario);
+  for (const [scenarioIndex, scenario] of scenarios.entries()) {
+    const durationMs = runWindowsSmoke(scenario, scenarioIndex);
     scenarioTimings.push({name: scenario.name, durationMs});
   }
 
