@@ -12,7 +12,11 @@
 #include "AutolinkedNativeModules.g.h"
 #include "NativeModules.h"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdint>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -20,9 +24,11 @@
 #include <thread>
 #include <urlmon.h>
 #include <vector>
+#include <bcrypt.h>
 #include <winrt/Windows.Data.Json.h>
 
 #pragma comment(lib, "urlmon.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 using namespace OpappWindowsHost;
 
@@ -440,6 +446,168 @@ bool DownloadUrlToFile(
   return true;
 }
 
+std::optional<std::string> ComputeSha256Hex(std::filesystem::path const &filePath) {
+  BCRYPT_ALG_HANDLE algorithmHandle = nullptr;
+  BCRYPT_HASH_HANDLE hashHandle = nullptr;
+  std::vector<uint8_t> hashObject;
+  std::vector<uint8_t> hashValue;
+
+  auto cleanup = [&]() noexcept {
+    if (hashHandle) {
+      BCryptDestroyHash(hashHandle);
+      hashHandle = nullptr;
+    }
+    if (algorithmHandle) {
+      BCryptCloseAlgorithmProvider(algorithmHandle, 0);
+      algorithmHandle = nullptr;
+    }
+  };
+
+  try {
+    if (BCryptOpenAlgorithmProvider(&algorithmHandle, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    DWORD objectSize = 0;
+    DWORD bytesWritten = 0;
+    if (BCryptGetProperty(
+            algorithmHandle,
+            BCRYPT_OBJECT_LENGTH,
+            reinterpret_cast<PUCHAR>(&objectSize),
+            sizeof(objectSize),
+            &bytesWritten,
+            0) != 0 ||
+        objectSize == 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    DWORD hashSize = 0;
+    if (BCryptGetProperty(
+            algorithmHandle,
+            BCRYPT_HASH_LENGTH,
+            reinterpret_cast<PUCHAR>(&hashSize),
+            sizeof(hashSize),
+            &bytesWritten,
+            0) != 0 ||
+        hashSize == 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    hashObject.resize(objectSize);
+    hashValue.resize(hashSize);
+
+    if (BCryptCreateHash(
+            algorithmHandle,
+            &hashHandle,
+            hashObject.data(),
+            objectSize,
+            nullptr,
+            0,
+            0) != 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    std::ifstream stream(filePath, std::ios::binary);
+    if (!stream.is_open()) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    std::vector<char> buffer(64 * 1024);
+    while (stream.good()) {
+      stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+      auto chunkSize = stream.gcount();
+      if (chunkSize <= 0) {
+        continue;
+      }
+
+      if (BCryptHashData(
+              hashHandle,
+              reinterpret_cast<PUCHAR>(buffer.data()),
+              static_cast<ULONG>(chunkSize),
+              0) != 0) {
+        cleanup();
+        return std::nullopt;
+      }
+    }
+
+    if (!stream.eof()) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    if (BCryptFinishHash(hashHandle, hashValue.data(), hashSize, 0) != 0) {
+      cleanup();
+      return std::nullopt;
+    }
+
+    std::ostringstream hashHex;
+    hashHex << std::hex << std::setfill('0');
+    for (auto byte : hashValue) {
+      hashHex << std::setw(2) << static_cast<int>(byte);
+    }
+
+    cleanup();
+    return hashHex.str();
+  } catch (...) {
+    cleanup();
+    return std::nullopt;
+  }
+}
+
+bool VerifyBundleChecksum(
+    winrt::Windows::Data::Json::JsonObject const &manifestObject,
+    std::filesystem::path const &bundlePath) {
+  auto checksumObject = manifestObject.GetNamedObject(L"checksum", nullptr);
+  if (!checksumObject) {
+    AppendLog("OTA.Native.Checksum.Skip reason=manifest-missing-checksum");
+    return true;
+  }
+
+  std::wstring algorithm = checksumObject.GetNamedString(L"algorithm", L"").c_str();
+  std::wstring expectedValue = checksumObject.GetNamedString(L"value", L"").c_str();
+  if (algorithm.empty() || expectedValue.empty()) {
+    AppendLog("OTA.Native.Checksum.Failed reason=invalid-checksum-metadata");
+    return false;
+  }
+
+  std::transform(
+      algorithm.begin(),
+      algorithm.end(),
+      algorithm.begin(),
+      [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+  if (algorithm != L"sha256") {
+    AppendLog("OTA.Native.Checksum.Failed reason=unsupported-algorithm value=" + ToUtf8(algorithm));
+    return false;
+  }
+
+  auto computedValue = ComputeSha256Hex(bundlePath);
+  if (!computedValue) {
+    AppendLog("OTA.Native.Checksum.Failed reason=compute-error path=" + ToUtf8(bundlePath.wstring()));
+    return false;
+  }
+
+  auto expectedUtf8 = ToUtf8(expectedValue);
+  std::transform(
+      expectedUtf8.begin(),
+      expectedUtf8.end(),
+      expectedUtf8.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  if (*computedValue != expectedUtf8) {
+    AppendLog(
+        "OTA.Native.Checksum.Failed reason=mismatch expected=" + expectedUtf8 +
+        " computed=" + *computedValue);
+    return false;
+  }
+
+  AppendLog("OTA.Native.Checksum.OK value=" + *computedValue);
+  return true;
+}
+
 bool ReplaceDirectoryWithCopy(
     std::filesystem::path const &sourceDirectory,
     std::filesystem::path const &targetDirectory,
@@ -745,6 +913,21 @@ void RunNativeOtaUpdate(
             artifactBaseUrl + L"/" + entryFileName,
             entryFilePath,
             "OTA.Native.DownloadEntryFile")) {
+      WriteOtaLastRun(
+          cacheRoot,
+          normalizedRemoteUrl,
+          L"failed",
+          resolvedBundleId,
+          resolvedChannel,
+          currentVersion,
+          latestVersion,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt);
+      return;
+    }
+
+    if (!VerifyBundleChecksum(*manifestObject, entryFilePath)) {
       WriteOtaLastRun(
           cacheRoot,
           normalizedRemoteUrl,
