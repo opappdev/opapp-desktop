@@ -1,5 +1,6 @@
 import {existsSync} from 'node:fs';
 import {readFile, unlink} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import {
@@ -48,6 +49,8 @@ const readinessTimeoutMs = parsePositiveIntegerArg(
   defaultReadinessTimeoutMs,
 );
 const smokeTimeoutMs = parsePositiveIntegerArg(process.argv, '--smoke-ms', defaultSmokeTimeoutMs);
+
+const foregroundWindowTitles = ['OpappWindowsHost', 'Opapp Tool', 'Opapp Settings'];
 
 const defaultScenarios = [
   {
@@ -239,6 +242,82 @@ function extractLoggedPath(logContents, regex, reason) {
   return match[1].trim();
 }
 
+function escapePowerShellSingleQuotedString(value) {
+  return String(value).replace(/'/g, "''");
+}
+
+function tryPromoteOpappWindowToForeground({
+  windowTitles = foregroundWindowTitles,
+  timeoutMs = 5000,
+  retryDelayMs = 200,
+} = {}) {
+  const titleList = windowTitles
+    .map(title => `'${escapePowerShellSingleQuotedString(title)}'`)
+    .join(', ');
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class OpappVerifyForegroundNative {
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int command);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+}
+"@
+
+$titles = @(${titleList})
+$deadline = [DateTime]::UtcNow.AddMilliseconds(${timeoutMs})
+
+while ([DateTime]::UtcNow -lt $deadline) {
+  $candidate = Get-Process -Name 'OpappWindowsHost' -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.MainWindowHandle -ne 0 -and
+      -not [string]::IsNullOrWhiteSpace($_.MainWindowTitle) -and
+      $titles -contains $_.MainWindowTitle
+    } |
+    Select-Object -First 1
+
+  if ($candidate) {
+    $handle = [IntPtr]$candidate.MainWindowHandle
+    [void][OpappVerifyForegroundNative]::ShowWindowAsync($handle, 9)
+    [void][OpappVerifyForegroundNative]::BringWindowToTop($handle)
+    [void][OpappVerifyForegroundNative]::SetForegroundWindow($handle)
+    Start-Sleep -Milliseconds 120
+
+    $foregroundHandle = [OpappVerifyForegroundNative]::GetAncestor([OpappVerifyForegroundNative]::GetForegroundWindow(), 2)
+    $targetHandle = [OpappVerifyForegroundNative]::GetAncestor($handle, 2)
+    if ([int64]$foregroundHandle -eq [int64]$targetHandle) {
+      Write-Output ("focused:" + $candidate.MainWindowTitle)
+      exit 0
+    }
+  }
+
+  Start-Sleep -Milliseconds ${retryDelayMs}
+}
+
+exit 1
+`;
+
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+    },
+  );
+  const stdout = (result.stdout ?? '').trim();
+  const stderr = (result.stderr ?? '').trim();
+  return {
+    ok: result.status === 0,
+    stdout,
+    stderr,
+  };
+}
+
 function parseScenarioFilterNames(rawValue) {
   if (!rawValue) {
     return [];
@@ -405,6 +484,19 @@ async function runDevScenario(scenario) {
             timeoutMs: readinessTimeoutMs,
           },
         ),
+      );
+    }
+
+    const foregroundResult = tryPromoteOpappWindowToForeground();
+    if (foregroundResult.ok) {
+      log(
+        'verify-dev',
+        `Foreground assist confirmed for scenario '${scenario.name}': ${foregroundResult.stdout || 'focused'}`,
+      );
+    } else {
+      log(
+        'verify-dev',
+        `Foreground assist could not confirm focus for scenario '${scenario.name}'. stdout=${foregroundResult.stdout || '<empty>'} stderr=${foregroundResult.stderr || '<empty>'}`,
       );
     }
 

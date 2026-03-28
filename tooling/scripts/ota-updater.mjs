@@ -258,6 +258,14 @@ export async function applyOtaUpdate({cacheDir, hostBundleDir, platform, bundleI
     const stagedManifest = JSON.parse(await readFile(stagedManifestPath, 'utf8'));
     stagedManifest.sourceKind = 'sibling-staging';
     await writeFile(stagedManifestPath, JSON.stringify(stagedManifest, null, 2) + '\n', 'utf8');
+
+    if (resolvedBundleId === 'opapp.companion.main') {
+      const stagedBundlesDir = path.join(stagedDir, 'bundles');
+      const existingBundlesDir = path.join(hostBundleDir, 'bundles');
+      if (!existsSync(stagedBundlesDir) && existsSync(existingBundlesDir)) {
+        await cp(existingBundlesDir, stagedBundlesDir, {recursive: true, force: true});
+      }
+    }
   });
 
   const stagedAt = new Date().toISOString();

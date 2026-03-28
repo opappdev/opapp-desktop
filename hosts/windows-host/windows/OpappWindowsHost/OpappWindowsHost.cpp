@@ -862,7 +862,8 @@ bool VerifyBundleChecksum(
 bool ReplaceDirectoryWithCopy(
     std::filesystem::path const &sourceDirectory,
     std::filesystem::path const &targetDirectory,
-    std::optional<std::wstring> const &sourceKindOverride = std::nullopt) {
+    std::optional<std::wstring> const &sourceKindOverride = std::nullopt,
+    bool preserveExistingNestedBundles = false) {
   std::filesystem::path tempDirectory;
   try {
     auto parentDirectory = targetDirectory.parent_path();
@@ -893,6 +894,21 @@ bool ReplaceDirectoryWithCopy(
         return false;
       }
       AppendLog("OTA.Native.ManifestPatch.OK sourceKind=" + ToUtf8(*sourceKindOverride));
+    }
+    if (preserveExistingNestedBundles) {
+      auto existingBundlesDirectory = targetDirectory / L"bundles";
+      auto stagedBundlesDirectory = tempDirectory / L"bundles";
+      if (!std::filesystem::exists(stagedBundlesDirectory) &&
+          std::filesystem::exists(existingBundlesDirectory)) {
+        std::filesystem::copy(
+            existingBundlesDirectory,
+            stagedBundlesDirectory,
+            std::filesystem::copy_options::recursive |
+                std::filesystem::copy_options::overwrite_existing);
+        AppendLog(
+            "OTA.Native.PreservedNestedBundles source=" +
+            ToUtf8(existingBundlesDirectory.wstring()));
+      }
     }
     std::filesystem::remove_all(targetDirectory, ignoredError);
     std::filesystem::rename(tempDirectory, targetDirectory);
@@ -1330,7 +1346,8 @@ void RunNativeOtaUpdate(
     if (!ReplaceDirectoryWithCopy(
             stagedDirectory,
             std::filesystem::path(hostBundleDir),
-            std::wstring(L"sibling-staging"))) {
+            std::wstring(L"sibling-staging"),
+            *resolvedBundleId == L"opapp.companion.main")) {
       AppendLog("OTA.Native.ApplyFailed hostBundleDir=" + ToUtf8(hostBundleDir));
       WriteOtaLastRun(
           cacheRoot,
