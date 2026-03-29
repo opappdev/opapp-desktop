@@ -123,6 +123,34 @@ struct OpappWindowManagerModule {
         bundlePayload.Insert(L"sourceKind", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
       }
 
+      if (bundle.ProvenanceKind && !bundle.ProvenanceKind->empty()) {
+        bundlePayload.Insert(
+            L"provenanceKind",
+            winrt::Windows::Data::Json::JsonValue::CreateStringValue(*bundle.ProvenanceKind));
+      } else {
+        bundlePayload.Insert(L"provenanceKind", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
+      if (bundle.ProvenanceStatus && !bundle.ProvenanceStatus->empty()) {
+        bundlePayload.Insert(
+            L"provenanceStatus",
+            winrt::Windows::Data::Json::JsonValue::CreateStringValue(*bundle.ProvenanceStatus));
+      } else {
+        bundlePayload.Insert(
+            L"provenanceStatus",
+            winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
+      if (bundle.ProvenanceStagedAt && !bundle.ProvenanceStagedAt->empty()) {
+        bundlePayload.Insert(
+            L"provenanceStagedAt",
+            winrt::Windows::Data::Json::JsonValue::CreateStringValue(*bundle.ProvenanceStagedAt));
+      } else {
+        bundlePayload.Insert(
+            L"provenanceStagedAt",
+            winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
       payload.Append(bundlePayload);
     }
 

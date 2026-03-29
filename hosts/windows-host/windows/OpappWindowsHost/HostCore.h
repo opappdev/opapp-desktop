@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
@@ -135,5 +136,6 @@ std::optional<std::wstring> GetMainDevSmokeScenario() noexcept;
 std::optional<std::wstring> GetOtaRemoteUrl() noexcept;
 std::optional<std::wstring> GetOtaChannel() noexcept;
 bool GetOtaForceUpdate() noexcept;
+std::filesystem::path ResolveOtaCacheRoot(std::wstring const &appDirectory);
 
 } // namespace OpappWindowsHost

@@ -15,6 +15,9 @@ struct StagedBundleDescriptor {
   std::wstring BundleId;
   std::optional<std::wstring> Version;
   std::optional<std::wstring> SourceKind;
+  std::optional<std::wstring> ProvenanceKind;
+  std::optional<std::wstring> ProvenanceStatus;
+  std::optional<std::wstring> ProvenanceStagedAt;
 };
 
 winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(

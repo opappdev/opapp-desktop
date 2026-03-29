@@ -627,7 +627,7 @@ std::optional<std::filesystem::path> ResolveRepoRootFromAppDirectory(std::wstrin
   return std::nullopt;
 }
 
-std::filesystem::path ResolveOtaCacheRoot(std::wstring const &appDirectory) {
+std::filesystem::path ResolveOtaCacheRootImpl(std::wstring const &appDirectory) {
   if (auto repoRoot = ResolveRepoRootFromAppDirectory(appDirectory)) {
     return *repoRoot / L".ota-cache";
   }
@@ -1164,7 +1164,7 @@ void RunNativeOtaUpdate(
     bool forceUpdate) noexcept {
   auto normalizedRemoteUrl = TrimTrailingSlashes(remoteUrl);
   auto resolvedChannel = std::wstring(L"stable");
-  auto cacheRoot = ResolveOtaCacheRoot(appDirectory);
+  auto cacheRoot = ResolveOtaCacheRootImpl(appDirectory);
   std::optional<std::wstring> resolvedBundleIdForLastRun;
   std::optional<std::wstring> resolvedDeviceIdForLastRun;
   std::optional<std::wstring> latestVersionForLastRun;
@@ -1667,6 +1667,10 @@ void SpawnWatchdogHeartbeat(std::wstring const &appDirectory) noexcept {
 }
 
 } // namespace
+
+std::filesystem::path OpappWindowsHost::ResolveOtaCacheRoot(std::wstring const &appDirectory) {
+  return ResolveOtaCacheRootImpl(appDirectory);
+}
 
 // A PackageProvider containing any turbo modules you define within this app project
 struct CompReactPackageProvider

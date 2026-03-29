@@ -2,12 +2,14 @@
 #include "WindowManager.h"
 #include "NativeModules.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
 #include <set>
+#include <cwctype>
 
 #include <winrt/Windows.Data.Json.h>
 
@@ -19,6 +21,22 @@ struct BundleManifestMetadata {
   std::optional<std::wstring> EntryFile;
   std::optional<std::wstring> Version;
   std::optional<std::wstring> SourceKind;
+};
+
+struct OtaStateMetadata {
+  std::optional<std::wstring> BundleId;
+  std::optional<std::wstring> HostBundleDir;
+  std::optional<std::wstring> StagedAt;
+  std::optional<std::wstring> Version;
+};
+
+struct OtaLastRunMetadata {
+  std::optional<std::wstring> BundleId;
+  std::optional<std::wstring> CurrentVersion;
+  std::optional<std::wstring> RecordedAt;
+  std::optional<std::wstring> StagedAt;
+  std::optional<std::wstring> Status;
+  std::optional<std::wstring> Version;
 };
 
 template <typename TValue, typename TGetter>
@@ -79,6 +97,99 @@ std::optional<BundleManifestMetadata> ReadBundleManifestMetadata(std::wstring co
   } catch (...) {
     return std::nullopt;
   }
+}
+
+std::optional<winrt::Windows::Data::Json::JsonObject> ReadJsonObjectFile(
+    std::filesystem::path const &jsonPath) noexcept {
+  try {
+    std::ifstream stream(jsonPath, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    return winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<OtaStateMetadata> ReadOtaStateMetadata(std::wstring const &appDirectory) noexcept {
+  auto otaStateObject = ReadJsonObjectFile(ResolveOtaCacheRoot(appDirectory) / L"ota-state.json");
+  if (!otaStateObject) {
+    return std::nullopt;
+  }
+
+  OtaStateMetadata metadata;
+  metadata.BundleId = ReadBundleManifestStringField(*otaStateObject, L"bundleId");
+  metadata.HostBundleDir = ReadBundleManifestStringField(*otaStateObject, L"hostBundleDir");
+  metadata.StagedAt = ReadBundleManifestStringField(*otaStateObject, L"stagedAt");
+  metadata.Version = ReadBundleManifestStringField(*otaStateObject, L"version");
+  return metadata;
+}
+
+std::optional<OtaLastRunMetadata> ReadOtaLastRunMetadata(std::wstring const &appDirectory) noexcept {
+  auto otaLastRunObject = ReadJsonObjectFile(ResolveOtaCacheRoot(appDirectory) / L"last-run.json");
+  if (!otaLastRunObject) {
+    return std::nullopt;
+  }
+
+  OtaLastRunMetadata metadata;
+  metadata.BundleId = ReadBundleManifestStringField(*otaLastRunObject, L"bundleId");
+  metadata.CurrentVersion = ReadBundleManifestStringField(*otaLastRunObject, L"currentVersion");
+  metadata.RecordedAt = ReadBundleManifestStringField(*otaLastRunObject, L"recordedAt");
+  metadata.StagedAt = ReadBundleManifestStringField(*otaLastRunObject, L"stagedAt");
+  metadata.Status = ReadBundleManifestStringField(*otaLastRunObject, L"status");
+  metadata.Version = ReadBundleManifestStringField(*otaLastRunObject, L"version");
+  return metadata;
+}
+
+std::wstring NormalizePathForComparison(std::filesystem::path const &targetPath) noexcept {
+  auto normalizedPath = targetPath.lexically_normal().wstring();
+  std::transform(
+      normalizedPath.begin(),
+      normalizedPath.end(),
+      normalizedPath.begin(),
+      [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+  return normalizedPath;
+}
+
+bool OtaStateMatchesBundle(
+    OtaStateMetadata const &otaState,
+    std::filesystem::path const &bundleRoot,
+    std::wstring const &bundleId,
+    std::optional<std::wstring> const &bundleVersion) noexcept {
+  if (!otaState.BundleId || otaState.BundleId->empty() || *otaState.BundleId != bundleId) {
+    return false;
+  }
+
+  if (!otaState.HostBundleDir || otaState.HostBundleDir->empty()) {
+    return false;
+  }
+
+  if (bundleVersion && (!otaState.Version || otaState.Version->empty() || *otaState.Version != *bundleVersion)) {
+    return false;
+  }
+
+  return NormalizePathForComparison(std::filesystem::path(*otaState.HostBundleDir)) ==
+      NormalizePathForComparison(bundleRoot);
+}
+
+bool OtaLastRunMatchesBundle(
+    OtaLastRunMetadata const &lastRun,
+    std::wstring const &bundleId,
+    std::optional<std::wstring> const &bundleVersion) noexcept {
+  if (!lastRun.BundleId || lastRun.BundleId->empty() || *lastRun.BundleId != bundleId) {
+    return false;
+  }
+
+  if (!bundleVersion || bundleVersion->empty()) {
+    return true;
+  }
+
+  return
+      (lastRun.Version && !lastRun.Version->empty() && *lastRun.Version == *bundleVersion) ||
+      (lastRun.CurrentVersion && !lastRun.CurrentVersion->empty() && *lastRun.CurrentVersion == *bundleVersion);
 }
 
 std::optional<std::wstring> ReadBundleManifestEntryFile(std::wstring const &bundleRoot) noexcept {
@@ -687,6 +798,9 @@ std::vector<StagedBundleDescriptor> ListStagedBundles() noexcept {
     return bundles;
   }
 
+  auto otaState = ReadOtaStateMetadata(state.AppDirectory);
+  auto otaLastRun = ReadOtaLastRunMetadata(state.AppDirectory);
+
   try {
     auto bundlesRoot = std::filesystem::path(state.AppDirectory) / L"Bundle" / L"bundles";
     if (!std::filesystem::exists(bundlesRoot) || !std::filesystem::is_directory(bundlesRoot)) {
@@ -713,10 +827,27 @@ std::vector<StagedBundleDescriptor> ListStagedBundles() noexcept {
       }
 
       if (seenBundleIds.insert(resolvedBundleId).second) {
+        std::optional<std::wstring> provenanceKind = L"host-staged-only";
+        std::optional<std::wstring> provenanceStatus;
+        std::optional<std::wstring> provenanceStagedAt;
+        if (otaState && OtaStateMatchesBundle(*otaState, bundleRoot, resolvedBundleId, manifest->Version)) {
+          provenanceKind = L"native-ota-applied";
+          provenanceStagedAt = otaState->StagedAt;
+          if (otaLastRun && OtaLastRunMatchesBundle(*otaLastRun, resolvedBundleId, manifest->Version)) {
+            provenanceStatus = otaLastRun->Status;
+            if ((!provenanceStagedAt || provenanceStagedAt->empty()) && otaLastRun->StagedAt) {
+              provenanceStagedAt = otaLastRun->StagedAt;
+            }
+          }
+        }
+
         bundles.push_back(StagedBundleDescriptor{
             std::move(resolvedBundleId),
             manifest->Version,
             manifest->SourceKind,
+            provenanceKind,
+            provenanceStatus,
+            provenanceStagedAt,
         });
       }
     }
