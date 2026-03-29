@@ -26,6 +26,16 @@ function createBaseLastRun(overrides = {}) {
   };
 }
 
+function createFailedLastRun(overrides = {}) {
+  return createBaseLastRun({
+    status: 'failed',
+    version: undefined,
+    previousVersion: undefined,
+    stagedAt: undefined,
+    ...overrides,
+  });
+}
+
 test('validateOtaLastRunRecord accepts updated runs with a staged version', () => {
   const result = validateOtaLastRunRecord({
     otaLastRun: createBaseLastRun(),
@@ -73,6 +83,75 @@ test('validateOtaLastRunRecord accepts up-to-date runs without a staged version'
   assert.deepEqual(result, {requiresOtaState: false, status: 'up-to-date'});
 });
 
+test('validateOtaLastRunRecord accepts explicit updated status expectations', () => {
+  const result = validateOtaLastRunRecord({
+    otaLastRun: createBaseLastRun(),
+    otaRemoteBase: 'https://r2.opapp.dev',
+    loggedCurrentVersion: '0.9.0',
+    expectedStatus: 'updated',
+  });
+
+  assert.deepEqual(result, {requiresOtaState: true, status: 'updated'});
+});
+
+test('validateOtaLastRunRecord accepts explicit up-to-date status expectations', () => {
+  const result = validateOtaLastRunRecord({
+    otaLastRun: createBaseLastRun({
+      status: 'up-to-date',
+      hasUpdate: false,
+      inRollout: false,
+      version: undefined,
+      previousVersion: undefined,
+      stagedAt: undefined,
+    }),
+    otaRemoteBase: 'https://r2.opapp.dev',
+    loggedCurrentVersion: '0.9.0',
+    expectedStatus: 'up-to-date',
+  });
+
+  assert.deepEqual(result, {requiresOtaState: false, status: 'up-to-date'});
+});
+
+test('validateOtaLastRunRecord accepts failed runs with preserved remote metadata', () => {
+  const result = validateOtaLastRunRecord({
+    otaLastRun: createFailedLastRun({
+      channels: {
+        stable: '0.9.0',
+        beta: '1.0.0',
+      },
+    }),
+    otaRemoteBase: 'https://r2.opapp.dev',
+    loggedCurrentVersion: '0.9.0',
+    expectedChannels: {
+      beta: '1.0.0',
+      stable: '0.9.0',
+    },
+    expectedLatestVersion: '1.0.0',
+    expectedStatus: 'failed',
+  });
+
+  assert.deepEqual(result, {requiresOtaState: false, status: 'failed'});
+});
+
+test('validateOtaLastRunRecord accepts failed runs before bundle metadata is resolved', () => {
+  const result = validateOtaLastRunRecord({
+    otaLastRun: createFailedLastRun({
+      bundleId: undefined,
+      latestVersion: undefined,
+      deviceId: undefined,
+      hasUpdate: undefined,
+      inRollout: undefined,
+      rolloutPercent: undefined,
+      channels: undefined,
+    }),
+    otaRemoteBase: 'https://r2.opapp.dev',
+    loggedCurrentVersion: '0.9.0',
+    expectedStatus: 'failed',
+  });
+
+  assert.deepEqual(result, {requiresOtaState: false, status: 'failed'});
+});
+
 test('resolveExpectedOtaLatestVersion prefers channel pins, then stable fallback, then versions[]', () => {
   assert.equal(
     resolveExpectedOtaLatestVersion({
@@ -116,6 +195,26 @@ test('resolveExpectedOtaLatestVersion prefers channel pins, then stable fallback
   );
 });
 
+test('validateOtaLastRunRecord rejects explicit updated status expectations when no update was applied', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createBaseLastRun({
+          status: 'up-to-date',
+          hasUpdate: false,
+          inRollout: false,
+          version: undefined,
+          previousVersion: undefined,
+          stagedAt: undefined,
+        }),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedStatus: 'updated',
+      }),
+    /expected 'updated'/,
+  );
+});
+
 test('validateOtaLastRunRecord rejects runs that drop remote channels metadata', () => {
   assert.throws(
     () =>
@@ -129,6 +228,103 @@ test('validateOtaLastRunRecord rejects runs that drop remote channels metadata',
         },
       }),
     /missing the remote channels map/,
+  );
+});
+
+test('validateOtaLastRunRecord rejects failed runs that keep staged metadata', () => {
+  for (const field of ['version', 'previousVersion', 'stagedAt']) {
+    assert.throws(
+      () =>
+        validateOtaLastRunRecord({
+          otaLastRun: createFailedLastRun({
+            [field]: 'unexpected',
+          }),
+          otaRemoteBase: 'https://r2.opapp.dev',
+          loggedCurrentVersion: '0.9.0',
+          expectedStatus: 'failed',
+        }),
+      /must not report staged/,
+      `failed run should not keep ${field}`,
+    );
+  }
+});
+
+test('validateOtaLastRunRecord rejects failed runs that drop the resolved channel', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createFailedLastRun({
+          channel: undefined,
+        }),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedStatus: 'failed',
+      }),
+    /missing the resolved channel/,
+  );
+});
+
+test('validateOtaLastRunRecord rejects failed runs that drop currentVersion after the host logged it', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createFailedLastRun({
+          currentVersion: undefined,
+        }),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedStatus: 'failed',
+      }),
+    /missing currentVersion even though the host logged it/,
+  );
+});
+
+test('validateOtaLastRunRecord rejects failed runs that drop bundleId after remote resolution', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createFailedLastRun({
+          bundleId: undefined,
+        }),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedLatestVersion: '1.0.0',
+        expectedStatus: 'failed',
+      }),
+    /missing the resolved bundleId after remote resolution/,
+  );
+});
+
+test('validateOtaLastRunRecord rejects failed runs that drop resolved latestVersion after remote resolution', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createFailedLastRun({
+          latestVersion: undefined,
+        }),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedLatestVersion: '1.0.0',
+        expectedStatus: 'failed',
+      }),
+    /missing the resolved latestVersion after remote resolution/,
+  );
+});
+
+test('validateOtaLastRunRecord rejects failed runs that drop resolved remote channels metadata', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createFailedLastRun(),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedChannels: {
+          stable: '0.9.0',
+          beta: '1.0.0',
+        },
+        expectedStatus: 'failed',
+      }),
+    /failed ota last-run is missing the remote channels map/,
   );
 });
 

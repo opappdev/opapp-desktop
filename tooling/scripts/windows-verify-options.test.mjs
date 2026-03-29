@@ -205,11 +205,12 @@ test('verify-windows validate-only accepts portable launch mode', () => {
   assert.equal(result.status, 0);
 });
 
-test('verify-windows validate-only accepts ota remote/channel/force flags', () => {
+test('verify-windows validate-only accepts ota remote/channel/force/expected-status flags', () => {
   const result = runVerifyValidateOnly([
     '--ota-remote=https://r2.opapp.dev',
     '--ota-channel=nightly',
     '--ota-force',
+    '--ota-expected-status=failed',
   ]);
 
   assert.equal(result.status, 0);
@@ -229,6 +230,21 @@ test('verify-windows validate-only rejects ota channel without remote', () => {
 
 test('verify-windows validate-only rejects ota force without remote', () => {
   const result = runVerifyValidateOnly(['--ota-force']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only rejects ota expected status without remote', () => {
+  const result = runVerifyValidateOnly(['--ota-expected-status=failed']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('verify-windows validate-only rejects invalid ota expected status', () => {
+  const result = runVerifyValidateOnly([
+    '--ota-remote=https://r2.opapp.dev',
+    '--ota-expected-status=broken',
+  ]);
 
   assert.notEqual(result.status, 0);
 });

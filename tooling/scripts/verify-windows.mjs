@@ -18,6 +18,9 @@ const otaRemoteArg = otaRemoteToken?.split('=').slice(1).join('=');
 const otaChannelToken = process.argv.find(argument => argument.startsWith('--ota-channel='));
 const otaChannelArg = otaChannelToken?.split('=').slice(1).join('=');
 const otaForceFlag = process.argv.includes('--ota-force');
+const otaExpectedStatusToken = process.argv.find(argument => argument.startsWith('--ota-expected-status='));
+const otaExpectedStatusArg = otaExpectedStatusToken?.split('=').slice(1).join('=');
+const supportedOtaExpectedStatuses = new Set(['success', 'updated', 'up-to-date', 'failed']);
 const baseReadinessTimeoutMs = 25_000;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
@@ -248,8 +251,26 @@ function validateOtaArgs() {
   if (otaChannelArg !== undefined && otaChannelArg.trim().length === 0) {
     throw new Error('`--ota-channel=` must include a non-empty channel name.');
   }
-  if (!otaRemoteArg && (otaChannelArg !== undefined || otaForceFlag)) {
-    throw new Error('`--ota-channel` and `--ota-force` require `--ota-remote=<url>`.');
+  if (otaExpectedStatusArg !== undefined && otaExpectedStatusArg.trim().length === 0) {
+    throw new Error(
+      '`--ota-expected-status=` must be one of success, updated, up-to-date, failed.',
+    );
+  }
+  if (
+    otaExpectedStatusArg !== undefined &&
+    !supportedOtaExpectedStatuses.has(otaExpectedStatusArg)
+  ) {
+    throw new Error(
+      '`--ota-expected-status=` must be one of success, updated, up-to-date, failed.',
+    );
+  }
+  if (
+    !otaRemoteArg &&
+    (otaChannelArg !== undefined || otaForceFlag || otaExpectedStatusArg !== undefined)
+  ) {
+    throw new Error(
+      '`--ota-channel`, `--ota-force`, and `--ota-expected-status` require `--ota-remote=<url>`.',
+    );
   }
 }
 
@@ -300,6 +321,9 @@ function runWindowsSmoke(scenario, scenarioIndex) {
   if (otaForceFlag) {
     smokeArgs.push('--ota-force');
   }
+  if (otaExpectedStatusArg) {
+    smokeArgs.push(`--ota-expected-status=${otaExpectedStatusArg}`);
+  }
   const startMs = Date.now();
   runOrThrow(process.execPath, smokeArgs, {
     cwd: repoRoot,
@@ -337,6 +361,9 @@ function runWindowsPreflight(scenarios) {
   }
   if (otaForceFlag) {
     preflightArgs.push('--ota-force');
+  }
+  if (otaExpectedStatusArg) {
+    preflightArgs.push(`--ota-expected-status=${otaExpectedStatusArg}`);
   }
   runOrThrow(process.execPath, preflightArgs, {
     cwd: repoRoot,

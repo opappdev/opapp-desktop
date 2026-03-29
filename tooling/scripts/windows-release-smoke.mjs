@@ -42,6 +42,10 @@ const otaRemoteArg = otaRemoteToken?.split('=').slice(1).join('=');
 const otaChannelToken = process.argv.find(argument => argument.startsWith('--ota-channel='));
 const otaChannelArg = otaChannelToken?.split('=').slice(1).join('=');
 const otaForceFlag = process.argv.includes('--ota-force');
+const otaExpectedStatusToken = process.argv.find(argument => argument.startsWith('--ota-expected-status='));
+const otaExpectedStatusArg = otaExpectedStatusToken?.split('=').slice(1).join('=');
+const supportedOtaExpectedStatuses = new Set(['success', 'updated', 'up-to-date', 'failed']);
+const otaExpectedStatus = otaExpectedStatusArg ?? 'success';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
@@ -177,8 +181,26 @@ function validateOtaArgs() {
   if (otaChannelArg !== undefined && otaChannelArg.trim().length === 0) {
     throw new Error('`--ota-channel=` must include a non-empty channel name.');
   }
-  if (!otaRemoteArg && (otaChannelArg !== undefined || otaForceFlag)) {
-    throw new Error('`--ota-channel` and `--ota-force` require `--ota-remote=<url>`.');
+  if (otaExpectedStatusArg !== undefined && otaExpectedStatusArg.trim().length === 0) {
+    throw new Error(
+      '`--ota-expected-status=` must be one of success, updated, up-to-date, failed.',
+    );
+  }
+  if (
+    otaExpectedStatusArg !== undefined &&
+    !supportedOtaExpectedStatuses.has(otaExpectedStatusArg)
+  ) {
+    throw new Error(
+      '`--ota-expected-status=` must be one of success, updated, up-to-date, failed.',
+    );
+  }
+  if (
+    !otaRemoteArg &&
+    (otaChannelArg !== undefined || otaForceFlag || otaExpectedStatusArg !== undefined)
+  ) {
+    throw new Error(
+      '`--ota-channel`, `--ota-force`, and `--ota-expected-status` require `--ota-remote=<url>`.',
+    );
   }
 }
 function clamp(value, min, max) {
@@ -2160,7 +2182,7 @@ async function waitForOtaLastRun({timeoutMs, timeoutFlag}) {
   }));
 }
 
-async function waitForOtaIndexBundleInfo({bundleId, timeoutMs, timeoutFlag}) {
+async function waitForOtaIndexBundleInfo({bundleId, timeoutMs, timeoutFlag, allowMissingBundleInfo = false}) {
   const startMs = Date.now();
   while (Date.now() - startMs < timeoutMs) {
     if (await fileExists(otaIndexPath)) {
@@ -2169,6 +2191,9 @@ async function waitForOtaIndexBundleInfo({bundleId, timeoutMs, timeoutFlag}) {
         const bundleInfo = otaIndex?.bundles?.[bundleId];
         if (bundleInfo && typeof bundleInfo === 'object' && !Array.isArray(bundleInfo)) {
           return bundleInfo;
+        }
+        if (allowMissingBundleInfo && otaIndex?.bundles && typeof otaIndex.bundles === 'object') {
+          return null;
         }
       } catch {
         // Retry until the file is fully written and parseable.
@@ -2267,6 +2292,7 @@ export function validateOtaLastRunRecord({
   loggedCurrentVersion,
   expectedChannels,
   expectedLatestVersion,
+  expectedStatus = 'success',
 }) {
   if (otaLastRun.mode !== 'update') {
     throw new Error(
@@ -2277,6 +2303,119 @@ export function validateOtaLastRunRecord({
     throw new Error(
       `Windows release smoke failed: ota last-run remoteBase was '${otaLastRun.remoteBase ?? 'unknown'}', expected '${otaRemoteBase}'.`,
     );
+  }
+  const normalizedExpectedChannels = normalizeOtaChannels(expectedChannels);
+  const otaStatus = otaLastRun.status ?? 'unknown';
+
+  if (expectedStatus === 'failed') {
+    if (otaLastRun.status !== 'failed') {
+      throw new Error(
+        `Windows release smoke failed: ota last-run status was '${otaStatus}', expected 'failed'.`,
+      );
+    }
+    if (typeof otaLastRun.channel !== 'string' || !otaLastRun.channel) {
+      throw new Error(
+        'Windows release smoke failed: failed ota last-run is missing the resolved channel.',
+      );
+    }
+    if (
+      loggedCurrentVersion &&
+      (typeof otaLastRun.currentVersion !== 'string' || !otaLastRun.currentVersion)
+    ) {
+      throw new Error(
+        'Windows release smoke failed: failed ota last-run is missing currentVersion even though the host logged it.',
+      );
+    }
+    if (
+      (expectedLatestVersion !== undefined || normalizedExpectedChannels) &&
+      (typeof otaLastRun.bundleId !== 'string' || !otaLastRun.bundleId)
+    ) {
+      throw new Error(
+        'Windows release smoke failed: failed ota last-run is missing the resolved bundleId after remote resolution.',
+      );
+    }
+    for (const field of ['bundleId', 'currentVersion', 'latestVersion', 'deviceId']) {
+      if (
+        otaLastRun[field] !== null &&
+        otaLastRun[field] !== undefined &&
+        (typeof otaLastRun[field] !== 'string' || !otaLastRun[field])
+      ) {
+        throw new Error(
+          `Windows release smoke failed: ota last-run ${field} must be null or a non-empty string for failed runs.`,
+        );
+      }
+    }
+    if (
+      otaLastRun.hasUpdate !== null &&
+      otaLastRun.hasUpdate !== undefined &&
+      typeof otaLastRun.hasUpdate !== 'boolean'
+    ) {
+      throw new Error(
+        'Windows release smoke failed: failed ota last-run hasUpdate must be null/boolean.',
+      );
+    }
+    if (
+      otaLastRun.inRollout !== null &&
+      otaLastRun.inRollout !== undefined &&
+      typeof otaLastRun.inRollout !== 'boolean'
+    ) {
+      throw new Error(
+        'Windows release smoke failed: failed ota last-run inRollout must be null/boolean.',
+      );
+    }
+    if (
+      otaLastRun.rolloutPercent !== null &&
+      otaLastRun.rolloutPercent !== undefined &&
+      typeof otaLastRun.rolloutPercent !== 'number'
+    ) {
+      throw new Error(
+        'Windows release smoke failed: ota last-run rolloutPercent must be null/number.',
+      );
+    }
+    for (const field of ['version', 'previousVersion', 'stagedAt']) {
+      if (otaLastRun[field] !== null && otaLastRun[field] !== undefined) {
+        throw new Error(
+          `Windows release smoke failed: failed ota last-run must not report staged ${field}.`,
+        );
+      }
+    }
+    if (expectedLatestVersion !== undefined) {
+      if (typeof otaLastRun.latestVersion !== 'string' || !otaLastRun.latestVersion) {
+        throw new Error(
+          'Windows release smoke failed: failed ota last-run is missing the resolved latestVersion after remote resolution.',
+        );
+      }
+      if (otaLastRun.latestVersion !== expectedLatestVersion) {
+        throw new Error(
+          `Windows release smoke failed: ota last-run latestVersion '${otaLastRun.latestVersion}' ` +
+            `did not match the remote index resolved version '${expectedLatestVersion}'.`,
+        );
+      }
+    }
+    if (normalizedExpectedChannels) {
+      const normalizedLastRunChannels = normalizeOtaChannels(otaLastRun.channels);
+      if (!normalizedLastRunChannels) {
+        throw new Error(
+          'Windows release smoke failed: failed ota last-run is missing the remote channels map persisted by the updater.',
+        );
+      }
+      if (!otaChannelsEqual(normalizedLastRunChannels, normalizedExpectedChannels)) {
+        throw new Error(
+          `Windows release smoke failed: ota last-run channels ${formatOtaChannels(normalizedLastRunChannels)} ` +
+            `did not match remote index channels ${formatOtaChannels(normalizedExpectedChannels)}.`,
+        );
+      }
+    }
+    if (
+      otaLastRun.currentVersion &&
+      loggedCurrentVersion &&
+      otaLastRun.currentVersion !== loggedCurrentVersion
+    ) {
+      throw new Error(
+        `Windows release smoke failed: ota last-run currentVersion '${otaLastRun.currentVersion}' did not match the host logged currentVersion '${loggedCurrentVersion}'.`,
+      );
+    }
+    return {requiresOtaState: false, status: otaLastRun.status};
   }
   if (typeof otaLastRun.bundleId !== 'string' || !otaLastRun.bundleId) {
     throw new Error(
@@ -2314,7 +2453,6 @@ export function validateOtaLastRunRecord({
       'Windows release smoke failed: ota last-run is missing boolean inRollout.',
     );
   }
-  const normalizedExpectedChannels = normalizeOtaChannels(expectedChannels);
   if (normalizedExpectedChannels) {
     const normalizedLastRunChannels = normalizeOtaChannels(otaLastRun.channels);
     if (!normalizedLastRunChannels) {
@@ -2338,9 +2476,15 @@ export function validateOtaLastRunRecord({
       'Windows release smoke failed: ota last-run rolloutPercent must be null/number.',
     );
   }
-  if (otaLastRun.status !== 'updated' && otaLastRun.status !== 'up-to-date') {
+  if (expectedStatus === 'success') {
+    if (otaLastRun.status !== 'updated' && otaLastRun.status !== 'up-to-date') {
+      throw new Error(
+        `Windows release smoke failed: ota last-run status was '${otaStatus}', expected 'updated' or 'up-to-date'.`,
+      );
+    }
+  } else if (otaLastRun.status !== expectedStatus) {
     throw new Error(
-      `Windows release smoke failed: ota last-run status was '${otaLastRun.status ?? 'unknown'}', expected 'updated' or 'up-to-date'.`,
+      `Windows release smoke failed: ota last-run status was '${otaStatus}', expected '${expectedStatus}'.`,
     );
   }
   if (
@@ -2417,21 +2561,19 @@ async function verifyOtaSideEffects(logContents) {
   });
 
   const normalizedLog = normalizeLogContents(logContents);
-  if (!normalizedLog.includes('OTA.Native.DeviceId value=')) {
+  const otaResolvedBundleMetadata =
+    normalizedLog.includes('OTA.Native.BundleInfoMissing bundleId=') ||
+    normalizedLog.includes('OTA.Native.LatestVersionMissing bundleId=') ||
+    normalizedLog.includes('OTA.Native.LatestVersion source=');
+  if (
+    otaExpectedStatus === 'failed' &&
+    otaResolvedBundleMetadata &&
+    (typeof otaLastRun.bundleId !== 'string' || !otaLastRun.bundleId)
+  ) {
     throw new Error(
-      'Windows release smoke failed: native OTA log is missing the persisted device-id marker.',
+      'Windows release smoke failed: failed ota last-run dropped bundleId even though native OTA already resolved bundle metadata.',
     );
   }
-  if (!normalizedLog.includes('OTA.Native.Rollout percent=')) {
-    throw new Error(
-      'Windows release smoke failed: native OTA log is missing rollout decision markers.',
-    );
-  }
-  await waitForOtaDeviceId({
-    timeoutMs: scenarioTimeoutMs,
-    timeoutFlag: '--scenario-ms',
-  });
-
   if (otaChannelArg) {
     const otaChannel = await waitForOtaChannel({
       timeoutMs: scenarioTimeoutMs,
@@ -2452,12 +2594,15 @@ async function verifyOtaSideEffects(logContents) {
       bundleId: otaLastRun.bundleId,
       timeoutMs: scenarioTimeoutMs,
       timeoutFlag: '--scenario-ms',
+      allowMissingBundleInfo: otaExpectedStatus === 'failed',
     });
-    expectedChannels = normalizeOtaChannels(otaIndexBundleInfo.channels);
-    expectedLatestVersion = resolveExpectedOtaLatestVersion({
-      bundleInfo: otaIndexBundleInfo,
-      channel: otaLastRun.channel,
-    });
+    if (otaIndexBundleInfo) {
+      expectedChannels = normalizeOtaChannels(otaIndexBundleInfo.channels);
+      expectedLatestVersion = resolveExpectedOtaLatestVersion({
+        bundleInfo: otaIndexBundleInfo,
+        channel: otaLastRun.channel,
+      });
+    }
   }
   const otaLastRunValidation = validateOtaLastRunRecord({
     otaLastRun,
@@ -2465,7 +2610,47 @@ async function verifyOtaSideEffects(logContents) {
     loggedCurrentVersion,
     expectedChannels,
     expectedLatestVersion,
+    expectedStatus: otaExpectedStatus,
   });
+  if (
+    otaExpectedStatus === 'failed' &&
+    normalizedLog.includes('OTA.Native.DeviceId value=') &&
+    (typeof otaLastRun.deviceId !== 'string' || !otaLastRun.deviceId)
+  ) {
+    throw new Error(
+      'Windows release smoke failed: failed ota last-run dropped deviceId even though native OTA logged it.',
+    );
+  }
+  if (
+    otaExpectedStatus === 'failed' &&
+    normalizedLog.includes('OTA.Native.Rollout percent=') &&
+    typeof otaLastRun.inRollout !== 'boolean'
+  ) {
+    throw new Error(
+      'Windows release smoke failed: failed ota last-run dropped inRollout even though native OTA logged a rollout decision.',
+    );
+  }
+  if (typeof otaLastRun.deviceId === 'string' && otaLastRun.deviceId) {
+    if (!normalizedLog.includes('OTA.Native.DeviceId value=')) {
+      throw new Error(
+        'Windows release smoke failed: native OTA log is missing the persisted device-id marker.',
+      );
+    }
+    await waitForOtaDeviceId({
+      timeoutMs: scenarioTimeoutMs,
+      timeoutFlag: '--scenario-ms',
+    });
+  }
+  if (
+    typeof otaLastRun.inRollout === 'boolean' ||
+    otaLastRun.rolloutPercent !== null && otaLastRun.rolloutPercent !== undefined
+  ) {
+    if (!normalizedLog.includes('OTA.Native.Rollout percent=')) {
+      throw new Error(
+        'Windows release smoke failed: native OTA log is missing rollout decision markers.',
+      );
+    }
+  }
   if (!otaLastRunValidation.requiresOtaState) {
     return;
   }
@@ -2543,6 +2728,9 @@ async function main() {
     log(`otaChannel=${otaChannelArg}`);
   }
   log(`otaForce=${otaForceFlag}`);
+  if (otaRemoteArg || otaExpectedStatusArg !== undefined) {
+    log(`otaExpectedStatus=${otaExpectedStatus}`);
+  }
   if (validateOnly && preflightOnly) {
     throw new Error('`--validate-only` conflicts with `--preflight-only`; choose one execution mode.');
   }

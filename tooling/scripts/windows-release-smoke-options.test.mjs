@@ -83,11 +83,12 @@ test('windows-release-smoke validate-only accepts explicit startup-target settin
   assert.equal(result.status, 0);
 });
 
-test('windows-release-smoke validate-only accepts ota remote/channel/force flags', () => {
+test('windows-release-smoke validate-only accepts ota remote/channel/force/expected-status flags', () => {
   const result = runSmokeValidateOnly([
     '--ota-remote=https://r2.opapp.dev',
     '--ota-channel=nightly',
     '--ota-force',
+    '--ota-expected-status=failed',
   ]);
 
   assert.equal(result.status, 0);
@@ -155,6 +156,21 @@ test('windows-release-smoke validate-only rejects ota channel without remote', (
 
 test('windows-release-smoke validate-only rejects ota force without remote', () => {
   const result = runSmokeValidateOnly(['--ota-force']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('windows-release-smoke validate-only rejects ota expected status without remote', () => {
+  const result = runSmokeValidateOnly(['--ota-expected-status=failed']);
+
+  assert.notEqual(result.status, 0);
+});
+
+test('windows-release-smoke validate-only rejects invalid ota expected status', () => {
+  const result = runSmokeValidateOnly([
+    '--ota-remote=https://r2.opapp.dev',
+    '--ota-expected-status=broken',
+  ]);
 
   assert.notEqual(result.status, 0);
 });

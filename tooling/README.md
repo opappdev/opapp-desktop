@@ -55,8 +55,9 @@ Windows verification entrypoints:
   guards that successful runs must persist resolved `mode` / `bundleId` /
   `channel` / `latestVersion` / `hasUpdate`, that `latestVersion` still matches
   the remote `index.json` channel resolution, that remote `channels` maps are
-  preserved when `index.json` exposes them, and that `up-to-date` runs must not
-  report staged metadata.
+  preserved when `index.json` exposes them, that `up-to-date` runs must not
+  report staged metadata, and that `--ota-expected-status=failed` runs only pass
+  when failure records keep the resolved remote metadata they already learned.
 - `npm run smoke:windows:validate`: validate direct release-smoke packaged args only.
 - `npm run smoke:windows:portable:validate`: validate direct release-smoke portable args only.
 - `npm run smoke:windows:preflight`: packaged release preflight probe only (no bundle/build/launch).
@@ -72,6 +73,11 @@ Windows verification entrypoints:
 - release smoke now also compares successful OTA `last-run.json` `channels`
   metadata against the downloaded remote `index.json` bundle entry when that
   entry exposes a `channels` map.
+- release smoke accepts `--ota-expected-status=success|updated|up-to-date|failed`;
+  `failed` lets a real packaged/native failure sample validate its `last-run.json`
+  diagnostics contract without first pretending the run succeeded.
+- real failure-sample example:
+  `npm run verify:windows -- --ota-remote=http://127.0.0.1:8787 --ota-expected-status=failed`
 
 Windows smoke timeout knobs:
 
