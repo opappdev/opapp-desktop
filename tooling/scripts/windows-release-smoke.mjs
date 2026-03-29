@@ -57,6 +57,7 @@ const optionalPrivateScenarioModulePath = path.join(
   '.private-companion',
   'windows-private-scenarios.mjs',
 );
+const hermesBytecodeMagic = 0x1F1903C103BC1FC6n;
 const frontendBundleScriptPath = path.join(frontendRoot, 'tooling', 'scripts', 'bundle-companion-windows.mjs');
 const frontendBundleRoot = path.join(frontendRoot, '.dist', 'bundles', 'companion-app', 'windows');
 const hostRoot = path.join(repoRoot, 'hosts', 'windows-host');
@@ -308,6 +309,13 @@ function parseRect(logContents, prefix) {
     mode: match[5] ?? null,
   };
 }
+
+function isHermesBytecodeBuffer(buffer) {
+  return Buffer.isBuffer(buffer) &&
+    buffer.length >= 8 &&
+    buffer.readBigUInt64LE(0) === hermesBytecodeMagic;
+}
+
 async function assertStagedManifest() {
   // Reuse SiblingArtifactSource to validate manifest existence, platform, and
   // entryFile presence — the same checks that were duplicated here previously.
@@ -326,6 +334,18 @@ async function assertStagedManifest() {
     );
   }
 
+  if (manifest.bundleFormat !== 'hermes-bytecode') {
+    throw new Error(
+      `Windows release smoke failed: bundle-manifest.json bundleFormat is '${manifest.bundleFormat ?? 'unknown'}', expected 'hermes-bytecode'.`,
+    );
+  }
+
+  if (!isHermesBytecodeBuffer(bundleFileContent)) {
+    throw new Error(
+      `Windows release smoke failed: staged bundle file '${manifest.entryFile}' is not Hermes bytecode.`,
+    );
+  }
+
   if (manifest.sourceKind !== 'sibling-staging') {
     throw new Error(
       `Windows release smoke failed: bundle-manifest.json sourceKind is '${manifest.sourceKind}', expected 'sibling-staging'. ` +
@@ -333,7 +353,7 @@ async function assertStagedManifest() {
     );
   }
 
-  log(`manifest OK: bundleId=${manifest.bundleId} version=${manifest.version} surfaces=${manifest.surfaces?.join(',')} sourceKind=${manifest.sourceKind}`);
+  log(`manifest OK: bundleId=${manifest.bundleId} version=${manifest.version} surfaces=${manifest.surfaces?.join(',')} bundleFormat=${manifest.bundleFormat} sourceKind=${manifest.sourceKind}`);
 }
 
 async function assertBundledPolicyRegistry(logContents) {

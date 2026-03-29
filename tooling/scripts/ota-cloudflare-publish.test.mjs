@@ -8,6 +8,7 @@ import {
   applyBundlePublishOverrides,
   deriveR2Endpoint,
   mergeRegistryIndexes,
+  resolveFrontendBuildSourceDir,
   uploadFilesToCloudflare,
   uploadFilesToR2,
   upsertBundleSidecars,
@@ -320,6 +321,38 @@ test('deriveR2Endpoint prefers explicit endpoint and derives jurisdiction-specif
       jurisdiction: 'eu',
     }),
     'https://account-123.eu.r2.cloudflarestorage.com',
+  );
+});
+
+test('resolveFrontendBuildSourceDir selects the requested private bundle build output', async t => {
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), 'ota-cloudflare-frontend-output-'));
+  t.after(async () => {
+    await rm(fixtureRoot, {recursive: true, force: true});
+  });
+
+  const frontendRoot = path.join(fixtureRoot, 'opapp-frontend');
+  const windowsOutputRoot = path.join(frontendRoot, '.dist', 'bundles', 'companion-app', 'windows');
+  const privateOutputRoot = path.join(windowsOutputRoot, 'bundles', 'opapp.hbr.workspace');
+  await mkdir(privateOutputRoot, {recursive: true});
+
+  await writeFile(
+    path.join(windowsOutputRoot, 'bundle-manifest.json'),
+    JSON.stringify({bundleId: 'opapp.companion.main'}, null, 2) + '\n',
+    'utf8',
+  );
+  await writeFile(
+    path.join(privateOutputRoot, 'bundle-manifest.json'),
+    JSON.stringify({bundleId: 'opapp.hbr.workspace'}, null, 2) + '\n',
+    'utf8',
+  );
+
+  assert.equal(
+    await resolveFrontendBuildSourceDir(frontendRoot, 'windows', 'opapp.hbr.workspace'),
+    privateOutputRoot,
+  );
+  assert.equal(
+    await resolveFrontendBuildSourceDir(frontendRoot, 'windows'),
+    windowsOutputRoot,
   );
 });
 

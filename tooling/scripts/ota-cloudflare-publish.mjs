@@ -30,10 +30,10 @@
  *     [--skip-upload] [--dry-run]
  */
 
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {createHash, createHmac} from 'node:crypto';
 import {existsSync} from 'node:fs';
-import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -366,11 +366,88 @@ function createFrontendBuildCommand(platform) {
   };
 }
 
-function defaultFrontendSourceDir(frontendRoot, platform) {
+function defaultFrontendBundleOutputRoot(frontendRoot, platform) {
   if (platform !== 'windows') {
     throw new Error(`No default frontend dist directory is defined for platform '${platform}'.`);
   }
   return path.join(frontendRoot, '.dist', 'bundles', 'companion-app', 'windows');
+}
+
+async function readBundleManifestIfExists(sourceDir) {
+  try {
+    return JSON.parse(await readFile(path.join(sourceDir, 'bundle-manifest.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveFrontendBuildSourceDir(frontendRoot, platform, bundleId) {
+  const bundleOutputRoot = defaultFrontendBundleOutputRoot(frontendRoot, platform);
+  const candidateDirs = [];
+
+  if (existsSync(path.join(bundleOutputRoot, 'bundle-manifest.json'))) {
+    candidateDirs.push(bundleOutputRoot);
+  }
+
+  const nestedBundlesRoot = path.join(bundleOutputRoot, 'bundles');
+  if (existsSync(nestedBundlesRoot)) {
+    const nestedEntries = await readdir(nestedBundlesRoot, {withFileTypes: true});
+    for (const entry of nestedEntries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      const candidateDir = path.join(nestedBundlesRoot, entry.name);
+      if (existsSync(path.join(candidateDir, 'bundle-manifest.json'))) {
+        candidateDirs.push(candidateDir);
+      }
+    }
+  }
+
+  const candidates = [];
+  for (const candidateDir of candidateDirs) {
+    const manifest = await readBundleManifestIfExists(candidateDir);
+    if (!manifest?.bundleId) {
+      continue;
+    }
+    candidates.push({
+      sourceDir: candidateDir,
+      bundleId: manifest.bundleId,
+    });
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(
+      `No built frontend bundle artifacts were found under ${bundleOutputRoot}. ` +
+      'Run the frontend bundle step first or provide --source-dir explicitly.',
+    );
+  }
+
+  if (bundleId) {
+    const matchedCandidate = candidates.find(candidate => candidate.bundleId === bundleId);
+    if (matchedCandidate) {
+      return matchedCandidate.sourceDir;
+    }
+
+    throw new Error(
+      `Built frontend artifacts do not include bundleId '${bundleId}'. ` +
+      `Available: ${candidates.map(candidate => candidate.bundleId).join(', ')}`,
+    );
+  }
+
+  const mainCandidate = candidates.find(candidate => candidate.bundleId === 'opapp.companion.main');
+  if (mainCandidate) {
+    return mainCandidate.sourceDir;
+  }
+
+  if (candidates.length === 1) {
+    return candidates[0].sourceDir;
+  }
+
+  throw new Error(
+    `Multiple built frontend artifacts were found under ${bundleOutputRoot}. ` +
+    `Specify --bundle-id or --source-dir. Available: ${candidates.map(candidate => candidate.bundleId).join(', ')}`,
+  );
 }
 
 async function readJsonIfExists(filePath) {
@@ -716,20 +793,67 @@ async function executeSignedR2ObjectRequest({
     secretAccessKey,
     body,
   });
-  const response = await fetchImpl(request.url, {
-    method: request.method,
-    headers: request.headers,
-    body: request.body,
-  });
-  if (response.ok) {
-    return response;
-  }
 
-  const detail = await response.text().catch(() => '');
-  throw new Error(
-    `R2 ${request.method} failed (${response.status}) for ${bucket}/${objectKey}` +
-      (detail ? `: ${detail.slice(0, 300)}` : '.'),
-  );
+  try {
+    const response = await fetchImpl(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+    });
+    if (response.ok) {
+      return response;
+    }
+
+    const detail = await response.text().catch(() => '');
+    throw new Error(
+      `R2 ${request.method} failed (${response.status}) for ${bucket}/${objectKey}` +
+        (detail ? `: ${detail.slice(0, 300)}` : '.'),
+    );
+  } catch (error) {
+    if (process.platform !== 'win32') {
+      throw error;
+    }
+
+    const curlArgs = [
+      '--silent',
+      '--show-error',
+      '--output',
+      'NUL',
+      '--write-out',
+      '%{http_code}',
+      '--request',
+      request.method,
+      '--url',
+      request.url,
+    ];
+    for (const [headerName, headerValue] of Object.entries(request.headers)) {
+      curlArgs.push('--header', `${headerName}: ${headerValue}`);
+    }
+    if (request.body) {
+      curlArgs.push('--data-binary', '@-');
+    }
+
+    const curlResult = spawnSync('curl.exe', curlArgs, {
+      input: request.body,
+      shell: false,
+      windowsHide: true,
+    });
+    if (curlResult.error) {
+      throw error;
+    }
+
+    const statusText = curlResult.stdout?.toString('utf8').trim() ?? '';
+    const statusCode = Number.parseInt(statusText, 10);
+    if (curlResult.status === 0 && Number.isFinite(statusCode) && statusCode >= 200 && statusCode < 300) {
+      return {ok: true, status: statusCode};
+    }
+
+    const detail = curlResult.stderr?.toString('utf8').trim();
+    throw new Error(
+      `R2 ${request.method} failed (${statusText || curlResult.status || 'unknown'}) for ${bucket}/${objectKey}` +
+        (detail ? `: ${detail.slice(0, 300)}` : '.'),
+    );
+  }
 }
 
 async function deleteUploadedKeysFromR2({
@@ -944,7 +1068,7 @@ async function main() {
   if (build) {
     const buildCommand = createFrontendBuildCommand(platformArg);
     await runCommand(buildCommand.command, buildCommand.args, frontendRoot, false);
-    buildSourceDir = defaultFrontendSourceDir(frontendRoot, platformArg);
+    buildSourceDir = await resolveFrontendBuildSourceDir(frontendRoot, platformArg, bundleIdArg);
     sourceDir = sourceDir ?? buildSourceDir;
   }
 
