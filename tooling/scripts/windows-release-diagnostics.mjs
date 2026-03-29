@@ -23,6 +23,29 @@ function truncateOneLine(value, maxLength = 200) {
   return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
+function collectOutputLines(...chunks) {
+  return chunks.flatMap(chunk =>
+    String(chunk ?? '')
+      .replace(/\r/g, '')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean),
+  );
+}
+
+function summarizeIcaclsOutput(stdout, stderr) {
+  const lines = collectOutputLines(stdout, stderr);
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const detailLines = lines.filter(
+    line => !/^Successfully processed \d+ files; Failed processing \d+ files$/i.test(line),
+  );
+  const summaryLines = detailLines.length > 0 ? detailLines : lines;
+  return truncateOneLine(summaryLines.join(' | '), 160);
+}
+
 function probeStatusSummary(probe) {
   if (!probe) {
     return 'n/a';
@@ -362,6 +385,82 @@ function probePathAcl(pathValue, {
   }
 }
 
+function probePathIcacls(pathValue, {
+  spawn = spawnSync,
+  cmdPath = 'cmd.exe',
+} = {}) {
+  const targetPath = normalizeText(pathValue);
+  if (!targetPath) {
+    return null;
+  }
+
+  const escapedCmdPath = targetPath.replace(/"/g, '""');
+  const directProbe = runProbe(
+    spawn,
+    cmdPath,
+    ['/d', '/s', '/c', `icacls "${escapedCmdPath}"`],
+    {captureOutput: true},
+  );
+  const directDetail = summarizeIcaclsOutput(directProbe.stdout, directProbe.stderr);
+
+  if (directDetail) {
+    return {
+      path: targetPath,
+      ok: directProbe.ok,
+      status: directProbe.status,
+      errorCode: directProbe.errorCode,
+      errorMessage: directProbe.ok
+        ? null
+        : truncateOneLine(directDetail ?? directProbe.errorMessage ?? '', 160),
+      captureBlocked: directProbe.captureBlocked,
+      detail: directProbe.ok ? directDetail : null,
+    };
+  }
+
+  const escapedPath = targetPath.replace(/'/g, "''");
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'opapp-windows-icacls-'));
+  const outputPath = path.join(tempDir, 'icacls.txt');
+  const escapedOutputPath = outputPath.replace(/'/g, "''");
+
+  try {
+    const icaclsProbe = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `$ErrorActionPreference = 'Stop'; ` +
+          `& icacls.exe '${escapedPath}' 2>&1 | Set-Content -LiteralPath '${escapedOutputPath}' -Encoding utf8; ` +
+          `exit $LASTEXITCODE`,
+      ],
+      {
+        stdio: 'ignore',
+        windowsHide: false,
+      },
+    );
+    const detail = existsSync(outputPath)
+      ? summarizeIcaclsOutput(readFileSync(outputPath, 'utf8'), '')
+      : null;
+
+    return {
+      path: targetPath,
+      ok: icaclsProbe.status === 0 && !icaclsProbe.error,
+      status: icaclsProbe.status,
+      errorCode: icaclsProbe.error?.code ?? null,
+      errorMessage:
+        icaclsProbe.status === 0 && !icaclsProbe.error
+          ? null
+          : (detail ?? truncateOneLine(icaclsProbe.error?.message ?? '', 160)),
+      captureBlocked: false,
+      detail: icaclsProbe.status === 0 && !icaclsProbe.error ? detail : null,
+    };
+  } finally {
+    rmSync(tempDir, {recursive: true, force: true});
+  }
+}
+
 export function collectReleaseBuildProbe({
   env = process.env,
   spawn = spawnSync,
@@ -466,6 +565,9 @@ export function collectReleaseBuildProbe({
   const localMicrosoftSdkAclProbe = localMicrosoftSdkProbe?.exists
     ? probePathAcl(localMicrosoftSdkProbe.path, {spawn})
     : null;
+  const localMicrosoftSdkIcaclsProbe = localMicrosoftSdkProbe?.exists
+    ? probePathIcacls(localMicrosoftSdkProbe.path, {spawn, cmdPath})
+    : null;
 
   return {
     cmdPath,
@@ -481,6 +583,7 @@ export function collectReleaseBuildProbe({
     msbuildCandidates,
     localMicrosoftSdkProbe,
     localMicrosoftSdkAclProbe,
+    localMicrosoftSdkIcaclsProbe,
   };
 }
 
@@ -706,6 +809,15 @@ export function formatReleaseProbeForLogs(probe) {
     }
   }
 
+  if (probe.localMicrosoftSdkIcaclsProbe?.path) {
+    lines.push(`local sdk icacls probe=${probeStatusSummary(probe.localMicrosoftSdkIcaclsProbe)}`);
+    if (probe.localMicrosoftSdkIcaclsProbe.ok && probe.localMicrosoftSdkIcaclsProbe.detail) {
+      lines.push(
+        `local sdk icacls detail=${truncateOneLine(probe.localMicrosoftSdkIcaclsProbe.detail, 160)}`,
+      );
+    }
+  }
+
   if (probe.msbuildCandidatesUnknown) {
     lines.push('msbuild candidates=<unknown (vswhere output capture blocked)>');
     return lines;
@@ -795,6 +907,7 @@ function buildActionHints(classification, probe) {
   if (probe.localMicrosoftSdkProbe?.exists && !probe.localMicrosoftSdkProbe.accessible) {
     const sdkPath = probe.localMicrosoftSdkProbe.path;
     const aclProbe = probe.localMicrosoftSdkAclProbe;
+    const icaclsProbe = probe.localMicrosoftSdkIcaclsProbe;
     hints.push(
       `Local Microsoft SDKs path is not readable (${sdkPath}): ${probe.localMicrosoftSdkProbe.errorMessage ?? 'access denied'}.`,
     );
@@ -819,6 +932,23 @@ function buildActionHints(classification, probe) {
       if (/module could not be loaded|Import-Module/i.test(aclProbe.errorMessage ?? '')) {
         hints.push(
           'The current PowerShell host cannot load `Microsoft.PowerShell.Security`; retry `Get-Acl` from Windows PowerShell or an elevated/full-trust session.',
+        );
+      }
+    }
+    if (icaclsProbe?.ok) {
+      if (icaclsProbe.captureBlocked) {
+        hints.push('Direct `icacls` execution succeeded, but structured output capture is blocked in this environment.');
+      } else if (icaclsProbe.detail) {
+        hints.push(`Direct icacls ACL view (truncated): ${truncateOneLine(icaclsProbe.detail, 160)}.`);
+      }
+    } else if (icaclsProbe?.path) {
+      hints.push(
+        `Direct icacls probe result (${icaclsProbe.errorCode ?? icaclsProbe.status ?? 'unknown'}): ` +
+          `${truncateOneLine(icaclsProbe.errorMessage ?? 'unknown icacls probe failure', 160)}.`,
+      );
+      if (/^Successfully processed 0 files; Failed processing 1 files$/i.test(icaclsProbe.errorMessage ?? '')) {
+        hints.push(
+          `This redirected icacls invocation only surfaced the summary line; rerun \`icacls "${sdkPath}"\` interactively in cmd.exe or Windows PowerShell to inspect the denied entry text.`,
         );
       }
     }

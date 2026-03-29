@@ -70,6 +70,14 @@ test('formatReleaseProbeForLogs renders concise probe lines', () => {
       owner: 'BUILTIN\\Administrators',
       accessToString: 'BUILTIN\\Administrators Allow FullControl',
     },
+    localMicrosoftSdkIcaclsProbe: {
+      path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+      ok: true,
+      status: 0,
+      captureBlocked: false,
+      detail:
+        'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs BUILTIN\\Administrators:(I)(F)',
+    },
   });
 
   assert(lines.some(line => line.includes('cmd path=C:\\Windows\\System32\\cmd.exe')));
@@ -81,6 +89,8 @@ test('formatReleaseProbeForLogs renders concise probe lines', () => {
   assert(lines.some(line => line.includes('local sdk acl probe=ok(status=0)')));
   assert(lines.some(line => line.includes('local sdk acl owner=BUILTIN\\Administrators')));
   assert(lines.some(line => line.includes('local sdk acl access=BUILTIN\\Administrators Allow FullControl')));
+  assert(lines.some(line => line.includes('local sdk icacls probe=ok(status=0)')));
+  assert(lines.some(line => line.includes('local sdk icacls detail=C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs BUILTIN\\Administrators:(I)(F)')));
 });
 
 test('formatReleaseProbeForLogs marks msbuild candidates as unknown when vswhere capture is blocked', () => {
@@ -230,12 +240,76 @@ test('formatReleaseFailureDiagnostics adds a PowerShell module hint when Get-Acl
         owner: null,
         accessToString: null,
       },
+      localMicrosoftSdkIcaclsProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        ok: false,
+        status: 1,
+        errorCode: null,
+        errorMessage: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs: Access is denied.',
+        captureBlocked: false,
+        detail: null,
+      },
     },
     result: {status: null, error: {code: 'LOCAL_MICROSOFT_SDKS_UNREADABLE'}},
   });
 
   assert(diagnostics.includes('Automated Get-Acl probe failed (GET_ACL_FAILED)'));
   assert(diagnostics.includes('retry `Get-Acl` from Windows PowerShell or an elevated/full-trust session'));
+  assert(diagnostics.includes('Direct icacls probe result (1): C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs: Access is denied.'));
+});
+
+test('formatReleaseFailureDiagnostics explains summary-only icacls output', () => {
+  const diagnostics = formatReleaseFailureDiagnostics({
+    args: [],
+    classification: {
+      code: 'local-sdk-acl-denied',
+      summary: 'Local Microsoft SDKs ACL blocks MSBuild SDK resolution',
+    },
+    command: 'node.exe',
+    failureSummary:
+      'release preflight blocked execution: Local Microsoft SDKs path is not readable (C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs): Access is denied.',
+    probe: {
+      cmdPath: 'C:\\Windows\\System32\\cmd.exe',
+      cmdExists: true,
+      cmdProbe: {ok: true, status: 0},
+      minimumVisualStudioVersion: null,
+      visualStudioVersion: null,
+      vswherePath: 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe',
+      vswhereExists: true,
+      vswhereProbe: {ok: true, status: 0},
+      msbuildCandidates: [],
+      localMicrosoftSdkProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        exists: true,
+        accessible: false,
+        errorMessage: 'Access is denied.',
+      },
+      localMicrosoftSdkAclProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        ok: false,
+        status: 0,
+        errorCode: 'GET_ACL_FAILED',
+        errorMessage:
+          "The 'Get-Acl' command was found in the module 'Microsoft.PowerShell.Security', but the module could not be loaded.",
+        captureBlocked: false,
+        owner: null,
+        accessToString: null,
+      },
+      localMicrosoftSdkIcaclsProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        ok: false,
+        status: 1,
+        errorCode: null,
+        errorMessage: 'Successfully processed 0 files; Failed processing 1 files',
+        captureBlocked: false,
+        detail: null,
+      },
+    },
+    result: {status: null, error: {code: 'LOCAL_MICROSOFT_SDKS_UNREADABLE'}},
+  });
+
+  assert(diagnostics.includes('Direct icacls probe result (1): Successfully processed 0 files; Failed processing 1 files.'));
+  assert(diagnostics.includes('rerun `icacls "C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs"` interactively'));
 });
 
 test('formatReleaseProbeReport renders a success summary when no blocking issue is detected', () => {
@@ -513,7 +587,7 @@ test('collectReleaseBuildProbe marks local sdk path inaccessible when directory 
       if (normalized.endsWith('powershell.exe')) {
         const commandText = String(_args?.[_args.length - 1] ?? '');
         const outputPathMatch = commandText.match(/Set-Content -LiteralPath '([^']+)' -Encoding utf8/);
-        if (outputPathMatch?.[1]) {
+        if (outputPathMatch?.[1] && commandText.includes('Get-Acl')) {
           writeFileSync(
             outputPathMatch[1],
             JSON.stringify({
@@ -523,6 +597,20 @@ test('collectReleaseBuildProbe marks local sdk path inaccessible when directory 
             }),
             'utf8',
           );
+        }
+        if (outputPathMatch?.[1] && commandText.includes('icacls.exe')) {
+          writeFileSync(
+            outputPathMatch[1],
+            'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs: Access is denied.\n' +
+              'Successfully processed 0 files; Failed processing 1 files\n',
+            'utf8',
+          );
+          return {
+            status: 1,
+            error: null,
+            stdout: '',
+            stderr: '',
+          };
         }
         return {
           status: 0,
@@ -557,6 +645,10 @@ test('collectReleaseBuildProbe marks local sdk path inaccessible when directory 
   assert.equal(probe.localMicrosoftSdkAclProbe.path, 'Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs');
   assert.equal(probe.localMicrosoftSdkAclProbe.owner, 'NT SERVICE\\TrustedInstaller');
   assert.equal(probe.localMicrosoftSdkAclProbe.accessToString, 'BUILTIN\\Administrators Allow FullControl');
+  assert.equal(probe.localMicrosoftSdkIcaclsProbe.path, 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs');
+  assert.equal(probe.localMicrosoftSdkIcaclsProbe.ok, false);
+  assert.equal(probe.localMicrosoftSdkIcaclsProbe.status, 1);
+  assert.equal(probe.localMicrosoftSdkIcaclsProbe.errorMessage, 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs: Access is denied.');
 });
 
 test('collectReleaseBuildProbe recovers vswhere installs via temp-file redirect when pipe capture is blocked', () => {
