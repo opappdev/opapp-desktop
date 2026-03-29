@@ -11,9 +11,10 @@ import {
   collectPortableMsbuildFallbackCandidates,
   collectPortableMsbuildFallbackProfiles,
   collectReleaseBuildProbe,
+  formatReleaseFailureDiagnostics,
+  formatReleaseProbeReport,
   getBlockingReleaseProbeFailure,
   getPortableMsbuildFallbackBlocker,
-  formatReleaseFailureDiagnostics,
   formatReleaseProbeForLogs,
   refineReleaseFailureClassification,
 } from './windows-release-diagnostics.mjs';
@@ -1796,15 +1797,11 @@ function runReleasePreflightOrThrow() {
   const preflightBlockingFailure = getBlockingReleaseProbeFailure(releaseBuildProbe);
   const skipPreflightFailFast = process.env.OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST === '1';
   if (preflightBlockingFailure && !skipPreflightFailFast) {
-    const classification = classifyRunWindowsFailure(preflightBlockingFailure.classifierHint);
     throw new Error(
-      formatReleaseFailureDiagnostics({
-        args: [],
-        classification,
+      formatReleaseProbeReport({
         command: process.execPath,
-        failureSummary: `release preflight blocked execution: ${preflightBlockingFailure.reason}`,
         probe: releaseBuildProbe,
-        result: {status: null, error: {code: preflightBlockingFailure.code}},
+        blockingFailure: preflightBlockingFailure,
       }),
     );
   }
