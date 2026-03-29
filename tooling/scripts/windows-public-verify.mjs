@@ -13,6 +13,20 @@ const frontendRoot = path.join(workspaceRoot, 'opapp-frontend');
 const verifyScriptPath = path.join(repoRoot, 'tooling', 'scripts', 'verify-windows.mjs');
 const verifyScenarioFilter = 'launcher-provenance';
 const publicVerifyScenarioTimeoutMs = 40_000;
+const frontendPublicVerifyContractChecks = [
+  {
+    filePath: path.join(frontendRoot, 'framework', 'windowing', 'src', 'index.ts'),
+    markers: ['getCachedOtaRemoteCatalog', 'CachedOtaRemoteCatalogSnapshot'],
+  },
+  {
+    filePath: path.join(frontendRoot, 'apps', 'companion-app', 'src', 'BundleLauncherScreen.tsx'),
+    markers: [
+      'getCachedOtaRemoteCatalog',
+      'bundle-launcher.remote-catalog.summary',
+      'cachedRemoteUrl === normalizedRemoteUrl',
+    ],
+  },
+];
 const launcherProvenanceFixture = {
   mainBundleId: 'opapp.companion.main',
   mainSurfaceIds: [
@@ -36,6 +50,31 @@ const launcherProvenanceFixture = {
 
 function log(message) {
   console.log(`[windows-public-verify] ${message}`);
+}
+
+async function assertFrontendPublicVerifyContract() {
+  for (const {filePath, markers} of frontendPublicVerifyContractChecks) {
+    let content;
+    try {
+      content = await readFile(filePath, 'utf8');
+    } catch (error) {
+      const reason =
+        error instanceof Error && error.message
+          ? error.message
+          : String(error);
+      throw new Error(
+        `Windows public verify requires a readable opapp-frontend checkout, but could not read ${filePath}: ${reason}`,
+      );
+    }
+
+    for (const marker of markers) {
+      if (!content.includes(marker)) {
+        throw new Error(
+          `Windows public verify requires an opapp-frontend checkout with the launcher cache bridge contract. Missing marker '${marker}' in ${filePath}. Update the checkout or point OPAPP_FRONTEND_REF at a compatible frontend ref.`,
+        );
+      }
+    }
+  }
 }
 
 async function writeJsonFile(filePath, data) {
@@ -213,6 +252,7 @@ async function main() {
   let server = null;
 
   try {
+    await assertFrontendPublicVerifyContract();
     registryRoot = await createRegistryFixtureRoot();
     const serverHandle = await startRegistryServer(registryRoot);
     server = serverHandle.server;
