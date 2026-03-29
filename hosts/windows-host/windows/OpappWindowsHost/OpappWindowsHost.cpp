@@ -1006,7 +1006,8 @@ void WriteOtaLastRun(
     std::optional<std::wstring> const &deviceId = std::nullopt,
     std::optional<bool> inRollout = std::nullopt,
     std::optional<int32_t> rolloutPercent = std::nullopt,
-    std::optional<bool> hasUpdate = std::nullopt) {
+    std::optional<bool> hasUpdate = std::nullopt,
+    std::optional<std::wstring> const &channelsJson = std::nullopt) {
   winrt::Windows::Data::Json::JsonObject lastRunObject;
   InsertStringField(lastRunObject, L"mode", L"update");
   InsertStringField(lastRunObject, L"remoteBase", remoteUrl);
@@ -1019,6 +1020,11 @@ void WriteOtaLastRun(
   InsertOptionalStringField(lastRunObject, L"previousVersion", previousVersion);
   InsertOptionalStringField(lastRunObject, L"stagedAt", stagedAt);
   InsertOptionalStringField(lastRunObject, L"deviceId", deviceId);
+  if (channelsJson && !channelsJson->empty()) {
+    lastRunObject.Insert(
+        L"channels",
+        winrt::Windows::Data::Json::JsonValue::Parse(winrt::hstring(*channelsJson)));
+  }
   if (hasUpdate.has_value()) {
     lastRunObject.Insert(L"hasUpdate", winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(*hasUpdate));
   } else {
@@ -1053,6 +1059,7 @@ void RunNativeOtaUpdate(
   std::optional<std::wstring> resolvedDeviceIdForLastRun;
   std::optional<bool> inRolloutForLastRun;
   std::optional<int32_t> rolloutPercentForLastRun;
+  std::optional<std::wstring> channelsJsonForLastRun;
 
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -1189,6 +1196,7 @@ void RunNativeOtaUpdate(
     }
 
     if (auto channelsObject = bundleInfoObject.GetNamedObject(L"channels", nullptr)) {
+      channelsJsonForLastRun = channelsObject.Stringify().c_str();
       std::wstring channelVersion =
           channelsObject.GetNamedString(winrt::hstring(resolvedChannel), L"").c_str();
       if (!tryUseLatestVersion(channelVersion, "channels:" + ToUtf8(resolvedChannel)) &&
@@ -1296,7 +1304,8 @@ void RunNativeOtaUpdate(
           resolvedDeviceId,
           inRollout,
           rolloutPercent,
-          false);
+          false,
+          channelsJsonForLastRun);
       return;
     }
 
@@ -1510,7 +1519,8 @@ void RunNativeOtaUpdate(
         resolvedDeviceId,
         inRollout,
         rolloutPercent,
-        true);
+        true,
+        channelsJsonForLastRun);
     AppendLog(
         "OTA.Native.Updated bundleId=" + ToUtf8(*resolvedBundleId) +
         " version=" + ToUtf8(latestVersion));
