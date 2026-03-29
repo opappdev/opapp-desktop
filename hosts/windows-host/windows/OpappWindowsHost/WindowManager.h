@@ -11,6 +11,12 @@
 
 namespace OpappWindowsHost {
 
+struct StagedBundleDescriptor {
+  std::wstring BundleId;
+  std::optional<std::wstring> Version;
+  std::optional<std::wstring> SourceKind;
+};
+
 winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
     LaunchSurfaceConfig const &launchSurface,
     std::optional<AutoOpenSurfaceConfig> const &autoOpenSurface = std::nullopt) noexcept;
@@ -23,6 +29,7 @@ std::optional<std::string> GetCurrentManagedWindowPayload() noexcept;
 bool FocusManagedWindow(std::wstring const &windowId) noexcept;
 bool CloseManagedWindow(std::wstring const &windowId) noexcept;
 bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept;
+std::vector<StagedBundleDescriptor> ListStagedBundles() noexcept;
 std::vector<std::wstring> ListStagedBundleIds() noexcept;
 std::optional<std::string> OpenManagedWindow(LaunchSurfaceConfig const &launchSurface) noexcept;
 std::optional<std::string> SwitchMainWindowToBundle(

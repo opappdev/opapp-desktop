@@ -98,6 +98,37 @@ struct OpappWindowManagerModule {
     result.Resolve(otaRemoteUrl ? OpappWindowsHost::ToUtf8(*otaRemoteUrl) : std::string{});
   }
 
+  REACT_METHOD(GetStagedBundles, L"getStagedBundles")
+  void GetStagedBundles(
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    winrt::Windows::Data::Json::JsonArray payload;
+    for (auto const &bundle : OpappWindowsHost::ListStagedBundles()) {
+      winrt::Windows::Data::Json::JsonObject bundlePayload;
+      bundlePayload.Insert(
+          L"bundleId",
+          winrt::Windows::Data::Json::JsonValue::CreateStringValue(bundle.BundleId));
+      if (bundle.Version && !bundle.Version->empty()) {
+        bundlePayload.Insert(
+            L"version",
+            winrt::Windows::Data::Json::JsonValue::CreateStringValue(*bundle.Version));
+      } else {
+        bundlePayload.Insert(L"version", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
+      if (bundle.SourceKind && !bundle.SourceKind->empty()) {
+        bundlePayload.Insert(
+            L"sourceKind",
+            winrt::Windows::Data::Json::JsonValue::CreateStringValue(*bundle.SourceKind));
+      } else {
+        bundlePayload.Insert(L"sourceKind", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
+      payload.Append(bundlePayload);
+    }
+
+    result.Resolve(OpappWindowsHost::ToUtf8(payload.Stringify()));
+  }
+
   REACT_METHOD(GetStagedBundleIds, L"getStagedBundleIds")
   void GetStagedBundleIds(
       winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {

@@ -14,6 +14,13 @@
 namespace OpappWindowsHost {
 namespace {
 
+struct BundleManifestMetadata {
+  std::optional<std::wstring> BundleId;
+  std::optional<std::wstring> EntryFile;
+  std::optional<std::wstring> Version;
+  std::optional<std::wstring> SourceKind;
+};
+
 template <typename TValue, typename TGetter>
 std::optional<TValue> TryJsonValue(TGetter &&getter) noexcept {
   try {
@@ -23,36 +30,23 @@ std::optional<TValue> TryJsonValue(TGetter &&getter) noexcept {
   }
 }
 
-std::optional<std::wstring> ReadBundleManifestEntryFile(std::wstring const &bundleRoot) noexcept {
+std::optional<std::wstring> ReadBundleManifestStringField(
+    winrt::Windows::Data::Json::JsonObject const &jsonObject,
+    wchar_t const *fieldName) noexcept {
   try {
-    auto manifestPath = std::filesystem::path(bundleRoot) / L"bundle-manifest.json";
-    std::ifstream stream(manifestPath, std::ios::binary);
-    if (!stream.is_open()) {
+    auto value = jsonObject.GetNamedString(fieldName);
+    std::wstring normalized(value.c_str(), value.size());
+    if (normalized.empty()) {
       return std::nullopt;
     }
 
-    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-    auto jsonObject = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
-    auto entryFileHstr = jsonObject.GetNamedString(L"entryFile");
-    std::wstring entryFile(entryFileHstr.c_str(), entryFileHstr.size());
-
-    constexpr std::wstring_view kBundleSuffix = L".bundle";
-    if (entryFile.size() > kBundleSuffix.size() &&
-        entryFile.substr(entryFile.size() - kBundleSuffix.size()) == kBundleSuffix) {
-      entryFile = entryFile.substr(0, entryFile.size() - kBundleSuffix.size());
-    }
-
-    if (entryFile.empty()) {
-      return std::nullopt;
-    }
-
-    return entryFile;
+    return normalized;
   } catch (...) {
     return std::nullopt;
   }
 }
 
-std::optional<std::wstring> ReadBundleManifestBundleId(std::wstring const &bundleRoot) noexcept {
+std::optional<BundleManifestMetadata> ReadBundleManifestMetadata(std::wstring const &bundleRoot) noexcept {
   try {
     auto manifestPath = std::filesystem::path(bundleRoot) / L"bundle-manifest.json";
     std::ifstream stream(manifestPath, std::ios::binary);
@@ -62,16 +56,38 @@ std::optional<std::wstring> ReadBundleManifestBundleId(std::wstring const &bundl
 
     std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
     auto jsonObject = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
-    auto bundleIdHstr = jsonObject.GetNamedString(L"bundleId");
-    std::wstring bundleId(bundleIdHstr.c_str(), bundleIdHstr.size());
-    if (bundleId.empty()) {
-      return std::nullopt;
+
+    BundleManifestMetadata metadata;
+    metadata.BundleId = ReadBundleManifestStringField(jsonObject, L"bundleId");
+    metadata.EntryFile = ReadBundleManifestStringField(jsonObject, L"entryFile");
+    metadata.Version = ReadBundleManifestStringField(jsonObject, L"version");
+    metadata.SourceKind = ReadBundleManifestStringField(jsonObject, L"sourceKind");
+
+    constexpr std::wstring_view kBundleSuffix = L".bundle";
+    if (metadata.EntryFile &&
+        metadata.EntryFile->size() > kBundleSuffix.size() &&
+        metadata.EntryFile->substr(metadata.EntryFile->size() - kBundleSuffix.size()) == kBundleSuffix) {
+      metadata.EntryFile =
+          metadata.EntryFile->substr(0, metadata.EntryFile->size() - kBundleSuffix.size());
     }
 
-    return bundleId;
+    if (metadata.EntryFile && metadata.EntryFile->empty()) {
+      metadata.EntryFile = std::nullopt;
+    }
+
+    return metadata;
   } catch (...) {
     return std::nullopt;
   }
+}
+
+std::optional<std::wstring> ReadBundleManifestEntryFile(std::wstring const &bundleRoot) noexcept {
+  auto metadata = ReadBundleManifestMetadata(bundleRoot);
+  if (!metadata) {
+    return std::nullopt;
+  }
+
+  return metadata->EntryFile;
 }
 
 RECT GetWindowWorkArea(HWND hwnd) noexcept {
@@ -664,17 +680,17 @@ bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept {
   return ReadBundleManifestEntryFile(*bundleRootPath).has_value();
 }
 
-std::vector<std::wstring> ListStagedBundleIds() noexcept {
-  std::vector<std::wstring> bundleIds;
+std::vector<StagedBundleDescriptor> ListStagedBundles() noexcept {
+  std::vector<StagedBundleDescriptor> bundles;
   auto &state = GetWindowManagerState();
   if (!state.BundledRuntime || state.AppDirectory.empty()) {
-    return bundleIds;
+    return bundles;
   }
 
   try {
     auto bundlesRoot = std::filesystem::path(state.AppDirectory) / L"Bundle" / L"bundles";
     if (!std::filesystem::exists(bundlesRoot) || !std::filesystem::is_directory(bundlesRoot)) {
-      return bundleIds;
+      return bundles;
     }
 
     std::set<std::wstring> seenBundleIds;
@@ -684,25 +700,43 @@ std::vector<std::wstring> ListStagedBundleIds() noexcept {
       }
 
       auto bundleRoot = entry.path();
-      auto entryFile = ReadBundleManifestEntryFile(bundleRoot.wstring());
-      if (!entryFile) {
+      auto manifest = ReadBundleManifestMetadata(bundleRoot.wstring());
+      if (!manifest || !manifest->EntryFile) {
         continue;
       }
 
-      auto bundleId = ReadBundleManifestBundleId(bundleRoot.wstring());
       auto fallbackBundleId = bundleRoot.filename().wstring();
-      auto resolvedBundleId = bundleId && !bundleId->empty() ? *bundleId : fallbackBundleId;
+      auto resolvedBundleId =
+          manifest->BundleId && !manifest->BundleId->empty() ? *manifest->BundleId : fallbackBundleId;
       if (resolvedBundleId.empty() || resolvedBundleId == L"opapp.companion.main") {
         continue;
       }
 
       if (seenBundleIds.insert(resolvedBundleId).second) {
-        bundleIds.push_back(std::move(resolvedBundleId));
+        bundles.push_back(StagedBundleDescriptor{
+            std::move(resolvedBundleId),
+            manifest->Version,
+            manifest->SourceKind,
+        });
       }
     }
 
-    std::sort(bundleIds.begin(), bundleIds.end());
+    std::sort(
+        bundles.begin(),
+        bundles.end(),
+        [](StagedBundleDescriptor const &left, StagedBundleDescriptor const &right) {
+          return left.BundleId < right.BundleId;
+        });
   } catch (...) {
+  }
+
+  return bundles;
+}
+
+std::vector<std::wstring> ListStagedBundleIds() noexcept {
+  std::vector<std::wstring> bundleIds;
+  for (auto const &bundle : ListStagedBundles()) {
+    bundleIds.push_back(bundle.BundleId);
   }
 
   return bundleIds;
