@@ -12,6 +12,11 @@ function normalizeText(value) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeWindowsPath(value) {
+  const normalized = normalizeText(value);
+  return normalized ? path.win32.normalize(normalized) : null;
+}
+
 function truncateOneLine(value, maxLength = 200) {
   const normalized = String(value ?? '')
     .replace(/\r/g, '')
@@ -458,11 +463,21 @@ export function collectReleaseBuildProbe({
   exists = existsSync,
   readDir = readdirSync,
 } = {}) {
-  const systemRoot = normalizeText(env.SystemRoot) ?? normalizeText(env.WINDIR) ?? 'C:\\Windows';
-  const cmdPath = path.join(systemRoot, 'System32', 'cmd.exe');
+  const systemRoot =
+    normalizeWindowsPath(env.SystemRoot) ??
+    normalizeWindowsPath(env.WINDIR) ??
+    'C:\\Windows';
+  const cmdPath = path.win32.join(systemRoot, 'System32', 'cmd.exe');
   const programFilesX86 =
-    normalizeText(env['ProgramFiles(x86)']) ?? normalizeText(env.ProgramFiles) ?? 'C:\\Program Files (x86)';
-  const vswherePath = path.join(programFilesX86, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
+    normalizeWindowsPath(env['ProgramFiles(x86)']) ??
+    normalizeWindowsPath(env.ProgramFiles) ??
+    'C:\\Program Files (x86)';
+  const vswherePath = path.win32.join(
+    programFilesX86,
+    'Microsoft Visual Studio',
+    'Installer',
+    'vswhere.exe',
+  );
 
   const cmdExists = exists(cmdPath);
   const cmdProbe = cmdExists
@@ -529,9 +544,16 @@ export function collectReleaseBuildProbe({
 
   const msbuildCandidatesUnknown = vswhereProbe.ok && vswhereProbe.captureBlocked;
   const msbuildCandidates = vswhereInstalls.map(install => {
-    const installationPath = normalizeText(install.installationPath);
+    const installationPath = normalizeWindowsPath(install.installationPath);
     const msbuildPath = installationPath
-      ? path.join(installationPath, 'MSBuild', 'Current', 'Bin', 'amd64', 'msbuild.exe')
+      ? path.win32.join(
+          installationPath,
+          'MSBuild',
+          'Current',
+          'Bin',
+          'amd64',
+          'msbuild.exe',
+        )
       : null;
 
     return {
@@ -544,10 +566,12 @@ export function collectReleaseBuildProbe({
   });
 
   const localAppDataPath =
-    normalizeText(env.LOCALAPPDATA) ??
-    (normalizeText(env.USERPROFILE) ? path.join(normalizeText(env.USERPROFILE), 'AppData', 'Local') : null);
+    normalizeWindowsPath(env.LOCALAPPDATA) ??
+    (normalizeWindowsPath(env.USERPROFILE)
+      ? path.win32.join(normalizeWindowsPath(env.USERPROFILE), 'AppData', 'Local')
+      : null);
   const localMicrosoftSdkProbe = probePathAccess(
-    localAppDataPath ? path.join(localAppDataPath, 'Microsoft SDKs') : null,
+    localAppDataPath ? path.win32.join(localAppDataPath, 'Microsoft SDKs') : null,
     {
       exists,
       readDir,
@@ -581,7 +605,7 @@ export function collectReleaseBuildProbe({
 }
 
 function addPortableMsbuildFallbackCandidate(candidates, seen, candidatePath, exists) {
-  const normalizedPath = normalizeText(candidatePath);
+  const normalizedPath = normalizeWindowsPath(candidatePath);
   if (!normalizedPath) {
     return;
   }
@@ -620,8 +644,8 @@ export function collectPortableMsbuildFallbackCandidates({
   }
 
   const programFileRoots = [
-    normalizeText(env.ProgramFiles),
-    normalizeText(env['ProgramFiles(x86)']),
+    normalizeWindowsPath(env.ProgramFiles),
+    normalizeWindowsPath(env['ProgramFiles(x86)']),
   ].filter(Boolean);
   const visualStudioYears = ['2022', '2019'];
   const visualStudioEditions = ['BuildTools', 'Community', 'Professional', 'Enterprise', 'Preview'];
@@ -632,7 +656,7 @@ export function collectPortableMsbuildFallbackCandidates({
         addPortableMsbuildFallbackCandidate(
           candidates,
           seen,
-          path.join(
+          path.win32.join(
             root,
             'Microsoft Visual Studio',
             year,

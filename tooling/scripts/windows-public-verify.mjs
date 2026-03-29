@@ -247,6 +247,269 @@ function runVerify(args) {
   }
 }
 
+function runPowerShellOrThrow(commandText) {
+  const result = spawnSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      commandText,
+    ],
+    {
+      cwd: repoRoot,
+      env: process.env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: false,
+    },
+  );
+
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(
+      `PowerShell exited with status ${result.status ?? 1} while preparing Windows public verify.`,
+    );
+  }
+}
+
+async function resolveWindowsAppRuntimeVersion() {
+  const packagesLockPath = path.join(
+    repoRoot,
+    'hosts',
+    'windows-host',
+    'windows',
+    'OpappWindowsHost',
+    'packages.lock.json',
+  );
+  const packagesLock = JSON.parse(await readFile(packagesLockPath, 'utf8'));
+  const dependencySections = Object.values(packagesLock.dependencies ?? {});
+
+  for (const section of dependencySections) {
+    const runtimePackage = section?.['Microsoft.WindowsAppSDK.Runtime'];
+    if (typeof runtimePackage?.resolved === 'string' && runtimePackage.resolved) {
+      return runtimePackage.resolved;
+    }
+  }
+
+  throw new Error(
+    `Could not resolve Microsoft.WindowsAppSDK.Runtime from ${packagesLockPath}.`,
+  );
+}
+
+function resolveNugetPackagesRoot() {
+  const configuredRoot = process.env.NUGET_PACKAGES?.trim();
+  if (configuredRoot) {
+    return path.resolve(configuredRoot);
+  }
+
+  const userProfile = process.env.USERPROFILE?.trim();
+  if (userProfile) {
+    return path.join(userProfile, '.nuget', 'packages');
+  }
+
+  throw new Error(
+    'Could not resolve the NuGet global-packages folder. Set NUGET_PACKAGES or USERPROFILE before running Windows public verify.',
+  );
+}
+
+function resolvePortableRuntimePackageDirSpecs() {
+  switch (process.arch) {
+    case 'x64':
+      return [
+        {
+          packageDirName: 'win10-x86',
+          requiredPatterns: [
+            {
+              label: 'framework-x86',
+              pattern: /^Microsoft\.WindowsAppRuntime\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'ddlm-x86',
+              pattern: /^Microsoft\.WindowsAppRuntime\.DDLM\.\d+\.\d+\.msix$/,
+            },
+          ],
+        },
+        {
+          packageDirName: 'win10-x64',
+          requiredPatterns: [
+            {
+              label: 'framework-x64',
+              pattern: /^Microsoft\.WindowsAppRuntime\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'ddlm-x64',
+              pattern: /^Microsoft\.WindowsAppRuntime\.DDLM\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'main-x64',
+              pattern: /^Microsoft\.WindowsAppRuntime\.Main\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'singleton-x64',
+              pattern: /^Microsoft\.WindowsAppRuntime\.Singleton\.\d+\.\d+\.msix$/,
+            },
+          ],
+        },
+      ];
+    case 'ia32':
+      return [
+        {
+          packageDirName: 'win10-x86',
+          requiredPatterns: [
+            {
+              label: 'framework-x86',
+              pattern: /^Microsoft\.WindowsAppRuntime\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'ddlm-x86',
+              pattern: /^Microsoft\.WindowsAppRuntime\.DDLM\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'main-x86',
+              pattern: /^Microsoft\.WindowsAppRuntime\.Main\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'singleton-x86',
+              pattern: /^Microsoft\.WindowsAppRuntime\.Singleton\.\d+\.\d+\.msix$/,
+            },
+          ],
+        },
+      ];
+    case 'arm64':
+      return [
+        {
+          packageDirName: 'win10-arm64',
+          requiredPatterns: [
+            {
+              label: 'framework-arm64',
+              pattern: /^Microsoft\.WindowsAppRuntime\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'ddlm-arm64',
+              pattern: /^Microsoft\.WindowsAppRuntime\.DDLM\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'main-arm64',
+              pattern: /^Microsoft\.WindowsAppRuntime\.Main\.\d+\.\d+\.msix$/,
+            },
+            {
+              label: 'singleton-arm64',
+              pattern: /^Microsoft\.WindowsAppRuntime\.Singleton\.\d+\.\d+\.msix$/,
+            },
+          ],
+        },
+      ];
+    default:
+      throw new Error(
+        `Unsupported process.arch '${process.arch}' for Windows App Runtime installation.`,
+      );
+  }
+}
+
+async function readPortableRuntimePackageSpecs({
+  runtimePackageRoot,
+  packageDirName,
+  requiredPatterns,
+}) {
+  const packageDir = path.join(runtimePackageRoot, 'tools', 'MSIX', packageDirName);
+  const inventoryPath = path.join(packageDir, 'MSIX.inventory');
+  const inventoryContent = await readFile(inventoryPath, 'utf8');
+  const inventoryEntries = inventoryContent
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const separatorIndex = line.indexOf('=');
+      if (separatorIndex <= 0) {
+        throw new Error(
+          `Invalid MSIX inventory entry '${line}' in ${inventoryPath}.`,
+        );
+      }
+
+      return {
+        fileName: line.slice(0, separatorIndex),
+        packageFullName: line.slice(separatorIndex + 1),
+      };
+    });
+
+  return requiredPatterns.map(({label, pattern}) => {
+    const entry = inventoryEntries.find(candidate => pattern.test(candidate.fileName));
+    if (!entry) {
+      throw new Error(
+        `Windows public verify could not find the ${label} package in ${inventoryPath}.`,
+      );
+    }
+
+    return {
+      label,
+      fileName: entry.fileName,
+      packageFullName: entry.packageFullName,
+      packageName: entry.packageFullName.split('_')[0],
+      minimumVersion: entry.packageFullName.split('_')[1] ?? null,
+      architecture: entry.packageFullName.split('_')[2] ?? null,
+      path: path.join(packageDir, entry.fileName),
+    };
+  });
+}
+
+async function ensurePortableWindowsAppRuntimePackages() {
+  const runtimeVersion = await resolveWindowsAppRuntimeVersion();
+  const runtimePackageRoot = path.join(
+    resolveNugetPackagesRoot(),
+    'microsoft.windowsappsdk.runtime',
+    runtimeVersion,
+  );
+  const packageDirSpecs = resolvePortableRuntimePackageDirSpecs();
+  const packageSpecs = (
+    await Promise.all(
+      packageDirSpecs.map(spec =>
+        readPortableRuntimePackageSpecs({
+          runtimePackageRoot,
+          packageDirName: spec.packageDirName,
+          requiredPatterns: spec.requiredPatterns,
+        }),
+      ),
+    )
+  ).flat();
+
+  log(
+    `ensuring Windows App Runtime packages for portable verify from ${runtimePackageRoot}`,
+  );
+
+  const packageSpecsJson = JSON.stringify(packageSpecs, null, 2);
+  const powerShellCommand =
+    `$ErrorActionPreference = 'Stop'; ` +
+    `$packages = @'\n${packageSpecsJson}\n'@ | ConvertFrom-Json; ` +
+    `foreach ($package in $packages) { ` +
+    `  $installed = Get-AppxPackage -Name $package.packageName | Where-Object { ` +
+    `    $_.Architecture.ToString().ToUpperInvariant() -eq $package.architecture.ToUpperInvariant() -and ` +
+    `    [version]$_.Version -ge [version]$package.minimumVersion ` +
+    `  }; ` +
+    `  if ($installed) { ` +
+    `    $resolvedVersion = ($installed | Sort-Object Version -Descending | Select-Object -First 1).Version; ` +
+    `    Write-Host "[windows-public-verify] runtime package already satisfied: $($package.packageName) arch=$($package.architecture) installedVersion=$resolvedVersion requiredVersion=$($package.minimumVersion)"; ` +
+    `    continue; ` +
+    `  }; ` +
+    `  Write-Host "[windows-public-verify] installing runtime package: $($package.packageFullName)"; ` +
+    `  Add-AppxPackage -Path $package.path -ErrorAction Stop; ` +
+    `};`;
+
+  runPowerShellOrThrow(powerShellCommand);
+}
+
 async function main() {
   let registryRoot = null;
   let server = null;
@@ -270,6 +533,8 @@ async function main() {
 
     log('running packaged Windows public verify');
     runVerify(commonArgs);
+
+    await ensurePortableWindowsAppRuntimePackages();
 
     log('running portable Windows public verify');
     runVerify([...commonArgs, '--launch=portable']);
