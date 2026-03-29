@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash, randomBytes} from 'node:crypto';
 import {
   copyFile,
   mkdir,
@@ -32,6 +32,18 @@ export const appPackagesRoot = path.join(
   'OpappWindowsHost.Package',
   'AppPackages',
 );
+export const packageManifestPath = path.join(
+  repoRoot,
+  'hosts',
+  'windows-host',
+  'windows',
+  'OpappWindowsHost.Package',
+  'Package.appxmanifest',
+);
+export const windowsKitsBinRoot =
+  process.env['ProgramFiles(x86)']?.trim()
+    ? path.join(process.env['ProgramFiles(x86)'].trim(), 'Windows Kits', '10', 'bin')
+    : path.join('C:\\Program Files (x86)', 'Windows Kits', '10', 'bin');
 
 const portableFolderName = 'opapp-windows-nightly-x64-portable';
 const msixBundleFolderName = 'opapp-windows-nightly-x64-msix-bundle';
@@ -135,11 +147,50 @@ export function compareMsixCandidates(a, b) {
   return a.filePath.localeCompare(b.filePath);
 }
 
+function escapePowerShellLiteral(value) {
+  return value.replace(/'/g, "''");
+}
+
 export function detectMsixArchitecture(filePath) {
   const match = filePath
     .replace(/\\/g, '/')
     .match(/_(arm64|x64|x86|arm)(?=_|\.msix$)/i);
   return match ? match[1].toLowerCase() : 'unknown';
+}
+
+export function shouldCopyMsixRelativePath(relativePath) {
+  if (!relativePath) {
+    return true;
+  }
+
+  const normalized = relativePath.replace(/\\/g, '/');
+  const normalizedLower = normalized.toLowerCase();
+  if (normalizedLower.endsWith('.appxsym')) {
+    return false;
+  }
+
+  if (
+    normalizedLower === 'telemetrydependencies' ||
+    normalizedLower.startsWith('telemetrydependencies/')
+  ) {
+    return false;
+  }
+
+  const excludedDependencyPrefixes = [
+    'dependencies/arm/',
+    'dependencies/arm64/',
+    'dependencies/win32/',
+  ];
+  if (
+    excludedDependencyPrefixes.some(prefix => normalizedLower.startsWith(prefix)) ||
+    normalizedLower === 'dependencies/arm' ||
+    normalizedLower === 'dependencies/arm64' ||
+    normalizedLower === 'dependencies/win32'
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 export function buildReleaseNotes({
@@ -166,13 +217,14 @@ export function buildReleaseNotes({
     '## Recommended Downloads',
     '',
     `- \`${portableAssetName}\`: unzip, keep the folder intact, and run \`OpappWindowsHost.exe\`. This is the easiest direct-run nightly path.`,
-    `- \`${msixAssetName}\`: unzip and run \`Install.ps1\` if you prefer the packaged MSIX install flow with bundled dependencies.`,
+    `- \`${msixAssetName}\`: unzip and run \`Install.ps1\` if you need the packaged MSIX sideload path. Do not open the \`.msix\` directly.`,
     '',
     '## Notes',
     '',
     '- Windows release builds default their OTA remote base to `https://r2.opapp.dev` unless launch config or `OPAPP_OTA_REMOTE_URL` overrides it for smoke/testing.',
     '- The direct-run executable must stay beside its bundled DLLs and `Bundle/` directory; downloading a bare exe by itself is not a supported distribution shape.',
-    '- These assets are unsigned nightly builds intended for internal testing and fast validation.',
+    '- The MSIX nightly is test-signed. The zip now includes the matching `.cer`, and `Install.ps1` is the supported way to trust/install it for internal testing.',
+    '- These assets are nightly builds intended for internal testing and fast validation, not polished end-user installers.',
     '',
   ].join('\n');
 }
@@ -298,6 +350,116 @@ function runPowerShellOrThrow(commandText) {
   }
 }
 
+function runExecutable(command, args) {
+  return spawnSync(command, args, {
+    cwd: repoRoot,
+    env: process.env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: false,
+  });
+}
+
+function writeChildProcessOutput(result) {
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+}
+
+function runExecutableOrThrow(command, args, label) {
+  const result = runExecutable(command, args);
+  writeChildProcessOutput(result);
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(
+      `${label} exited with status ${result.status ?? 1}.`,
+    );
+  }
+}
+
+export async function resolveSigntoolPath(searchRoot = windowsKitsBinRoot) {
+  await ensurePathExists(searchRoot, 'Windows Kits bin root');
+  const entries = await readdir(searchRoot, {withFileTypes: true});
+  const candidates = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const candidatePath = path.join(searchRoot, entry.name, 'x64', 'signtool.exe');
+    try {
+      await stat(candidatePath);
+      candidates.push({
+        filePath: candidatePath,
+        version: entry.name,
+      });
+    } catch {}
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(`Could not find signtool.exe under ${searchRoot}.`);
+  }
+
+  candidates.sort((left, right) =>
+    right.version.localeCompare(left.version, undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    }),
+  );
+  return candidates[0].filePath;
+}
+
+export async function readPackagePublisher(manifestFilePath = packageManifestPath) {
+  const manifestContent = await readFile(manifestFilePath, 'utf8');
+  const publisherMatch = manifestContent.match(
+    /<Identity\b[^>]*\bPublisher="([^"]+)"/i,
+  );
+  if (!publisherMatch?.[1]) {
+    throw new Error(`Could not resolve Publisher from ${manifestFilePath}.`);
+  }
+
+  return publisherMatch[1];
+}
+
+function inspectMsixSignature(msixFilePath, signtoolPath) {
+  const result = runExecutable(signtoolPath, ['verify', '/pa', '/v', msixFilePath]);
+  const combinedOutput = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+
+  if (result.status === 0) {
+    return {
+      state: 'trusted',
+      result,
+    };
+  }
+
+  if (/No signature found/i.test(combinedOutput)) {
+    return {
+      state: 'absent',
+      result,
+    };
+  }
+
+  if (/not trusted by the trust provider/i.test(combinedOutput)) {
+    return {
+      state: 'present-untrusted',
+      result,
+    };
+  }
+
+  return {
+    state: 'invalid',
+    result,
+  };
+}
+
 async function createZipFromDirectory(sourceDirectoryPath, zipFilePath) {
   const escapedSource = sourceDirectoryPath.replace(/'/g, "''");
   const escapedDestination = zipFilePath.replace(/'/g, "''");
@@ -324,6 +486,20 @@ async function writePortableReadme(destinationRoot) {
   await writeFile(readmePath, content, 'utf8');
 }
 
+async function writeMsixReadme(destinationRoot, certificateFileName) {
+  const readmePath = path.join(destinationRoot, 'README.txt');
+  const content = [
+    'OPApp Windows Nightly (MSIX sideload)',
+    '',
+    '1. Extract this archive to a normal writable folder.',
+    '2. Run Install.ps1 from this folder.',
+    `3. If Windows prompts about the nightly test certificate, trust the bundled ${certificateFileName}.`,
+    '4. Do not open the .msix directly from Explorer before the certificate is trusted.',
+    '',
+  ].join('\r\n');
+  await writeFile(readmePath, content, 'utf8');
+}
+
 async function stagePortableBundle(stagingRoot) {
   await ensurePathExists(portableReleaseRoot, 'Windows portable release root');
   const portableStageRoot = path.join(stagingRoot, portableFolderName);
@@ -336,19 +512,102 @@ async function stagePortableBundle(stagingRoot) {
   return portableStageRoot;
 }
 
+async function ensureSignedMsixAndExportCertificate(msixFilePath, destinationRoot) {
+  const signtoolPath = await resolveSigntoolPath();
+  const certificateFileName = `${path.parse(msixFilePath).name}.cer`;
+  const certificatePath = path.join(destinationRoot, certificateFileName);
+  const publisher = await readPackagePublisher();
+  const signatureBeforeSigning = inspectMsixSignature(msixFilePath, signtoolPath);
+
+  if (signatureBeforeSigning.state === 'absent') {
+    const certificateBaseName = path.parse(msixFilePath).name;
+    const pfxPath = path.join(destinationRoot, `${certificateBaseName}.pfx`);
+    const pfxPassword = randomBytes(24).toString('hex');
+    const escapedPublisher = escapePowerShellLiteral(publisher);
+    const escapedCertificate = escapePowerShellLiteral(certificatePath);
+    const escapedPfxPath = escapePowerShellLiteral(pfxPath);
+    const escapedPassword = escapePowerShellLiteral(pfxPassword);
+
+    log(`self-signing nightly MSIX with publisher ${publisher}`);
+    runPowerShellOrThrow(
+      [
+        `$dn = New-Object System.Security.Cryptography.X509Certificates.X500DistinguishedName '${escapedPublisher}'`,
+        '$rsa = [System.Security.Cryptography.RSA]::Create(2048)',
+        '$request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new($dn, $rsa, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)',
+        '$keyUsage = [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new([System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature, $false)',
+        '$request.CertificateExtensions.Add($keyUsage)',
+        '$enhancedKeyUsageOids = New-Object System.Security.Cryptography.OidCollection',
+        "[void]$enhancedKeyUsageOids.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3'))",
+        '$enhancedKeyUsage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($enhancedKeyUsageOids, $false)',
+        '$request.CertificateExtensions.Add($enhancedKeyUsage)',
+        '$cert = $request.CreateSelfSigned([System.DateTimeOffset]::UtcNow.AddDays(-1), [System.DateTimeOffset]::UtcNow.AddYears(2))',
+        "if (-not $cert) { throw 'Could not create the nightly MSIX signing certificate.' }",
+        `$exportableCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, '${escapedPassword}'), '${escapedPassword}', [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)`,
+        `$pfxBytes = $exportableCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, '${escapedPassword}')`,
+        `[System.IO.File]::WriteAllBytes('${escapedPfxPath}', $pfxBytes)`,
+        `$cerBytes = $exportableCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)`,
+        `[System.IO.File]::WriteAllBytes('${escapedCertificate}', $cerBytes)`,
+        '$rsa.Dispose()',
+      ].join('; '),
+    );
+
+    try {
+      runExecutableOrThrow(
+        signtoolPath,
+        ['sign', '/fd', 'SHA256', '/f', pfxPath, '/p', pfxPassword, msixFilePath],
+        'signtool sign',
+      );
+      const signatureAfterSigning = inspectMsixSignature(msixFilePath, signtoolPath);
+      if (signatureAfterSigning.state === 'trusted') {
+        log(`verified signed MSIX at ${msixFilePath}`);
+      } else if (signatureAfterSigning.state === 'present-untrusted') {
+        log(
+          `verified self-signed MSIX at ${msixFilePath}; the bundled .cer is required before Windows trusts the publisher.`,
+        );
+      } else {
+        writeChildProcessOutput(signatureAfterSigning.result);
+        throw new Error(
+          `MSIX signing did not produce a recognizable signature for ${msixFilePath}.`,
+        );
+      }
+    } finally {
+      await rm(pfxPath, {force: true});
+    }
+  } else if (
+    signatureBeforeSigning.state === 'trusted' ||
+    signatureBeforeSigning.state === 'present-untrusted'
+  ) {
+    throw new Error(
+      `Expected an unsigned nightly MSIX at ${msixFilePath}, but the package already carries a signature. Update windows-nightly-release-assets.mjs to export that signer certificate instead of replacing it.`,
+    );
+  } else {
+    writeChildProcessOutput(signatureBeforeSigning.result);
+    throw new Error(`Could not determine the signature state for ${msixFilePath}.`);
+  }
+
+  return {
+    certificateFileName,
+    certificatePath,
+  };
+}
+
 async function stageMsixBundle(stagingRoot) {
   const msixPath = await findPreferredMsixFile(appPackagesRoot);
   const msixSourceRoot = path.dirname(msixPath);
   const msixStageRoot = path.join(stagingRoot, msixBundleFolderName);
 
-  await copyTreeFiltered(msixSourceRoot, msixStageRoot, relativePath => {
-    const normalized = relativePath.replace(/\\/g, '/');
-    return !normalized.endsWith('.appxsym');
-  });
+  await copyTreeFiltered(msixSourceRoot, msixStageRoot, shouldCopyMsixRelativePath);
+  const stagedMsixPath = path.join(msixStageRoot, path.basename(msixPath));
+  const {certificateFileName, certificatePath} = await ensureSignedMsixAndExportCertificate(
+    stagedMsixPath,
+    msixStageRoot,
+  );
+  await writeMsixReadme(msixStageRoot, certificateFileName);
 
   return {
     msixPath,
     msixStageRoot,
+    certificatePath,
   };
 }
 
@@ -382,7 +641,7 @@ async function main() {
 
   log(`stagingRoot=${stagingRoot}`);
   const portableStageRoot = await stagePortableBundle(stagingRoot);
-  const {msixPath, msixStageRoot} = await stageMsixBundle(stagingRoot);
+  const {msixPath, msixStageRoot, certificatePath} = await stageMsixBundle(stagingRoot);
 
   const portableZipPath = path.join(options.outDir, portableZipName);
   const msixBundleZipPath = path.join(options.outDir, msixBundleZipName);
@@ -426,7 +685,7 @@ async function main() {
           {
             path: msixBundleZipPath,
             label: 'msix-bundle',
-            recommended: true,
+            recommended: false,
           },
           {
             path: checksumsPath,
@@ -434,6 +693,11 @@ async function main() {
             recommended: false,
           },
         ],
+        msixSupport: {
+          certificatePath,
+          dependencyDirectoriesIncluded: ['x64', 'x86'],
+          dependencyDirectoriesExcluded: ['ARM', 'ARM64', 'win32'],
+        },
       },
       null,
       2,

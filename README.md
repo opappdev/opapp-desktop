@@ -78,12 +78,14 @@ The GitHub Actions workflow at `.github/workflows/windows-nightly.yml` publishes
 a prerelease Windows nightly from a pinned public `opapp-frontend` ref plus the
 current `opapp-desktop` commit.
 
-Nightly assets are intentionally user-installable or user-runnable:
+Nightly assets are intentionally user-runnable, with a secondary packaged
+MSIX sideload path for internal validation:
 
 - `opapp-windows-nightly-x64-portable.zip`: unzip and run
   `OpappWindowsHost.exe` from the extracted folder.
 - `opapp-windows-nightly-x64-msix-bundle.zip`: unzip and run `Install.ps1` for
-  the packaged MSIX path with bundled dependencies.
+  the packaged MSIX sideload flow. Do not open the `.msix` directly; the
+  nightly zip includes the matching test certificate for `Install.ps1`.
 
 Official Windows release builds default their OTA remote base to
 `https://r2.opapp.dev`. Only local smoke or targeted rehearsal runs should

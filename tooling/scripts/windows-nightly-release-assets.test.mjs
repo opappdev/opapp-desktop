@@ -8,6 +8,7 @@ import {
   buildReleaseNotes,
   compareMsixCandidates,
   findPreferredMsixFile,
+  shouldCopyMsixRelativePath,
   shouldCopyPortableRelativePath,
 } from './windows-nightly-release-assets.mjs';
 
@@ -63,6 +64,23 @@ test('findPreferredMsixFile rejects non-x64 package sets', async () => {
   );
 });
 
+test('shouldCopyMsixRelativePath trims debug symbols, telemetry, and non-x64 nightly baggage', () => {
+  assert.equal(shouldCopyMsixRelativePath('OpappWindowsHost.Package_1.0.0.0_x64.msix'), true);
+  assert.equal(shouldCopyMsixRelativePath('Dependencies\\x64\\Microsoft.WindowsAppRuntime.1.8.msix'), true);
+  assert.equal(shouldCopyMsixRelativePath('Dependencies\\x86\\Microsoft.WindowsAppRuntime.1.8.msix'), true);
+  assert.equal(shouldCopyMsixRelativePath('Dependencies\\ARM\\Microsoft.VCLibs.ARM.14.00.appx'), false);
+  assert.equal(
+    shouldCopyMsixRelativePath('Dependencies\\ARM64\\Microsoft.WindowsAppRuntime.1.8.msix'),
+    false,
+  );
+  assert.equal(
+    shouldCopyMsixRelativePath('Dependencies\\win32\\Microsoft.WindowsAppRuntime.1.8.msix'),
+    false,
+  );
+  assert.equal(shouldCopyMsixRelativePath('TelemetryDependencies\\Microsoft.VisualStudio.Telemetry.dll'), false);
+  assert.equal(shouldCopyMsixRelativePath('OpappWindowsHost.Package_1.0.0.0_x64.appxsym'), false);
+});
+
 test('buildReleaseNotes explains installable nightly assets', () => {
   const notes = buildReleaseNotes({
     desktopSha: '17b8787cafebabedeadbeef',
@@ -72,5 +90,6 @@ test('buildReleaseNotes explains installable nightly assets', () => {
 
   assert.match(notes, /portable/);
   assert.match(notes, /Install\.ps1/);
-  assert.match(notes, /bare exe/i);
+  assert.match(notes, /do not open the \`\.msix\` directly/i);
+  assert.match(notes, /test-signed/i);
 });
