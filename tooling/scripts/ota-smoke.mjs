@@ -20,6 +20,7 @@
  *  11. Invalid top-level latestVersion falls back to versions[] instead of a dead path
  *  12. Explicit empty versions[] rejects stale pins instead of reviving dead paths
  *  13. apply / rollback replace directories cleanly without leaving stale files
+ *  14. Up-to-date last-run payload does not claim a staged version
  *
  * Usage:
  *   node ota-smoke.mjs
@@ -34,12 +35,16 @@ import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import {fileURLToPath} from 'node:url';
 
 import {generateRegistryIndex} from './artifact-source.mjs';
-import {applyOtaUpdate, checkForUpdate, downloadOtaUpdate, readOtaState, rollbackOtaUpdate} from './ota-updater.mjs';
-
-const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
+import {
+  applyOtaUpdate,
+  buildOtaUpToDateLastRunRecord,
+  checkForUpdate,
+  downloadOtaUpdate,
+  readOtaState,
+  rollbackOtaUpdate,
+} from './ota-updater.mjs';
 
 const BUNDLE_ID = 'opapp.smoke.bundle';
 const MAIN_BUNDLE_ID = 'opapp.companion.main';
@@ -703,6 +708,23 @@ async function main() {
       '0.1.0',
       'rollback (post-download-apply): bundle-manifest.json version reverts to 0.1.0',
     );
+
+    // ── 16. Up-to-date last-run payload stays unstaged ────────────────────
+    process.stdout.write('\n16. up-to-date last-run payload does not claim a staged version\n');
+
+    const upToDateCheckResult = await checkForUpdate({
+      remoteBase: baseUrl,
+      platform: PLATFORM,
+      cacheDir: path.join(cacheBase, 'up-to-date'),
+      bundleId: BUNDLE_ID,
+      currentVersion: '0.2.0',
+      deviceId: inDevice,
+    });
+    const upToDateRecord = buildOtaUpToDateLastRunRecord(upToDateCheckResult);
+    eq(upToDateRecord.status, 'up-to-date', 'up-to-date record: status = up-to-date');
+    eq(upToDateRecord.currentVersion, '0.2.0', 'up-to-date record: keeps currentVersion');
+    eq(upToDateRecord.latestVersion, '0.2.0', 'up-to-date record: keeps latestVersion');
+    ok(upToDateRecord.version === undefined, 'up-to-date record: omits staged version');
 
     // ── Summary ───────────────────────────────────────────────────────────
     process.stdout.write(`\n${'─'.repeat(48)}\n`);

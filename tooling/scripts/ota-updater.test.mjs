@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {buildOtaUpdateLastRunRecord} from './ota-updater.mjs';
+import {buildOtaUpToDateLastRunRecord, buildOtaUpdateLastRunRecord} from './ota-updater.mjs';
 
 test('buildOtaUpdateLastRunRecord preserves rollout and channel context', () => {
   const record = buildOtaUpdateLastRunRecord(
@@ -65,4 +65,38 @@ test('buildOtaUpdateLastRunRecord omits optional rollout metadata when absent', 
   assert.equal(record.bundleId, 'opapp.companion.main');
   assert.equal(record.previousVersion, null);
   assert.equal(record.inRollout, false);
+});
+
+test('buildOtaUpToDateLastRunRecord keeps check metadata without inventing a staged version', () => {
+  const record = buildOtaUpToDateLastRunRecord({
+    hasUpdate: false,
+    inRollout: false,
+    rolloutPercent: 25,
+    deviceId: 'device-789',
+    currentVersion: '0.9.0',
+    latestVersion: '1.0.0',
+    bundleId: 'opapp.companion.main',
+    channel: 'nightly',
+    channels: {
+      stable: '0.9.0',
+      nightly: '1.0.0',
+    },
+  });
+
+  assert.deepEqual(record, {
+    status: 'up-to-date',
+    hasUpdate: false,
+    inRollout: false,
+    rolloutPercent: 25,
+    deviceId: 'device-789',
+    currentVersion: '0.9.0',
+    latestVersion: '1.0.0',
+    bundleId: 'opapp.companion.main',
+    channel: 'nightly',
+    channels: {
+      stable: '0.9.0',
+      nightly: '1.0.0',
+    },
+  });
+  assert.equal(record.version, undefined);
 });

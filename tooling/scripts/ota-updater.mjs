@@ -463,6 +463,13 @@ export function buildOtaUpdateLastRunRecord(checkResult, applyResult) {
   return record;
 }
 
+export function buildOtaUpToDateLastRunRecord(checkResult) {
+  return {
+    status: 'up-to-date',
+    ...checkResult,
+  };
+}
+
 async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
   const base = remoteBase.replace(/\/$/, '');
   const indexUrl = `${base}/index.json`;
@@ -731,13 +738,13 @@ async function main() {
   });
 
   if (!checkResult.hasUpdate) {
+    const lastRunRecord = buildOtaUpToDateLastRunRecord(checkResult);
     await _writeOtaLastRun(cacheDirArg, {
       mode: modeArg,
       remoteBase: remoteArg,
-      status: 'up-to-date',
-      ...checkResult,
+      ...lastRunRecord,
     });
-    console.log(JSON.stringify({status: 'up-to-date', ...checkResult}));
+    console.log(JSON.stringify(lastRunRecord));
     return;
   }
 

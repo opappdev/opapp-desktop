@@ -19,7 +19,8 @@ Key OTA publishing entrypoint:
   versions that do not exist in the local registry tree.
 - `npm run test:ota:updater`: direct-node assertions for OTA updater
   `last-run.json` payload shaping, including rollout/channel context retention
-  during `--mode=update`.
+  during `--mode=update` and the guard that `up-to-date` records do not invent a
+  staged `version`.
 
 Window capture entrypoints:
 
@@ -49,6 +50,9 @@ Windows verification entrypoints:
 - `npm run verify:windows:portable:ci-preflight`: portable preflight probe with CI-oriented timeout args.
 - `npm run report:windows:timing -- --input=<log-path>[,<log-path-2>] [--input=<log-path-3>] [--launch=all|packaged|portable] [--percentile=95] [--headroom-ms=5000] [--allow-verify-only] [--defaults-only] [--output=<report-path>]`: parse and aggregate `timing summary` lines across one or more logs, then print recommended `--startup-ms` / `--scenario-ms`（可选写入文件）。
 - `npm run test:windows:release-diagnostics`: single-process diagnostics assertions for environments where `node --test` runner spawning is restricted.
+- `npm run test:windows:release-smoke:ota`: direct-node assertions for OTA
+  `last-run.json` contract checks inside `windows-release-smoke`, including the
+  guard that `up-to-date` runs must not report a staged `version`.
 - `npm run smoke:windows:validate`: validate direct release-smoke packaged args only.
 - `npm run smoke:windows:portable:validate`: validate direct release-smoke portable args only.
 - `npm run smoke:windows:preflight`: packaged release preflight probe only (no bundle/build/launch).
@@ -58,6 +62,9 @@ Windows verification entrypoints:
 - preflight now fails fast with `local-sdk-acl-denied` when `C:\Users\<user>\AppData\Local\Microsoft SDKs` exists but is unreadable; this surfaces the real MSBuild blocker before bundle/build/deploy.
 - if you intentionally need the full upstream MSBuild failure after that diagnosis, rerun once with `OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1`.
 - if `Get-Acl 'C:\Users\<user>\AppData\Local\Microsoft SDKs'` is also unauthorized in the current session, inspect/fix that directory from an elevated or less-restricted Windows session before retrying verify.
+- release smoke now rejects OTA `last-run.json` records that report a staged
+  `version` while status is still `up-to-date`; only real staged updates may
+  populate that field.
 
 Windows smoke timeout knobs:
 

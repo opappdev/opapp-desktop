@@ -2159,6 +2159,61 @@ async function waitForOtaLastRun({timeoutMs, timeoutFlag}) {
   }));
 }
 
+export function validateOtaLastRunRecord({otaLastRun, otaRemoteBase, loggedCurrentVersion}) {
+  if (otaLastRun.remoteBase !== otaRemoteBase) {
+    throw new Error(
+      `Windows release smoke failed: ota last-run remoteBase was '${otaLastRun.remoteBase ?? 'unknown'}', expected '${otaRemoteBase}'.`,
+    );
+  }
+  if (typeof otaLastRun.deviceId !== 'string' || !otaLastRun.deviceId) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing a persisted deviceId.',
+    );
+  }
+  if (typeof otaLastRun.inRollout !== 'boolean') {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing boolean inRollout.',
+    );
+  }
+  if (
+    otaLastRun.rolloutPercent !== null &&
+    otaLastRun.rolloutPercent !== undefined &&
+    typeof otaLastRun.rolloutPercent !== 'number'
+  ) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run rolloutPercent must be null/number.',
+    );
+  }
+  if (otaLastRun.status !== 'updated' && otaLastRun.status !== 'up-to-date') {
+    throw new Error(
+      `Windows release smoke failed: ota last-run status was '${otaLastRun.status ?? 'unknown'}', expected 'updated' or 'up-to-date'.`,
+    );
+  }
+  if (
+    otaLastRun.currentVersion &&
+    loggedCurrentVersion &&
+    otaLastRun.currentVersion !== loggedCurrentVersion
+  ) {
+    throw new Error(
+      `Windows release smoke failed: ota last-run currentVersion '${otaLastRun.currentVersion}' did not match the host logged currentVersion '${loggedCurrentVersion}'.`,
+    );
+  }
+  if (otaLastRun.status === 'up-to-date') {
+    if (otaLastRun.version !== null && otaLastRun.version !== undefined) {
+      throw new Error(
+        `Windows release smoke failed: ota last-run reported version '${otaLastRun.version}' even though no update was applied.`,
+      );
+    }
+    return {requiresOtaState: false, status: otaLastRun.status};
+  }
+  if (typeof otaLastRun.version !== 'string' || !otaLastRun.version) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing the staged version for an updated run.',
+    );
+  }
+  return {requiresOtaState: true, status: otaLastRun.status};
+}
+
 async function verifyOtaSideEffects(logContents) {
   if (!otaRemoteArg) {
     return;
@@ -2181,30 +2236,6 @@ async function verifyOtaSideEffects(logContents) {
     timeoutMs: scenarioTimeoutMs,
     timeoutFlag: '--scenario-ms',
   });
-  if (otaLastRun.remoteBase !== otaRemoteArg) {
-    throw new Error(
-      `Windows release smoke failed: ota last-run remoteBase was '${otaLastRun.remoteBase ?? 'unknown'}', expected '${otaRemoteArg}'.`,
-    );
-  }
-  if (typeof otaLastRun.deviceId !== 'string' || !otaLastRun.deviceId) {
-    throw new Error(
-      'Windows release smoke failed: ota last-run is missing a persisted deviceId.',
-    );
-  }
-  if (typeof otaLastRun.inRollout !== 'boolean') {
-    throw new Error(
-      'Windows release smoke failed: ota last-run is missing boolean inRollout.',
-    );
-  }
-  if (
-    otaLastRun.rolloutPercent !== null &&
-    otaLastRun.rolloutPercent !== undefined &&
-    typeof otaLastRun.rolloutPercent !== 'number'
-  ) {
-    throw new Error(
-      'Windows release smoke failed: ota last-run rolloutPercent must be null/number.',
-    );
-  }
 
   const normalizedLog = normalizeLogContents(logContents);
   if (!normalizedLog.includes('OTA.Native.DeviceId value=')) {
@@ -2234,20 +2265,13 @@ async function verifyOtaSideEffects(logContents) {
     }
   }
 
-  if (otaLastRun.status !== 'updated' && otaLastRun.status !== 'up-to-date') {
-    throw new Error(
-      `Windows release smoke failed: ota last-run status was '${otaLastRun.status ?? 'unknown'}', expected 'updated' or 'up-to-date'.`,
-    );
-  }
-
   const loggedCurrentVersion = extractOtaLoggedCurrentVersion(logContents);
-  if (otaLastRun.currentVersion && loggedCurrentVersion && otaLastRun.currentVersion !== loggedCurrentVersion) {
-    throw new Error(
-      `Windows release smoke failed: ota last-run currentVersion '${otaLastRun.currentVersion}' did not match the host logged currentVersion '${loggedCurrentVersion}'.`,
-    );
-  }
-
-  if (otaLastRun.status !== 'updated') {
+  const otaLastRunValidation = validateOtaLastRunRecord({
+    otaLastRun,
+    otaRemoteBase: otaRemoteArg,
+    loggedCurrentVersion,
+  });
+  if (!otaLastRunValidation.requiresOtaState) {
     return;
   }
 
@@ -2462,10 +2486,12 @@ async function main() {
   }
 }
 
-main().catch(error => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(error => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}
 
 
 

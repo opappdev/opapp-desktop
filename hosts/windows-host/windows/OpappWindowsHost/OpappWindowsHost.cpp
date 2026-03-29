@@ -1284,7 +1284,7 @@ void RunNativeOtaUpdate(
           resolvedChannel,
           currentVersion,
           latestVersion,
-          latestVersion,
+          std::nullopt,
           std::nullopt,
           std::nullopt,
           resolvedDeviceId,
