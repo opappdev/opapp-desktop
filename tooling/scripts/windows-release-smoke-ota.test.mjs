@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {validateOtaLastRunRecord} from './windows-release-smoke.mjs';
+import {
+  resolveExpectedOtaLatestVersion,
+  validateOtaLastRunRecord,
+} from './windows-release-smoke.mjs';
 
 function createBaseLastRun(overrides = {}) {
   return {
@@ -28,6 +31,26 @@ test('validateOtaLastRunRecord accepts updated runs with a staged version', () =
     otaLastRun: createBaseLastRun(),
     otaRemoteBase: 'https://r2.opapp.dev',
     loggedCurrentVersion: '0.9.0',
+    expectedLatestVersion: '1.0.0',
+  });
+
+  assert.deepEqual(result, {requiresOtaState: true, status: 'updated'});
+});
+
+test('validateOtaLastRunRecord accepts remote channels when last-run preserves them verbatim', () => {
+  const result = validateOtaLastRunRecord({
+    otaLastRun: createBaseLastRun({
+      channels: {
+        stable: '0.9.0',
+        beta: '1.0.0',
+      },
+    }),
+    otaRemoteBase: 'https://r2.opapp.dev',
+    loggedCurrentVersion: '0.9.0',
+    expectedChannels: {
+      beta: '1.0.0',
+      stable: '0.9.0',
+    },
   });
 
   assert.deepEqual(result, {requiresOtaState: true, status: 'updated'});
@@ -48,6 +71,101 @@ test('validateOtaLastRunRecord accepts up-to-date runs without a staged version'
   });
 
   assert.deepEqual(result, {requiresOtaState: false, status: 'up-to-date'});
+});
+
+test('resolveExpectedOtaLatestVersion prefers channel pins, then stable fallback, then versions[]', () => {
+  assert.equal(
+    resolveExpectedOtaLatestVersion({
+      bundleInfo: {
+        versions: ['0.9.0', '1.0.0'],
+        latestVersion: '1.0.0',
+        channels: {
+          stable: '0.9.0',
+          beta: '1.0.0',
+        },
+      },
+      channel: 'beta',
+    }),
+    '1.0.0',
+  );
+
+  assert.equal(
+    resolveExpectedOtaLatestVersion({
+      bundleInfo: {
+        versions: ['0.9.0', '1.0.0'],
+        latestVersion: '1.0.0',
+        channels: {
+          stable: '0.9.0',
+          nightly: '9.9.9',
+        },
+      },
+      channel: 'nightly',
+    }),
+    '0.9.0',
+  );
+
+  assert.equal(
+    resolveExpectedOtaLatestVersion({
+      bundleInfo: {
+        versions: ['0.9.0', '1.0.0'],
+        latestVersion: '1.0.0',
+      },
+      channel: 'stable',
+    }),
+    '1.0.0',
+  );
+});
+
+test('validateOtaLastRunRecord rejects runs that drop remote channels metadata', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createBaseLastRun(),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedChannels: {
+          stable: '0.9.0',
+          beta: '1.0.0',
+        },
+      }),
+    /missing the remote channels map/,
+  );
+});
+
+test('validateOtaLastRunRecord rejects runs with mismatched remote channels metadata', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createBaseLastRun({
+          channels: {
+            stable: '0.9.0',
+            beta: '1.1.0',
+          },
+        }),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedChannels: {
+          stable: '0.9.0',
+          beta: '1.0.0',
+        },
+      }),
+    /did not match remote index channels/,
+  );
+});
+
+test('validateOtaLastRunRecord rejects runs with mismatched resolved latestVersion', () => {
+  assert.throws(
+    () =>
+      validateOtaLastRunRecord({
+        otaLastRun: createBaseLastRun({
+          latestVersion: '1.1.0',
+        }),
+        otaRemoteBase: 'https://r2.opapp.dev',
+        loggedCurrentVersion: '0.9.0',
+        expectedLatestVersion: '1.0.0',
+      }),
+    /did not match the remote index resolved version/,
+  );
 });
 
 test('validateOtaLastRunRecord rejects up-to-date runs that claim a staged version', () => {

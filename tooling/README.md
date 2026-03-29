@@ -53,8 +53,10 @@ Windows verification entrypoints:
 - `npm run test:windows:release-smoke:ota`: direct-node assertions for OTA
   `last-run.json` contract checks inside `windows-release-smoke`, including the
   guards that successful runs must persist resolved `mode` / `bundleId` /
-  `channel` / `latestVersion` / `hasUpdate`, and that `up-to-date` runs must
-  not report staged metadata.
+  `channel` / `latestVersion` / `hasUpdate`, that `latestVersion` still matches
+  the remote `index.json` channel resolution, that remote `channels` maps are
+  preserved when `index.json` exposes them, and that `up-to-date` runs must not
+  report staged metadata.
 - `npm run smoke:windows:validate`: validate direct release-smoke packaged args only.
 - `npm run smoke:windows:portable:validate`: validate direct release-smoke portable args only.
 - `npm run smoke:windows:preflight`: packaged release preflight probe only (no bundle/build/launch).
@@ -67,6 +69,9 @@ Windows verification entrypoints:
 - release smoke now rejects OTA `last-run.json` records that report a staged
   `version` while status is still `up-to-date`; only real staged updates may
   populate that field.
+- release smoke now also compares successful OTA `last-run.json` `channels`
+  metadata against the downloaded remote `index.json` bundle entry when that
+  entry exposes a `channels` map.
 
 Windows smoke timeout knobs:
 

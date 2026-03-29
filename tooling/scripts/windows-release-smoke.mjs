@@ -67,6 +67,7 @@ const launchConfigPath = path.join(tempRoot, 'opapp-windows-host.launch.ini');
 const preferencesPath = path.join(tempRoot, 'opapp-windows-host.preferences.ini');
 const sessionsPath = path.join(tempRoot, 'opapp-windows-host.sessions.ini');
 const otaCacheRoot = path.join(repoRoot, '.ota-cache');
+const otaIndexPath = path.join(otaCacheRoot, 'index.json');
 const otaLastRunPath = path.join(otaCacheRoot, 'last-run.json');
 const otaStatePath = path.join(otaCacheRoot, 'ota-state.json');
 const otaChannelPath = path.join(otaCacheRoot, 'channel.json');
@@ -2159,7 +2160,114 @@ async function waitForOtaLastRun({timeoutMs, timeoutFlag}) {
   }));
 }
 
-export function validateOtaLastRunRecord({otaLastRun, otaRemoteBase, loggedCurrentVersion}) {
+async function waitForOtaIndexBundleInfo({bundleId, timeoutMs, timeoutFlag}) {
+  const startMs = Date.now();
+  while (Date.now() - startMs < timeoutMs) {
+    if (await fileExists(otaIndexPath)) {
+      try {
+        const otaIndex = JSON.parse(await readFile(otaIndexPath, 'utf8'));
+        const bundleInfo = otaIndex?.bundles?.[bundleId];
+        if (bundleInfo && typeof bundleInfo === 'object' && !Array.isArray(bundleInfo)) {
+          return bundleInfo;
+        }
+      } catch {
+        // Retry until the file is fully written and parseable.
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  throw new Error(formatMarkerTimeoutMessage({
+    phaseLabel: `ota index bundle info (${bundleId})`,
+    scenarioName,
+    timeoutFlag,
+    timeoutMs,
+  }));
+}
+
+function normalizeOtaChannels(candidate) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return undefined;
+  }
+
+  const normalized = {};
+  for (const [channelName, version] of Object.entries(candidate)) {
+    if (typeof channelName !== 'string' || !channelName) {
+      return undefined;
+    }
+    if (typeof version !== 'string' || !version) {
+      return undefined;
+    }
+    normalized[channelName] = version;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function formatOtaChannels(channels) {
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(channels).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  );
+}
+
+function otaChannelsEqual(left, right) {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+
+  for (let index = 0; index < leftKeys.length; index += 1) {
+    const key = leftKeys[index];
+    if (key !== rightKeys[index] || left[key] !== right[key]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export function resolveExpectedOtaLatestVersion({bundleInfo, channel}) {
+  const hasVersionList = Array.isArray(bundleInfo?.versions);
+  const versions = hasVersionList
+    ? bundleInfo.versions.filter(version => typeof version === 'string' && version)
+    : [];
+  const overallLatest = [...versions].sort().at(-1);
+  const legacyLatestVersion =
+    !hasVersionList && typeof bundleInfo?.latestVersion === 'string' && bundleInfo.latestVersion
+      ? bundleInfo.latestVersion
+      : undefined;
+  const channels = normalizeOtaChannels(bundleInfo?.channels);
+  const pickVersion = candidate => {
+    if (typeof candidate !== 'string' || !candidate) {
+      return undefined;
+    }
+    if (hasVersionList && !versions.includes(candidate)) {
+      return undefined;
+    }
+    return candidate;
+  };
+
+  let resolvedLatestVersion;
+  if (typeof channel === 'string' && channel) {
+    resolvedLatestVersion = pickVersion(channels?.[channel]);
+    if (!resolvedLatestVersion && channel !== 'stable') {
+      resolvedLatestVersion = pickVersion(channels?.stable);
+    }
+  }
+
+  return resolvedLatestVersion ?? overallLatest ?? legacyLatestVersion;
+}
+
+export function validateOtaLastRunRecord({
+  otaLastRun,
+  otaRemoteBase,
+  loggedCurrentVersion,
+  expectedChannels,
+  expectedLatestVersion,
+}) {
   if (otaLastRun.mode !== 'update') {
     throw new Error(
       `Windows release smoke failed: ota last-run mode was '${otaLastRun.mode ?? 'unknown'}', expected 'update'.`,
@@ -2185,6 +2293,12 @@ export function validateOtaLastRunRecord({otaLastRun, otaRemoteBase, loggedCurre
       'Windows release smoke failed: ota last-run is missing the resolved latestVersion.',
     );
   }
+  if (expectedLatestVersion && otaLastRun.latestVersion !== expectedLatestVersion) {
+    throw new Error(
+      `Windows release smoke failed: ota last-run latestVersion '${otaLastRun.latestVersion}' ` +
+        `did not match the remote index resolved version '${expectedLatestVersion}'.`,
+    );
+  }
   if (typeof otaLastRun.hasUpdate !== 'boolean') {
     throw new Error(
       'Windows release smoke failed: ota last-run is missing boolean hasUpdate.',
@@ -2199,6 +2313,21 @@ export function validateOtaLastRunRecord({otaLastRun, otaRemoteBase, loggedCurre
     throw new Error(
       'Windows release smoke failed: ota last-run is missing boolean inRollout.',
     );
+  }
+  const normalizedExpectedChannels = normalizeOtaChannels(expectedChannels);
+  if (normalizedExpectedChannels) {
+    const normalizedLastRunChannels = normalizeOtaChannels(otaLastRun.channels);
+    if (!normalizedLastRunChannels) {
+      throw new Error(
+        'Windows release smoke failed: ota last-run is missing the remote channels map persisted by the updater.',
+      );
+    }
+    if (!otaChannelsEqual(normalizedLastRunChannels, normalizedExpectedChannels)) {
+      throw new Error(
+        `Windows release smoke failed: ota last-run channels ${formatOtaChannels(normalizedLastRunChannels)} ` +
+          `did not match remote index channels ${formatOtaChannels(normalizedExpectedChannels)}.`,
+      );
+    }
   }
   if (
     otaLastRun.rolloutPercent !== null &&
@@ -2316,10 +2445,26 @@ async function verifyOtaSideEffects(logContents) {
   }
 
   const loggedCurrentVersion = extractOtaLoggedCurrentVersion(logContents);
+  let expectedChannels;
+  let expectedLatestVersion;
+  if (typeof otaLastRun.bundleId === 'string' && otaLastRun.bundleId) {
+    const otaIndexBundleInfo = await waitForOtaIndexBundleInfo({
+      bundleId: otaLastRun.bundleId,
+      timeoutMs: scenarioTimeoutMs,
+      timeoutFlag: '--scenario-ms',
+    });
+    expectedChannels = normalizeOtaChannels(otaIndexBundleInfo.channels);
+    expectedLatestVersion = resolveExpectedOtaLatestVersion({
+      bundleInfo: otaIndexBundleInfo,
+      channel: otaLastRun.channel,
+    });
+  }
   const otaLastRunValidation = validateOtaLastRunRecord({
     otaLastRun,
     otaRemoteBase: otaRemoteArg,
     loggedCurrentVersion,
+    expectedChannels,
+    expectedLatestVersion,
   });
   if (!otaLastRunValidation.requiresOtaState) {
     return;
@@ -2365,6 +2510,7 @@ async function main() {
   log(`portableExePath=${portableExePath}`);
   log(`logPath=${logPath}`);
   log(`otaCacheRoot=${otaCacheRoot}`);
+  log(`otaIndexPath=${otaIndexPath}`);
   log(`otaLastRunPath=${otaLastRunPath}`);
   log(`otaStatePath=${otaStatePath}`);
   log(`launchConfigPath=${launchConfigPath}`);
@@ -2418,6 +2564,7 @@ async function main() {
   await removeIfPresent(launchConfigPath);
   await removeIfPresent(preferencesPath);
   if (otaRemoteArg) {
+    await removeIfPresent(otaIndexPath);
     await removeIfPresent(otaLastRunPath);
     await removeIfPresent(otaStatePath);
     if (otaChannelArg) {
