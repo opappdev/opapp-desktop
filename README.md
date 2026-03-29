@@ -87,6 +87,10 @@ MSIX sideload path for internal validation:
   the packaged MSIX sideload flow. Do not open the `.msix` directly; the
   nightly zip includes the matching test certificate for `Install.ps1`.
 
+Packaged Windows public/nightly builds must only embed the main companion
+bundle `opapp.companion.main`. Private bundles such as `opapp.hbr.workspace`
+are expected to stay `remote-only` and hydrate from the OTA remote on demand.
+
 Official Windows release builds default their OTA remote base to
 `https://r2.opapp.dev`. Only local smoke or targeted rehearsal runs should
 override it via launch config or `OPAPP_OTA_REMOTE_URL`.

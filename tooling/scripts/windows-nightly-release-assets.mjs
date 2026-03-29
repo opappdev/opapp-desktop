@@ -222,6 +222,7 @@ export function buildReleaseNotes({
     '## Notes',
     '',
     '- Windows release builds default their OTA remote base to `https://r2.opapp.dev` unless launch config or `OPAPP_OTA_REMOTE_URL` overrides it for smoke/testing.',
+    '- Packaged builds only embed `opapp.companion.main`; private bundles such as `opapp.hbr.workspace` are expected to hydrate from the remote OTA catalog on demand.',
     '- The direct-run executable must stay beside its bundled DLLs and `Bundle/` directory; downloading a bare exe by itself is not a supported distribution shape.',
     '- The MSIX nightly is test-signed. The zip now includes the matching `.cer`, and `Install.ps1` is the supported way to trust/install it for internal testing.',
     '- These assets are nightly builds intended for internal testing and fast validation, not polished end-user installers.',
