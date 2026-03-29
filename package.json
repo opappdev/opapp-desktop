@@ -77,5 +77,15 @@
     "test:registry:ops": "node ./tooling/scripts/registry-ops.test.mjs",
     "test:ota:updater": "node ./tooling/scripts/ota-updater.test.mjs",
     "test:ota:native-failure-fixture": "node ./tooling/scripts/ota-native-failure-fixture.test.mjs"
-  }
+  },
+  "license": "MPL-2.0",
+  "description": "Desktop host repo and release tooling for OPApp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opappdev/opapp-desktop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/opappdev/opapp-desktop/issues"
+  },
+  "homepage": "https://github.com/opappdev/opapp-desktop#readme"
 }

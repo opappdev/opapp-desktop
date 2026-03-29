@@ -3,5 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "description": "Windows native module contract for the OpappFilesystem bridge",
-  "files": []
+  "files": [],
+  "license": "MPL-2.0"
 }

@@ -18,6 +18,9 @@ Generated Files/
 x64/
 *.binlog
 *.wrn
+.env
+.env.local
+.env.*.local
 
 distribution/artifacts/*
 !distribution/artifacts/README.md

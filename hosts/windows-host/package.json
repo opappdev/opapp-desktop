@@ -25,5 +25,7 @@
       "namespace": "OpappWindowsHost",
       "template": "cpp-app"
     }
-  }
+  },
+  "license": "MPL-2.0",
+  "description": "Windows host shell for OPApp"
 }

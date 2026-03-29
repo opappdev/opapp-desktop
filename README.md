@@ -10,6 +10,16 @@ It owns:
 
 Business structure stays in `opapp-frontend`.
 
+## Open Source
+
+This repository is licensed under `MPL-2.0`. The root `package.json` keeps
+`"private": true` only to prevent accidental npm publication of the workspace
+root; it does not mean the source repository itself is closed.
+
+Public source stays in this repository. Personal env files, generated release
+artifacts, local OTA/cache state, and optional `tooling/scripts/.private-*`
+extensions must stay out of git.
+
 ## Git Commit Prep
 
 Before committing desktop changes, run `npm run commit:check` for the
@@ -137,3 +147,16 @@ Common examples:
   `npm run ota:build:publish:cloudflare -- --channel=stable --rollout-percent=100 --dry-run`
 - Publish an existing frontend dist directory with explicit overrides:
   `npm run ota:publish:cloudflare -- --source-dir=..\\opapp-frontend\\.dist\\bundles\\companion-app\\windows --channel=beta --rollout-percent=10 --remote-base=https://pub-xxxx.r2.dev --cloudflare-bucket=cross-platform-ota`
+
+## Contributing
+
+Contribution workflow, repo boundaries, and submission expectations live in
+[CONTRIBUTING.md](./CONTRIBUTING.md).
+
+Please follow [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+when collaborating in issues, reviews, and pull requests.
+
+## Security
+
+For responsible disclosure guidance, see
+[SECURITY.md](./SECURITY.md).
