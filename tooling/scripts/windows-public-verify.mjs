@@ -1,4 +1,4 @@
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
@@ -228,23 +228,29 @@ async function createRegistryFixtureRoot() {
   return registryRoot;
 }
 
-function runVerify(args) {
-  const result = spawnSync(process.execPath, [verifyScriptPath, ...args], {
-    cwd: repoRoot,
-    env: process.env,
-    stdio: 'inherit',
-    windowsHide: false,
+async function runVerify(args) {
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [verifyScriptPath, ...args], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: 'inherit',
+      windowsHide: false,
+    });
+
+    child.once('error', reject);
+    child.once('exit', status => {
+      if (status !== 0) {
+        reject(
+          new Error(
+            `verify-windows exited with status ${status ?? 1} for args: ${args.join(' ')}`,
+          ),
+        );
+        return;
+      }
+
+      resolve(undefined);
+    });
   });
-
-  if (result.error) {
-    throw result.error;
-  }
-
-  if (result.status !== 0) {
-    throw new Error(
-      `verify-windows exited with status ${result.status ?? 1} for args: ${args.join(' ')}`,
-    );
-  }
 }
 
 function runPowerShellOrThrow(commandText) {
@@ -532,12 +538,12 @@ async function main() {
     log(`scenarioFilter=${verifyScenarioFilter}`);
 
     log('running packaged Windows public verify');
-    runVerify(commonArgs);
+    await runVerify(commonArgs);
 
     await ensurePortableWindowsAppRuntimePackages();
 
     log('running portable Windows public verify');
-    runVerify([...commonArgs, '--launch=portable']);
+    await runVerify([...commonArgs, '--launch=portable']);
   } finally {
     await closeRegistryServer(server);
     if (registryRoot) {

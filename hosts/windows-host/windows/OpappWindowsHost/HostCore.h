@@ -138,5 +138,8 @@ std::optional<std::wstring> GetOtaChannel() noexcept;
 bool GetOtaForceUpdate() noexcept;
 bool GetOtaDisableNativeUpdate() noexcept;
 std::filesystem::path ResolveOtaCacheRoot(std::wstring const &appDirectory);
+bool EnsureRemoteBundleAvailable(
+    std::wstring const &appDirectory,
+    std::wstring const &bundleId) noexcept;
 
 } // namespace OpappWindowsHost

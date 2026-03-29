@@ -770,6 +770,22 @@ bool CloseManagedWindow(std::wstring const &windowId) noexcept {
   return false;
 }
 
+bool CachedOtaIndexContainsBundle(
+    std::wstring const &appDirectory,
+    std::wstring const &bundleId) noexcept {
+  if (appDirectory.empty() || bundleId.empty()) {
+    return false;
+  }
+
+  auto indexObject = ReadJsonObjectFile(ResolveOtaCacheRoot(appDirectory) / L"index.json");
+  if (!indexObject) {
+    return false;
+  }
+
+  auto bundlesObject = indexObject->GetNamedObject(L"bundles", nullptr);
+  return bundlesObject && bundlesObject.HasKey(winrt::hstring(bundleId));
+}
+
 bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept {
   auto &state = GetWindowManagerState();
   if (!state.BundledRuntime) {
@@ -782,15 +798,25 @@ bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept {
   }
 
   auto bundleRootPath = ResolveBundleRootPath(state, normalizedBundleId);
-  if (!bundleRootPath) {
-    return false;
+  if (bundleRootPath) {
+    if (normalizedBundleId == L"opapp.companion.main") {
+      return true;
+    }
+
+    if (ReadBundleManifestEntryFile(*bundleRootPath).has_value()) {
+      return true;
+    }
   }
 
   if (normalizedBundleId == L"opapp.companion.main") {
     return true;
   }
 
-  return ReadBundleManifestEntryFile(*bundleRootPath).has_value();
+  if (GetOtaDisableNativeUpdate() || !GetOtaRemoteUrl()) {
+    return false;
+  }
+
+  return CachedOtaIndexContainsBundle(state.AppDirectory, normalizedBundleId);
 }
 
 std::optional<std::string> GetCachedOtaRemoteCatalogPayload() noexcept {
@@ -1023,13 +1049,26 @@ std::optional<std::string> SwitchMainWindowToBundle(
     return "Invalid session payload.";
   }
 
-  auto bundleRootPath = ResolveBundleRootPath(state, bundleId);
+  auto normalizedBundleId = bundleId.empty() ? std::wstring(L"opapp.companion.main") : bundleId;
+  auto bundleRootPath = ResolveBundleRootPath(state, normalizedBundleId);
+  auto entryFile = bundleRootPath ? ReadBundleManifestEntryFile(*bundleRootPath) : std::nullopt;
+  if (normalizedBundleId != L"opapp.companion.main" && (!bundleRootPath || !entryFile)) {
+    AppendLog(
+        "BundleSwitchRemoteHydration.Start window=" + ToUtf8(windowId) +
+        " bundle=" + ToUtf8(normalizedBundleId));
+    if (!EnsureRemoteBundleAvailable(state.AppDirectory, normalizedBundleId)) {
+      return "Unable to hydrate the target bundle from remote.";
+    }
+
+    bundleRootPath = ResolveBundleRootPath(state, normalizedBundleId);
+    entryFile = bundleRootPath ? ReadBundleManifestEntryFile(*bundleRootPath) : std::nullopt;
+  }
+
   if (!bundleRootPath) {
     return "Unable to resolve the target bundle root.";
   }
 
-  auto entryFile = ReadBundleManifestEntryFile(*bundleRootPath);
-  if (!entryFile && bundleId != L"opapp.companion.main") {
+  if (!entryFile && normalizedBundleId != L"opapp.companion.main") {
     return "Target bundle manifest is missing the entry file.";
   }
 
@@ -1041,7 +1080,7 @@ std::optional<std::string> SwitchMainWindowToBundle(
   state.MainLaunchSurface->Policy = activeTarget->Policy;
   state.MainLaunchSurface->MetricsMode =
       ResolveWindowSizeMode(activeTarget->Policy, LoadWindowPreferences());
-  state.CurrentBundleId = bundleId.empty() ? L"opapp.companion.main" : bundleId;
+  state.CurrentBundleId = normalizedBundleId;
 
   if (state.MainAppWindow) {
     state.MainAppWindow.Title(GetWindowTitle(*state.MainLaunchSurface));

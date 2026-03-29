@@ -102,9 +102,7 @@ const launcherProvenanceFixture = {
   nativeApplied: {
     bundleId: 'opapp.hbr.workspace',
     latestVersion: '0.9.2',
-    localVersion: '0.9.2',
     surfaceIds: ['hbr.challenge-advisor'],
-    sourceKind: 'sibling-staging',
   },
   versionDrift: {
     bundleId: 'opapp.hbr.archive',
@@ -119,8 +117,6 @@ const launcherProvenanceFixture = {
     surfaceIds: ['hbr.private-shadow'],
     sourceKind: 'local-build',
   },
-  otaStagedAt: '2026-03-30T00:00:00.000Z',
-  otaRecordedAt: '2026-03-30T00:01:00.000Z',
 };
 const launchMode = resolveLaunchModeOrThrow();
 const timeoutDefaults = loadTimeoutDefaultsForLaunch({
@@ -654,6 +650,15 @@ async function createSyntheticStagedBundle({
   return stagedBundleRoot;
 }
 
+function shouldStagePackagedBundleRelativePath(relativePath) {
+  if (!relativePath) {
+    return true;
+  }
+
+  const normalized = relativePath.replace(/\\/g, '/');
+  return normalized !== 'bundles' && !normalized.startsWith('bundles/');
+}
+
 async function resolveCurrentMainBundleVersion() {
   const manifest = JSON.parse(
     await readFile(path.join(hostBundleRoot, 'bundle-manifest.json'), 'utf8'),
@@ -703,13 +708,6 @@ async function seedLauncherProvenanceCachedCatalog() {
       bundleId: launcherProvenanceFixture.mainBundleId,
       version: mainVersion,
       surfaces: launcherProvenanceFixture.mainSurfaceIds,
-    }),
-  );
-  createdPaths.push(
-    await writeSyntheticCachedRemoteBundleManifest({
-      bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
-      version: launcherProvenanceFixture.nativeApplied.latestVersion,
-      surfaces: launcherProvenanceFixture.nativeApplied.surfaceIds,
     }),
   );
   createdPaths.push(
@@ -964,7 +962,7 @@ const publicSmokeScenarios = {
   },
   'launcher-provenance': {
     description:
-      'launcher remote catalog exposes staged provenance, local-only residue, and version drift through public diagnostics',
+      'launcher remote catalog exposes remote-only publish targets, local-only residue, and version drift through public diagnostics',
     preferences: defaultPreferences,
     startupTarget: {
       surfaceId: 'companion.main',
@@ -1008,14 +1006,6 @@ const publicSmokeScenarios = {
 
       const runtimeBundleRoot = resolveRuntimeBundleRootForLaunchMode();
       const createdPaths = await seedLauncherProvenanceCachedCatalog();
-      const nativeAppliedRoot = await createSyntheticStagedBundle({
-        bundleRoot: runtimeBundleRoot,
-        bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
-        sourceKind: launcherProvenanceFixture.nativeApplied.sourceKind,
-        surfaces: launcherProvenanceFixture.nativeApplied.surfaceIds,
-        version: launcherProvenanceFixture.nativeApplied.localVersion,
-      });
-      createdPaths.push(nativeAppliedRoot);
 
       const versionDriftRoot = await createSyntheticStagedBundle({
         bundleRoot: runtimeBundleRoot,
@@ -1034,29 +1024,6 @@ const publicSmokeScenarios = {
         version: launcherProvenanceFixture.localOnly.localVersion,
       });
       createdPaths.push(localOnlyRoot);
-
-      await writeJsonFile(otaStatePath, {
-        bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
-        hostBundleDir: nativeAppliedRoot,
-        stagedAt: launcherProvenanceFixture.otaStagedAt,
-        version: launcherProvenanceFixture.nativeApplied.localVersion,
-      });
-      await writeJsonFile(otaLastRunPath, {
-        mode: 'update',
-        remoteBase: otaRemoteArg,
-        bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
-        channel: otaChannelArg ?? 'stable',
-        hasUpdate: true,
-        deviceId: 'launcher-provenance-fixture-device',
-        inRollout: true,
-        status: 'updated',
-        currentVersion: launcherProvenanceFixture.nativeApplied.localVersion,
-        latestVersion: launcherProvenanceFixture.nativeApplied.latestVersion,
-        version: launcherProvenanceFixture.nativeApplied.localVersion,
-        previousVersion: '0.9.1',
-        stagedAt: launcherProvenanceFixture.otaStagedAt,
-        recordedAt: launcherProvenanceFixture.otaRecordedAt,
-      });
 
       return {createdPaths};
     },
@@ -1105,11 +1072,11 @@ const publicSmokeScenarios = {
         assertLauncherRemoteCatalogDiagnostics(logContents, {
           summary: {
             status: 'ready',
-            source: 'cache',
+            source: 'network',
             remoteUrl: otaRemoteArg.replace(/\/+$/, ''),
             remoteEntryCount: 3,
             entryCount: 4,
-            stagedBundleCount: 3,
+            stagedBundleCount: 2,
             stagedBundlesLoaded: true,
             startupTargetLoaded: true,
           },
@@ -1125,12 +1092,13 @@ const publicSmokeScenarios = {
             {
               bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
               discoverySource: 'remote-catalog',
-              localState: 'staged',
+              localState: 'remote-only',
               latestVersion: launcherProvenanceFixture.nativeApplied.latestVersion,
-              localVersion: launcherProvenanceFixture.nativeApplied.localVersion,
-              localSourceKind: launcherProvenanceFixture.nativeApplied.sourceKind,
-              localProvenanceKind: 'native-ota-applied',
-              localProvenanceStatus: 'updated',
+              localVersion: null,
+              localSourceKind: null,
+              localProvenanceKind: null,
+              localProvenanceStatus: null,
+              hasPublicLaunchTarget: true,
               versionMismatch: false,
             },
             {
@@ -2380,7 +2348,14 @@ async function preparePackagedApp() {
   log('staging frontend bundle into native host project');
   await removeIfPresent(hostBundleRoot);
   await mkdir(hostBundleRoot, {recursive: true});
-  await cp(manifestDir, hostBundleRoot, {recursive: true, force: true});
+  await cp(manifestDir, hostBundleRoot, {
+    recursive: true,
+    force: true,
+    filter: sourcePath => {
+      const relativePath = path.relative(manifestDir, sourcePath);
+      return shouldStagePackagedBundleRelativePath(relativePath);
+    },
+  });
 
   const stagedManifestPath = path.join(hostBundleRoot, 'bundle-manifest.json');
   const stagedManifest = JSON.parse(await readFile(stagedManifestPath, 'utf8'));
@@ -2457,6 +2432,13 @@ async function preparePackagedApp() {
       }),
     );
   }
+
+  const runtimeBundleResidueRoot = path.join(
+    resolveRuntimeBundleRootForLaunchMode(),
+    'bundles',
+  );
+  await removeIfPresent(runtimeBundleResidueRoot);
+  log(`cleared runtime bundle residue: ${runtimeBundleResidueRoot}`);
 }
 
 function buildLaunchConfig() {

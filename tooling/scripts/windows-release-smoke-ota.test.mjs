@@ -85,9 +85,9 @@ function createPrivateStartupTargetScenario() {
 
 function createLauncherDiagnosticLog() {
   return [
-    '[2026-03-30 08:00:00.000] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.000Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.summary","platform":"windows","status":"ready","remoteUrl":"http://127.0.0.1:4100","remoteEntryCount":3,"entryCount":4,"stagedBundleCount":3,"stagedBundlesLoaded":true,"startupTargetLoaded":true}',
+    '[2026-03-30 08:00:00.000] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.000Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.summary","platform":"windows","status":"ready","source":"network","remoteUrl":"http://127.0.0.1:4100","remoteEntryCount":3,"entryCount":4,"stagedBundleCount":2,"stagedBundlesLoaded":true,"startupTargetLoaded":true}',
     '[2026-03-30 08:00:00.001] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.001Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.companion.main","discoverySource":"remote-catalog","localState":"bundled","localVersion":null,"localProvenanceKind":null,"versionMismatch":false}',
-    '[2026-03-30 08:00:00.002] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.002Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.hbr.workspace","discoverySource":"remote-catalog","localState":"staged","latestVersion":"0.9.2","localVersion":"0.9.2","localSourceKind":"sibling-staging","localProvenanceKind":"native-ota-applied","localProvenanceStatus":"updated","versionMismatch":false}',
+    '[2026-03-30 08:00:00.002] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.002Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.hbr.workspace","discoverySource":"remote-catalog","localState":"remote-only","latestVersion":"0.9.2","localVersion":null,"localSourceKind":null,"localProvenanceKind":null,"localProvenanceStatus":null,"hasPublicLaunchTarget":true,"versionMismatch":false}',
     '[2026-03-30 08:00:00.003] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.003Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.hbr.archive","discoverySource":"remote-catalog","localState":"staged","latestVersion":"0.9.0","localVersion":"0.8.0","localSourceKind":"local-build","localProvenanceKind":"host-staged-only","localProvenanceStatus":null,"versionMismatch":true}',
     '[2026-03-30 08:00:00.004] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.004Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.private.shadow","discoverySource":"local-only","localState":"staged","latestVersion":null,"localVersion":"0.1.0","localSourceKind":"local-build","localProvenanceKind":"host-staged-only","localProvenanceStatus":null,"versionMismatch":false}',
   ].join('\n');
@@ -270,7 +270,7 @@ test('assertLauncherRemoteCatalogDiagnostics accepts matching launcher provenanc
         remoteUrl: 'http://127.0.0.1:4100',
         remoteEntryCount: 3,
         entryCount: 4,
-        stagedBundleCount: 3,
+        stagedBundleCount: 2,
         stagedBundlesLoaded: true,
         startupTargetLoaded: true,
       },
@@ -278,11 +278,12 @@ test('assertLauncherRemoteCatalogDiagnostics accepts matching launcher provenanc
         {
           bundleId: 'opapp.hbr.workspace',
           discoverySource: 'remote-catalog',
-          localState: 'staged',
+          localState: 'remote-only',
           latestVersion: '0.9.2',
-          localVersion: '0.9.2',
-          localProvenanceKind: 'native-ota-applied',
-          localProvenanceStatus: 'updated',
+          localVersion: null,
+          localProvenanceKind: null,
+          localProvenanceStatus: null,
+          hasPublicLaunchTarget: true,
           versionMismatch: false,
         },
         {
@@ -309,7 +310,7 @@ test('assertLauncherRemoteCatalogDiagnostics rejects missing launcher entries', 
           remoteUrl: 'http://127.0.0.1:4100',
           remoteEntryCount: 3,
           entryCount: 4,
-          stagedBundleCount: 3,
+          stagedBundleCount: 2,
           stagedBundlesLoaded: true,
           startupTargetLoaded: true,
         },

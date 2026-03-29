@@ -1159,6 +1159,7 @@ void RunNativeOtaUpdate(
     std::wstring appDirectory,
     std::wstring remoteUrl,
     std::wstring hostBundleDir,
+    std::optional<std::wstring> requestedBundleId,
     std::optional<std::wstring> currentVersion,
     std::optional<std::wstring> channel,
     bool forceUpdate) noexcept {
@@ -1248,14 +1249,25 @@ void RunNativeOtaUpdate(
 
     auto localBundleId = ReadBundleManifestBundleId(hostBundleDir);
     std::optional<std::wstring> resolvedBundleId;
-    if (localBundleId && bundlesObject.HasKey(winrt::hstring(*localBundleId))) {
+    if (requestedBundleId && !requestedBundleId->empty()) {
+      if (!bundlesObject.HasKey(winrt::hstring(*requestedBundleId))) {
+        AppendLog("OTA.Native.RequestedBundleMissing bundleId=" + ToUtf8(*requestedBundleId));
+        writeFailedLastRun();
+        return;
+      }
+
+      resolvedBundleId = *requestedBundleId;
+    } else if (localBundleId && bundlesObject.HasKey(winrt::hstring(*localBundleId))) {
       resolvedBundleId = *localBundleId;
     } else if (indexedBundleIds.size() == 1) {
       resolvedBundleId = indexedBundleIds.front();
     }
 
     if (!resolvedBundleId) {
-      AppendLog("OTA.Native.BundleResolutionFailed localBundleId=" + (localBundleId ? ToUtf8(*localBundleId) : "null"));
+      AppendLog(
+          "OTA.Native.BundleResolutionFailed requestedBundleId=" +
+          (requestedBundleId ? ToUtf8(*requestedBundleId) : std::string("null")) +
+          " localBundleId=" + (localBundleId ? ToUtf8(*localBundleId) : std::string("null")));
       writeFailedLastRun();
       return;
     }
@@ -1527,13 +1539,17 @@ void RunNativeOtaUpdate(
 void SpawnOtaUpdateProcess(
     std::wstring const &appDirectory,
     std::wstring const &remoteUrl,
-    std::optional<std::wstring> const &hostBundleDir,
+    std::wstring const &bundleId,
+    std::wstring const &hostBundleDir,
     std::optional<std::wstring> const &currentVersion,
     std::optional<std::wstring> const &channel,
     bool forceUpdate) noexcept {
   auto logLine = std::string("OTA.SpawnUpdateProcess remoteUrl=") + ToUtf8(remoteUrl);
-  if (hostBundleDir) {
-    logLine += " hostBundleDir=" + ToUtf8(*hostBundleDir);
+  if (!bundleId.empty()) {
+    logLine += " bundleId=" + ToUtf8(bundleId);
+  }
+  if (!hostBundleDir.empty()) {
+    logLine += " hostBundleDir=" + ToUtf8(hostBundleDir);
   }
   if (currentVersion) {
     logLine += " currentVersion=" + ToUtf8(*currentVersion);
@@ -1546,18 +1562,19 @@ void SpawnOtaUpdateProcess(
   }
   AppendLog(logLine);
 
-  if (!hostBundleDir || hostBundleDir->empty()) {
+  if (hostBundleDir.empty()) {
     AppendLog("OTA.SpawnUpdateProcess.HostBundleDirMissing");
     return;
   }
 
   try {
     std::thread(
-        [appDirectory, remoteUrl, hostBundleDir, currentVersion, channel, forceUpdate]() noexcept {
+        [appDirectory, remoteUrl, bundleId, hostBundleDir, currentVersion, channel, forceUpdate]() noexcept {
           RunNativeOtaUpdate(
               appDirectory,
               remoteUrl,
-              *hostBundleDir,
+              hostBundleDir,
+              bundleId,
               currentVersion,
               channel,
               forceUpdate);
@@ -1670,6 +1687,60 @@ void SpawnWatchdogHeartbeat(std::wstring const &appDirectory) noexcept {
 
 std::filesystem::path OpappWindowsHost::ResolveOtaCacheRoot(std::wstring const &appDirectory) {
   return ResolveOtaCacheRootImpl(appDirectory);
+}
+
+bool OpappWindowsHost::EnsureRemoteBundleAvailable(
+    std::wstring const &appDirectory,
+    std::wstring const &bundleId) noexcept {
+  auto normalizedBundleId = bundleId.empty() ? std::wstring(L"opapp.companion.main") : bundleId;
+  auto hostBundleDir = ResolveHostedBundleDirectory(appDirectory, normalizedBundleId);
+  if (ReadBundleManifestEntryFile(hostBundleDir).has_value()) {
+    return true;
+  }
+
+  if (GetOtaDisableNativeUpdate()) {
+    AppendLog("OTA.EnsureBundle.Skipped reason=launch-config bundleId=" + ToUtf8(normalizedBundleId));
+    return false;
+  }
+
+  auto otaRemoteUrl = GetOtaRemoteUrl();
+  if (!otaRemoteUrl || otaRemoteUrl->empty()) {
+    AppendLog("OTA.EnsureBundle.Skipped reason=remote-url-missing bundleId=" + ToUtf8(normalizedBundleId));
+    return false;
+  }
+
+  auto currentVersion = ReadBundleManifestVersion(hostBundleDir);
+  AppendLog(
+      "OTA.EnsureBundle.Start bundleId=" + ToUtf8(normalizedBundleId) +
+      " hostBundleDir=" + ToUtf8(hostBundleDir) +
+      " currentVersion=" + (currentVersion ? ToUtf8(*currentVersion) : std::string("null")));
+  try {
+    std::thread(
+        [appDirectory,
+         otaRemoteUrl,
+         hostBundleDir,
+         normalizedBundleId,
+         currentVersion]() noexcept {
+          RunNativeOtaUpdate(
+              appDirectory,
+              *otaRemoteUrl,
+              hostBundleDir,
+              normalizedBundleId,
+              currentVersion,
+              GetOtaChannel(),
+              GetOtaForceUpdate());
+        })
+        .join();
+  } catch (...) {
+    AppendLog("OTA.EnsureBundle.ThreadLaunchFailed bundleId=" + ToUtf8(normalizedBundleId));
+    return false;
+  }
+
+  auto available = ReadBundleManifestEntryFile(hostBundleDir).has_value();
+  AppendLog(
+      "OTA.EnsureBundle.Done bundleId=" + ToUtf8(normalizedBundleId) +
+      " available=" + BoolString(available));
+  return available;
 }
 
 // A PackageProvider containing any turbo modules you define within this app project
@@ -1847,19 +1918,20 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
         AppendLog(
             "OTA.Disabled reason=launch-config remoteUrl=" + ToUtf8(*otaRemoteUrl));
       } else {
-        std::optional<std::wstring> hostBundleDir;
+        std::wstring hostBundleDir;
         std::optional<std::wstring> currentBundleVersion;
 #if BUNDLE
         hostBundleDir = ResolveHostedBundleDirectory(std::wstring(appDirectory), otaBundleTarget.BundleId);
-        currentBundleVersion = ReadBundleManifestVersion(*hostBundleDir);
+        currentBundleVersion = ReadBundleManifestVersion(hostBundleDir);
         AppendLog(
             "OTA.BundleTarget bundleId=" + ToUtf8(otaBundleTarget.BundleId) +
             " source=" + ToUtf8(otaBundleTarget.Source) +
-            " hostBundleDir=" + ToUtf8(*hostBundleDir));
+            " hostBundleDir=" + ToUtf8(hostBundleDir));
 #endif
         SpawnOtaUpdateProcess(
             std::wstring(appDirectory),
             *otaRemoteUrl,
+            otaBundleTarget.BundleId,
             hostBundleDir,
             currentBundleVersion,
             GetOtaChannel(),
