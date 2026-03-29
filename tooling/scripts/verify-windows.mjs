@@ -99,6 +99,15 @@ const publicScenarios = [
   },
 ];
 
+const publicOptionalScenarios = [
+  {
+    name: 'launcher-provenance',
+    description:
+      'launcher renders public remote-catalog diagnostics for staged provenance, local-only residue, and version drift',
+    args: ['--scenario=launcher-provenance', '--skip-prepare'],
+  },
+];
+
 const secondaryOnlyScenario = {
   name: 'secondary-window',
   description: 'startup detached settings window surface-model check',
@@ -150,8 +159,13 @@ async function loadOptionalPrivateVerifyScenarios() {
 }
 
 const privateVerifyScenarios = await loadOptionalPrivateVerifyScenarios();
+const allScenarios = [
+  ...publicScenarios,
+  ...publicOptionalScenarios,
+  ...privateVerifyScenarios,
+];
 const defaultScenarios = [...publicScenarios, ...privateVerifyScenarios];
-const scenarioByName = new Map(defaultScenarios.map(scenario => [scenario.name, scenario]));
+const scenarioByName = new Map(allScenarios.map(scenario => [scenario.name, scenario]));
 const launchMode = resolveLaunchModeOrThrow();
 const timeoutDefaults = loadTimeoutDefaultsForLaunch({
   argv: process.argv,

@@ -27,6 +27,7 @@
     "verify:windows:raw-release": "node ./tooling/scripts/windows-release-raw-build.mjs",
     "verify:windows:ci-preflight": "node ./tooling/scripts/verify-windows.mjs --preflight-only --scenario=secondary-window --readiness-ms=15000 --smoke-ms=15000 --startup-ms=15000 --scenario-ms=15000",
     "verify:windows:ci-fast-fail": "node ./tooling/scripts/verify-windows.mjs --validate-only --scenario=secondary-window --readiness-ms=15000 --smoke-ms=15000 --startup-ms=15000 --scenario-ms=15000",
+    "verify:windows:public:ci": "node ./tooling/scripts/windows-public-verify.mjs",
     "verify:windows:fast-fail": "node ./tooling/scripts/verify-windows.mjs --readiness-ms=15000 --smoke-ms=15000",
     "verify:windows:surface-model": "node ./tooling/scripts/verify-windows.mjs --include-secondary-window",
     "smoke:windows:validate": "node ./tooling/scripts/windows-release-smoke.mjs --validate-only --scenario=tab-session",

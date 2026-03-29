@@ -59,6 +59,12 @@ test('verify-windows validate-only accepts startup-target launcher scenario filt
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts launcher provenance scenario filter', () => {
+  const result = runVerifyValidateOnly(['--scenario=launcher-provenance']);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only accepts legacy startup-target launcher scenario filter', () => {
   const result = runVerifyValidateOnly(['--scenario=legacy-startup-target-main-launcher']);
 

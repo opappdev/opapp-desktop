@@ -98,6 +98,13 @@ struct OpappWindowManagerModule {
     result.Resolve(otaRemoteUrl ? OpappWindowsHost::ToUtf8(*otaRemoteUrl) : std::string{});
   }
 
+  REACT_METHOD(GetCachedOtaRemoteCatalog, L"getCachedOtaRemoteCatalog")
+  void GetCachedOtaRemoteCatalog(
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    auto payload = OpappWindowsHost::GetCachedOtaRemoteCatalogPayload();
+    result.Resolve(payload ? *payload : std::string{});
+  }
+
   REACT_METHOD(GetStagedBundles, L"getStagedBundles")
   void GetStagedBundles(
       winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {

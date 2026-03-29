@@ -34,6 +34,7 @@ struct OtaLastRunMetadata {
   std::optional<std::wstring> BundleId;
   std::optional<std::wstring> CurrentVersion;
   std::optional<std::wstring> RecordedAt;
+  std::optional<std::wstring> RemoteBase;
   std::optional<std::wstring> StagedAt;
   std::optional<std::wstring> Status;
   std::optional<std::wstring> Version;
@@ -138,6 +139,7 @@ std::optional<OtaLastRunMetadata> ReadOtaLastRunMetadata(std::wstring const &app
   metadata.BundleId = ReadBundleManifestStringField(*otaLastRunObject, L"bundleId");
   metadata.CurrentVersion = ReadBundleManifestStringField(*otaLastRunObject, L"currentVersion");
   metadata.RecordedAt = ReadBundleManifestStringField(*otaLastRunObject, L"recordedAt");
+  metadata.RemoteBase = ReadBundleManifestStringField(*otaLastRunObject, L"remoteBase");
   metadata.StagedAt = ReadBundleManifestStringField(*otaLastRunObject, L"stagedAt");
   metadata.Status = ReadBundleManifestStringField(*otaLastRunObject, L"status");
   metadata.Version = ReadBundleManifestStringField(*otaLastRunObject, L"version");
@@ -789,6 +791,85 @@ bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept {
   }
 
   return ReadBundleManifestEntryFile(*bundleRootPath).has_value();
+}
+
+std::optional<std::string> GetCachedOtaRemoteCatalogPayload() noexcept {
+  auto &state = GetWindowManagerState();
+  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+    return std::nullopt;
+  }
+
+  try {
+    auto cacheRoot = ResolveOtaCacheRoot(state.AppDirectory);
+    auto indexObject = ReadJsonObjectFile(cacheRoot / L"index.json");
+    if (!indexObject) {
+      return std::nullopt;
+    }
+
+    auto jsonObject = winrt::Windows::Data::Json::JsonObject();
+    auto manifestsObject = winrt::Windows::Data::Json::JsonObject();
+    auto otaLastRun = ReadOtaLastRunMetadata(state.AppDirectory);
+    if (otaLastRun && otaLastRun->RemoteBase && !otaLastRun->RemoteBase->empty()) {
+      jsonObject.Insert(
+          L"remoteUrl",
+          winrt::Windows::Data::Json::JsonValue::CreateStringValue(*otaLastRun->RemoteBase));
+    } else {
+      jsonObject.Insert(
+          L"remoteUrl",
+          winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+    }
+
+    auto bundlesObject = indexObject->GetNamedObject(L"bundles", nullptr);
+    if (bundlesObject) {
+      for (auto const &bundleEntry : bundlesObject) {
+        auto bundleId = std::wstring(bundleEntry.Key().c_str());
+        auto bundleVersionsObject = winrt::Windows::Data::Json::JsonObject();
+        auto bundleCacheRoot = cacheRoot / bundleId;
+        if (!std::filesystem::exists(bundleCacheRoot) ||
+            !std::filesystem::is_directory(bundleCacheRoot)) {
+          manifestsObject.Insert(
+              winrt::hstring(bundleId),
+              winrt::Windows::Data::Json::JsonValue::Parse(bundleVersionsObject.Stringify()));
+          continue;
+        }
+
+        for (auto const &versionEntry : std::filesystem::directory_iterator(bundleCacheRoot)) {
+          if (!versionEntry.is_directory()) {
+            continue;
+          }
+
+          auto version = versionEntry.path().filename().wstring();
+          if (version.empty() || version == L"previous") {
+            continue;
+          }
+
+          auto manifestObject =
+              ReadJsonObjectFile(versionEntry.path() / L"windows" / L"bundle-manifest.json");
+          if (!manifestObject) {
+            continue;
+          }
+
+          bundleVersionsObject.Insert(
+              version,
+              winrt::Windows::Data::Json::JsonValue::Parse(manifestObject->Stringify()));
+        }
+
+        manifestsObject.Insert(
+            winrt::hstring(bundleId),
+            winrt::Windows::Data::Json::JsonValue::Parse(bundleVersionsObject.Stringify()));
+      }
+    }
+
+    jsonObject.Insert(
+        L"index",
+        winrt::Windows::Data::Json::JsonValue::Parse(indexObject->Stringify()));
+    jsonObject.Insert(
+        L"manifests",
+        winrt::Windows::Data::Json::JsonValue::Parse(manifestsObject.Stringify()));
+    return ToUtf8(jsonObject.Stringify());
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 
 std::vector<StagedBundleDescriptor> ListStagedBundles() noexcept {

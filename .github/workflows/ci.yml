@@ -28,3 +28,55 @@ jobs:
 
       - name: OTA infra smoke (RFC-010 ~ RFC-015)
         run: pnpm commit:check:infra
+
+  windows-public-verify:
+    name: Windows Public Verify
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout opapp-desktop
+        uses: actions/checkout@v4
+        with:
+          path: opapp-desktop
+
+      - name: Checkout opapp-frontend
+        uses: actions/checkout@v4
+        with:
+          repository: opappdev/opapp-frontend
+          ref: ${{ vars.OPAPP_FRONTEND_REF || 'main' }}
+          path: opapp-frontend
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          cache-dependency-path: |
+            opapp-desktop/pnpm-lock.yaml
+            opapp-frontend/pnpm-lock.yaml
+
+      - name: Install desktop dependencies
+        working-directory: opapp-desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        working-directory: opapp-frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Windows release diagnostics
+        working-directory: opapp-desktop
+        run: pnpm test:windows:release-diagnostics
+
+      - name: Windows packaged and portable public verify
+        working-directory: opapp-desktop
+        run: pnpm verify:windows:public:ci
+
+      - name: Upload Windows host log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-public-verify-host-log
+          path: ${{ runner.temp }}/opapp-windows-host.log

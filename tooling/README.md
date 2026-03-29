@@ -48,6 +48,7 @@ Windows verification entrypoints:
 - use `npm run verify:windows:raw-release` after preflight has already identified the blocker and you need the unwrapped upstream restore/build failure for the Windows host itself.
 - `npm run verify:windows:ci-preflight`: packaged preflight probe with CI-oriented timeout args.
 - `npm run verify:windows:portable:ci-preflight`: portable preflight probe with CI-oriented timeout args.
+- `npm run verify:windows:public:ci`: Windows-hosted public verification wrapper that spins up a local OTA registry fixture, then runs packaged + portable release verify for the minimal public `launcher-provenance` smoke (launcher startup, staged-bundle bridge, cached OTA catalog visibility, and public diagnostics).
 - `npm run report:windows:timing -- --input=<log-path>[,<log-path-2>] [--input=<log-path-3>] [--launch=all|packaged|portable] [--percentile=95] [--headroom-ms=5000] [--allow-verify-only] [--defaults-only] [--output=<report-path>]`: parse and aggregate `timing summary` lines across one or more logs, then print recommended `--startup-ms` / `--scenario-ms`（可选写入文件）。
 - `npm run test:windows:release-diagnostics`: single-process diagnostics assertions for environments where `node --test` runner spawning is restricted.
 - `npm run test:windows:release-smoke:ota`: direct-node assertions for OTA

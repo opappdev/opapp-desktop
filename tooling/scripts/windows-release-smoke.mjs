@@ -91,6 +91,37 @@ const packageName = 'OpappWindowsHost';
 const applicationId = 'App';
 const windowPolicyRegistryPath = path.join(frontendRoot, 'contracts', 'windowing', 'src', 'window-policy-registry.json');
 const missingOptionalFile = Symbol('missingOptionalFile');
+const launcherProvenanceFixture = {
+  mainBundleId: 'opapp.companion.main',
+  mainSurfaceIds: [
+    'companion.main',
+    'companion.settings',
+    'companion.view-shot',
+    'companion.window-capture',
+  ],
+  nativeApplied: {
+    bundleId: 'opapp.hbr.workspace',
+    latestVersion: '0.9.2',
+    localVersion: '0.9.2',
+    surfaceIds: ['hbr.challenge-advisor'],
+    sourceKind: 'sibling-staging',
+  },
+  versionDrift: {
+    bundleId: 'opapp.hbr.archive',
+    latestVersion: '0.9.0',
+    localVersion: '0.8.0',
+    surfaceIds: ['hbr.archive-advisor'],
+    sourceKind: 'local-build',
+  },
+  localOnly: {
+    bundleId: 'opapp.private.shadow',
+    localVersion: '0.1.0',
+    surfaceIds: ['hbr.private-shadow'],
+    sourceKind: 'local-build',
+  },
+  otaStagedAt: '2026-03-30T00:00:00.000Z',
+  otaRecordedAt: '2026-03-30T00:01:00.000Z',
+};
 const launchMode = resolveLaunchModeOrThrow();
 const timeoutDefaults = loadTimeoutDefaultsForLaunch({
   argv: process.argv,
@@ -502,6 +533,254 @@ function assertPersistedSessionLacksSurfaceId(sessionFile, windowId, surfaceId, 
   }
 }
 
+function parseFrontendDiagnosticPayload(payloadText) {
+  try {
+    const payload = JSON.parse(payloadText);
+    return payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function extractFrontendDiagnosticEvents(logContents, eventName) {
+  const prefix = '[frontend-diagnostics] ';
+  const payloads = [];
+
+  for (const line of normalizeLogContents(logContents).split('\n')) {
+    const prefixIndex = line.indexOf(prefix);
+    if (prefixIndex < 0) {
+      continue;
+    }
+
+    const payload = parseFrontendDiagnosticPayload(
+      line.slice(prefixIndex + prefix.length).trim(),
+    );
+    if (!payload || payload.event !== eventName) {
+      continue;
+    }
+
+    payloads.push(payload);
+  }
+
+  return payloads;
+}
+
+function formatExpectedValue(value) {
+  return value === null ? 'null' : JSON.stringify(value);
+}
+
+export function assertLauncherRemoteCatalogDiagnostics(
+  logContents,
+  {
+    summary: expectedSummary,
+    entries: expectedEntries,
+  },
+) {
+  const summaryPayloads = extractFrontendDiagnosticEvents(
+    logContents,
+    'bundle-launcher.remote-catalog.summary',
+  );
+  if (summaryPayloads.length === 0) {
+    throw new Error(
+      'Windows release smoke failed: launcher remote catalog summary diagnostics were not logged.',
+    );
+  }
+
+  const actualSummary = summaryPayloads.at(-1);
+  for (const [field, expectedValue] of Object.entries(expectedSummary)) {
+    if (actualSummary[field] !== expectedValue) {
+      throw new Error(
+        `Windows release smoke failed: launcher remote catalog summary field '${field}' ` +
+          `was ${formatExpectedValue(actualSummary[field] ?? null)}, expected ${formatExpectedValue(expectedValue)}.`,
+      );
+    }
+  }
+
+  const entryPayloads = extractFrontendDiagnosticEvents(
+    logContents,
+    'bundle-launcher.remote-catalog.entry',
+  );
+  for (const expectedEntry of expectedEntries) {
+    const actualEntry = entryPayloads.find(
+      payload => payload.bundleId === expectedEntry.bundleId,
+    );
+    if (!actualEntry) {
+      throw new Error(
+        `Windows release smoke failed: launcher diagnostics are missing entry '${expectedEntry.bundleId}'.`,
+      );
+    }
+
+    for (const [field, expectedValue] of Object.entries(expectedEntry)) {
+      if (actualEntry[field] !== expectedValue) {
+        throw new Error(
+          `Windows release smoke failed: launcher diagnostics entry '${expectedEntry.bundleId}' field '${field}' ` +
+            `was ${formatExpectedValue(actualEntry[field] ?? null)}, expected ${formatExpectedValue(expectedValue)}.`,
+        );
+      }
+    }
+  }
+}
+
+async function writeJsonFile(filePath, data) {
+  await mkdir(path.dirname(filePath), {recursive: true});
+  await writeFile(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+}
+
+async function createSyntheticStagedBundle({
+  bundleRoot,
+  bundleId,
+  sourceKind,
+  surfaces,
+  version,
+}) {
+  const stagedBundleRoot = path.join(bundleRoot, 'bundles', bundleId);
+  const entryFile = 'index.windows';
+  await mkdir(stagedBundleRoot, {recursive: true});
+  await writeFile(
+    path.join(stagedBundleRoot, entryFile),
+    `// synthetic launcher smoke bundle: ${bundleId}@${version}\n`,
+    'utf8',
+  );
+  await writeJsonFile(path.join(stagedBundleRoot, 'bundle-manifest.json'), {
+    bundleId,
+    version,
+    platform: 'windows',
+    entryFile,
+    surfaces,
+    sourceKind,
+  });
+  return stagedBundleRoot;
+}
+
+async function resolveCurrentMainBundleVersion() {
+  const manifest = JSON.parse(
+    await readFile(path.join(hostBundleRoot, 'bundle-manifest.json'), 'utf8'),
+  );
+  const version =
+    manifest && typeof manifest.version === 'string' ? manifest.version.trim() : '';
+  if (!version) {
+    throw new Error(
+      'Windows release smoke failed: could not resolve the staged main bundle version for launcher provenance.',
+    );
+  }
+
+  return version;
+}
+
+async function writeSyntheticCachedRemoteBundleManifest({
+  bundleId,
+  version,
+  surfaces,
+  sourceKind = 'windows-release-smoke-fixture',
+}) {
+  const manifestPath = path.join(
+    otaCacheRoot,
+    bundleId,
+    version,
+    'windows',
+    'bundle-manifest.json',
+  );
+  await writeJsonFile(manifestPath, {
+    bundleId,
+    version,
+    platform: 'windows',
+    entryFile: 'bundle.js',
+    surfaces,
+    sourceKind,
+  });
+
+  return path.join(otaCacheRoot, bundleId);
+}
+
+async function seedLauncherProvenanceCachedCatalog() {
+  const mainVersion = await resolveCurrentMainBundleVersion();
+  const createdPaths = [];
+
+  createdPaths.push(
+    await writeSyntheticCachedRemoteBundleManifest({
+      bundleId: launcherProvenanceFixture.mainBundleId,
+      version: mainVersion,
+      surfaces: launcherProvenanceFixture.mainSurfaceIds,
+    }),
+  );
+  createdPaths.push(
+    await writeSyntheticCachedRemoteBundleManifest({
+      bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
+      version: launcherProvenanceFixture.nativeApplied.latestVersion,
+      surfaces: launcherProvenanceFixture.nativeApplied.surfaceIds,
+    }),
+  );
+  createdPaths.push(
+    await writeSyntheticCachedRemoteBundleManifest({
+      bundleId: launcherProvenanceFixture.versionDrift.bundleId,
+      version: launcherProvenanceFixture.versionDrift.latestVersion,
+      surfaces: launcherProvenanceFixture.versionDrift.surfaceIds,
+    }),
+  );
+
+  await writeJsonFile(otaIndexPath, {
+    bundles: {
+      [launcherProvenanceFixture.mainBundleId]: {
+        latestVersion: mainVersion,
+        versions: [mainVersion],
+        channels: {
+          stable: mainVersion,
+        },
+      },
+      [launcherProvenanceFixture.nativeApplied.bundleId]: {
+        latestVersion: launcherProvenanceFixture.nativeApplied.latestVersion,
+        versions: [launcherProvenanceFixture.nativeApplied.latestVersion],
+        channels: {
+          stable: launcherProvenanceFixture.nativeApplied.latestVersion,
+        },
+      },
+      [launcherProvenanceFixture.versionDrift.bundleId]: {
+        latestVersion: launcherProvenanceFixture.versionDrift.latestVersion,
+        versions: [
+          launcherProvenanceFixture.versionDrift.localVersion,
+          launcherProvenanceFixture.versionDrift.latestVersion,
+        ],
+        channels: {
+          stable: launcherProvenanceFixture.versionDrift.latestVersion,
+        },
+      },
+    },
+  });
+
+  return createdPaths;
+}
+
+function getInstalledPackageInstallLocation() {
+  const installLocation = runCaptureOrThrow(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `(Get-AppxPackage -Name '${packageName}' | Select-Object -First 1 -ExpandProperty InstallLocation)`,
+    ],
+    {cwd: repoRoot},
+  ).trim();
+
+  if (!installLocation) {
+    throw new Error(`Could not resolve InstallLocation for ${packageName}.`);
+  }
+
+  return installLocation;
+}
+
+function resolveRuntimeBundleRootForLaunchMode() {
+  if (launchMode === 'portable') {
+    return path.join(portableReleaseRoot, 'Bundle');
+  }
+
+  return path.join(getInstalledPackageInstallLocation(), packageName, 'Bundle');
+}
+
 function normalizePrivateSmokeScenarioEntries(privateSmokeScenarios, sourceLabel) {
   if (!privateSmokeScenarios || typeof privateSmokeScenarios !== 'object') {
     throw new Error(
@@ -681,6 +960,220 @@ const publicSmokeScenarios = {
       if (!sessionFile.includes('companion.settings')) {
         throw new Error('Windows release smoke failed: restored main window session is missing the settings tab.');
       }
+    },
+  },
+  'launcher-provenance': {
+    description:
+      'launcher remote catalog exposes staged provenance, local-only residue, and version drift through public diagnostics',
+    preferences: defaultPreferences,
+    startupTarget: {
+      surfaceId: 'companion.main',
+      bundleId: 'opapp.companion.main',
+      policy: 'main',
+      presentation: 'current-window',
+    },
+    launchConfig: {
+      disableNativeOtaUpdate: true,
+    },
+    skipNativeOtaVerification: true,
+    successMarkers: [
+      ...commonSuccessMarkers,
+      '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=companion.main presentation=current-window targetBundle=opapp.companion.main',
+      '[frontend-companion] session window=window.main tabs=1 active=',
+      'bundle-launcher.remote-catalog.summary',
+      '"bundleId":"opapp.hbr.workspace"',
+    ],
+    async prepareState() {
+      await writeFile(
+        sessionsPath,
+        buildPersistedSessionFile({
+          'window.main': {
+            windowId: 'window.main',
+            activeTabId: 'tab:companion.settings:1',
+            tabs: [
+              {
+                tabId: 'tab:companion.settings:1',
+                surfaceId: 'companion.settings',
+                policy: 'settings',
+              },
+            ],
+          },
+        }),
+        'utf8',
+      );
+
+      if (!otaRemoteArg) {
+        return {createdPaths: []};
+      }
+
+      const runtimeBundleRoot = resolveRuntimeBundleRootForLaunchMode();
+      const createdPaths = await seedLauncherProvenanceCachedCatalog();
+      const nativeAppliedRoot = await createSyntheticStagedBundle({
+        bundleRoot: runtimeBundleRoot,
+        bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
+        sourceKind: launcherProvenanceFixture.nativeApplied.sourceKind,
+        surfaces: launcherProvenanceFixture.nativeApplied.surfaceIds,
+        version: launcherProvenanceFixture.nativeApplied.localVersion,
+      });
+      createdPaths.push(nativeAppliedRoot);
+
+      const versionDriftRoot = await createSyntheticStagedBundle({
+        bundleRoot: runtimeBundleRoot,
+        bundleId: launcherProvenanceFixture.versionDrift.bundleId,
+        sourceKind: launcherProvenanceFixture.versionDrift.sourceKind,
+        surfaces: launcherProvenanceFixture.versionDrift.surfaceIds,
+        version: launcherProvenanceFixture.versionDrift.localVersion,
+      });
+      createdPaths.push(versionDriftRoot);
+
+      const localOnlyRoot = await createSyntheticStagedBundle({
+        bundleRoot: runtimeBundleRoot,
+        bundleId: launcherProvenanceFixture.localOnly.bundleId,
+        sourceKind: launcherProvenanceFixture.localOnly.sourceKind,
+        surfaces: launcherProvenanceFixture.localOnly.surfaceIds,
+        version: launcherProvenanceFixture.localOnly.localVersion,
+      });
+      createdPaths.push(localOnlyRoot);
+
+      await writeJsonFile(otaStatePath, {
+        bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
+        hostBundleDir: nativeAppliedRoot,
+        stagedAt: launcherProvenanceFixture.otaStagedAt,
+        version: launcherProvenanceFixture.nativeApplied.localVersion,
+      });
+      await writeJsonFile(otaLastRunPath, {
+        mode: 'update',
+        remoteBase: otaRemoteArg,
+        bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
+        channel: otaChannelArg ?? 'stable',
+        hasUpdate: true,
+        deviceId: 'launcher-provenance-fixture-device',
+        inRollout: true,
+        status: 'updated',
+        currentVersion: launcherProvenanceFixture.nativeApplied.localVersion,
+        latestVersion: launcherProvenanceFixture.nativeApplied.latestVersion,
+        version: launcherProvenanceFixture.nativeApplied.localVersion,
+        previousVersion: '0.9.1',
+        stagedAt: launcherProvenanceFixture.otaStagedAt,
+        recordedAt: launcherProvenanceFixture.otaRecordedAt,
+      });
+
+      return {createdPaths};
+    },
+    async cleanupState(state) {
+      const createdPaths = Array.isArray(state?.createdPaths)
+        ? state.createdPaths
+        : [];
+      for (const createdPath of createdPaths) {
+        await removeIfPresent(createdPath);
+      }
+      await removeIfPresent(otaIndexPath);
+      await removeIfPresent(otaStatePath);
+      await removeIfPresent(otaLastRunPath);
+    },
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+      if (normalized.includes('InitialOpenSurface surface=')) {
+        throw new Error(
+          'Windows release smoke failed: launcher provenance should not rely on an initial-open launch config.',
+        );
+      }
+
+      if (
+        normalized.includes(
+          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.settings policy=settings',
+        )
+      ) {
+        throw new Error(
+          'Windows release smoke failed: launcher provenance still rendered the restored settings surface in the main window.',
+        );
+      }
+
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-companion\] session bundle=opapp\.companion\.main window=window\.main tabs=1 active=\S+ entries=[^\r\n]*companion\.main/i,
+        'launcher provenance did not settle the main window session on the launcher surface.',
+      );
+
+      if (otaRemoteArg) {
+        if (!normalized.includes('OTA.Disabled reason=launch-config')) {
+          throw new Error(
+            'Windows release smoke failed: launcher provenance should disable native OTA updates while preserving the remote catalog URL.',
+          );
+        }
+
+        assertLauncherRemoteCatalogDiagnostics(logContents, {
+          summary: {
+            status: 'ready',
+            source: 'cache',
+            remoteUrl: otaRemoteArg.replace(/\/+$/, ''),
+            remoteEntryCount: 3,
+            entryCount: 4,
+            stagedBundleCount: 3,
+            stagedBundlesLoaded: true,
+            startupTargetLoaded: true,
+          },
+          entries: [
+            {
+              bundleId: 'opapp.companion.main',
+              discoverySource: 'remote-catalog',
+              localState: 'bundled',
+              localVersion: null,
+              localProvenanceKind: null,
+              versionMismatch: false,
+            },
+            {
+              bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
+              discoverySource: 'remote-catalog',
+              localState: 'staged',
+              latestVersion: launcherProvenanceFixture.nativeApplied.latestVersion,
+              localVersion: launcherProvenanceFixture.nativeApplied.localVersion,
+              localSourceKind: launcherProvenanceFixture.nativeApplied.sourceKind,
+              localProvenanceKind: 'native-ota-applied',
+              localProvenanceStatus: 'updated',
+              versionMismatch: false,
+            },
+            {
+              bundleId: launcherProvenanceFixture.versionDrift.bundleId,
+              discoverySource: 'remote-catalog',
+              localState: 'staged',
+              latestVersion: launcherProvenanceFixture.versionDrift.latestVersion,
+              localVersion: launcherProvenanceFixture.versionDrift.localVersion,
+              localSourceKind: launcherProvenanceFixture.versionDrift.sourceKind,
+              localProvenanceKind: 'host-staged-only',
+              localProvenanceStatus: null,
+              versionMismatch: true,
+            },
+            {
+              bundleId: launcherProvenanceFixture.localOnly.bundleId,
+              discoverySource: 'local-only',
+              localState: 'staged',
+              latestVersion: null,
+              localVersion: launcherProvenanceFixture.localOnly.localVersion,
+              localSourceKind: launcherProvenanceFixture.localOnly.sourceKind,
+              localProvenanceKind: 'host-staged-only',
+              localProvenanceStatus: null,
+              versionMismatch: false,
+            },
+          ],
+        });
+      }
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.main',
+        'launcher provenance did not persist the launcher surface back into the main window session.',
+      );
+      assertPersistedSessionLacksSurfaceId(
+        sessionFile,
+        'window.main',
+        'companion.settings',
+        'launcher provenance left the restored settings surface in the main window session.',
+      );
     },
   },
   'startup-target-main-launcher': {
@@ -1996,13 +2489,19 @@ function buildLaunchConfig() {
     content += `\n[secondary]\nsurface=${scenario.launchConfig.secondary.surface}\npolicy=${scenario.launchConfig.secondary.policy}\n`;
   }
 
-  if (otaRemoteArg) {
-    content += `\n[ota]\nremote=${otaRemoteArg}\n`;
+  if (otaRemoteArg || scenario.launchConfig.disableNativeOtaUpdate) {
+    content += '\n[ota]\n';
+    if (otaRemoteArg) {
+      content += `remote=${otaRemoteArg}\n`;
+    }
     if (otaChannelArg) {
       content += `channel=${otaChannelArg}\n`;
     }
     if (otaForceFlag) {
       content += 'force=true\n';
+    }
+    if (scenario.launchConfig.disableNativeOtaUpdate) {
+      content += 'disable-native-update=true\n';
     }
   }
 
@@ -2566,7 +3065,7 @@ export function validateOtaLastRunRecord({
 }
 
 async function verifyOtaSideEffects(logContents) {
-  if (!otaRemoteArg) {
+  if (!otaRemoteArg || scenario.skipNativeOtaVerification) {
     return;
   }
 

@@ -206,4 +206,11 @@ bool GetOtaForceUpdate() noexcept {
   return GetBooleanStartupOverride(L"ota", L"force", L"OPAPP_OTA_FORCE");
 }
 
+bool GetOtaDisableNativeUpdate() noexcept {
+  return GetBooleanStartupOverride(
+      L"ota",
+      L"disable-native-update",
+      L"OPAPP_OTA_DISABLE_NATIVE_UPDATE");
+}
+
 } // namespace OpappWindowsHost

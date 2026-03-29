@@ -1843,23 +1843,28 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     // (CREATE_NO_WINDOW | DETACHED_PROCESS) and exits on its own; the staged
     // bundle takes effect on the next application launch.
     if (auto otaRemoteUrl = GetOtaRemoteUrl()) {
-      std::optional<std::wstring> hostBundleDir;
-      std::optional<std::wstring> currentBundleVersion;
+      if (GetOtaDisableNativeUpdate()) {
+        AppendLog(
+            "OTA.Disabled reason=launch-config remoteUrl=" + ToUtf8(*otaRemoteUrl));
+      } else {
+        std::optional<std::wstring> hostBundleDir;
+        std::optional<std::wstring> currentBundleVersion;
 #if BUNDLE
-      hostBundleDir = ResolveHostedBundleDirectory(std::wstring(appDirectory), otaBundleTarget.BundleId);
-      currentBundleVersion = ReadBundleManifestVersion(*hostBundleDir);
-      AppendLog(
-          "OTA.BundleTarget bundleId=" + ToUtf8(otaBundleTarget.BundleId) +
-          " source=" + ToUtf8(otaBundleTarget.Source) +
-          " hostBundleDir=" + ToUtf8(*hostBundleDir));
+        hostBundleDir = ResolveHostedBundleDirectory(std::wstring(appDirectory), otaBundleTarget.BundleId);
+        currentBundleVersion = ReadBundleManifestVersion(*hostBundleDir);
+        AppendLog(
+            "OTA.BundleTarget bundleId=" + ToUtf8(otaBundleTarget.BundleId) +
+            " source=" + ToUtf8(otaBundleTarget.Source) +
+            " hostBundleDir=" + ToUtf8(*hostBundleDir));
 #endif
-      SpawnOtaUpdateProcess(
-          std::wstring(appDirectory),
-          *otaRemoteUrl,
-          hostBundleDir,
-          currentBundleVersion,
-          GetOtaChannel(),
-          GetOtaForceUpdate());
+        SpawnOtaUpdateProcess(
+            std::wstring(appDirectory),
+            *otaRemoteUrl,
+            hostBundleDir,
+            currentBundleVersion,
+            GetOtaChannel(),
+            GetOtaForceUpdate());
+      }
     }
 
     AppendLog("WinMain.StartReactNativeApp");

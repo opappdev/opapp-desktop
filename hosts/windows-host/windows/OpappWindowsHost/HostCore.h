@@ -136,6 +136,7 @@ std::optional<std::wstring> GetMainDevSmokeScenario() noexcept;
 std::optional<std::wstring> GetOtaRemoteUrl() noexcept;
 std::optional<std::wstring> GetOtaChannel() noexcept;
 bool GetOtaForceUpdate() noexcept;
+bool GetOtaDisableNativeUpdate() noexcept;
 std::filesystem::path ResolveOtaCacheRoot(std::wstring const &appDirectory);
 
 } // namespace OpappWindowsHost

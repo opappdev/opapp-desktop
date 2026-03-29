@@ -71,6 +71,12 @@ test('windows-release-smoke validate-only accepts explicit startup-target launch
   assert.equal(result.status, 0);
 });
 
+test('windows-release-smoke validate-only accepts explicit launcher provenance scenario', () => {
+  const result = runSmokeValidateOnly(['--scenario=launcher-provenance']);
+
+  assert.equal(result.status, 0);
+});
+
 test('windows-release-smoke validate-only accepts explicit legacy startup-target launcher scenario', () => {
   const result = runSmokeValidateOnly(['--scenario=legacy-startup-target-main-launcher']);
 
