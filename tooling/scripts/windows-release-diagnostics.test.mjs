@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
 import test from 'node:test';
 import {
   classifyRunWindowsFailure,
@@ -6,6 +7,7 @@ import {
   collectPortableMsbuildFallbackCandidates,
   collectPortableMsbuildFallbackProfiles,
   formatReleaseFailureDiagnostics,
+  formatReleaseProbeReport,
   formatReleaseProbeForLogs,
   getBlockingReleaseProbeFailure,
   getPortableMsbuildFallbackBlocker,
@@ -60,6 +62,14 @@ test('formatReleaseProbeForLogs renders concise probe lines', () => {
       accessible: false,
       errorMessage: 'Access to the path is denied.',
     },
+    localMicrosoftSdkAclProbe: {
+      path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+      ok: true,
+      status: 0,
+      captureBlocked: false,
+      owner: 'BUILTIN\\Administrators',
+      accessToString: 'BUILTIN\\Administrators Allow FullControl',
+    },
   });
 
   assert(lines.some(line => line.includes('cmd path=C:\\Windows\\System32\\cmd.exe')));
@@ -68,6 +78,9 @@ test('formatReleaseProbeForLogs renders concise probe lines', () => {
   assert(lines.some(line => line.includes('local sdk path=C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs')));
   assert(lines.some(line => line.includes('accessible=no')));
   assert(lines.some(line => line.includes('local sdk access-error=Access to the path is denied.')));
+  assert(lines.some(line => line.includes('local sdk acl probe=ok(status=0)')));
+  assert(lines.some(line => line.includes('local sdk acl owner=BUILTIN\\Administrators')));
+  assert(lines.some(line => line.includes('local sdk acl access=BUILTIN\\Administrators Allow FullControl')));
 });
 
 test('formatReleaseProbeForLogs marks msbuild candidates as unknown when vswhere capture is blocked', () => {
@@ -109,6 +122,16 @@ test('formatReleaseFailureDiagnostics includes classification and actionable hin
         accessible: false,
         errorMessage: 'Access to the path is denied.',
       },
+      localMicrosoftSdkAclProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        ok: false,
+        status: 1,
+        errorCode: 'ACCESS_DENIED',
+        errorMessage: 'Get-Acl access denied.',
+        captureBlocked: false,
+        owner: null,
+        accessToString: null,
+      },
     },
     result: {status: 1, error: null},
   });
@@ -117,6 +140,7 @@ test('formatReleaseFailureDiagnostics includes classification and actionable hin
   assert(diagnostics.includes('Suggested next actions:'));
   assert(diagnostics.includes('non-sandbox'));
   assert(diagnostics.includes('Local Microsoft SDKs path is not readable'));
+  assert(diagnostics.includes('Automated Get-Acl probe failed (ACCESS_DENIED)'));
   assert(diagnostics.includes("Get-Acl 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs'"));
 });
 
@@ -146,6 +170,14 @@ test('formatReleaseFailureDiagnostics includes local-sdk-acl-denied guidance', (
         accessible: false,
         errorMessage: 'Access is denied.',
       },
+      localMicrosoftSdkAclProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        ok: true,
+        status: 0,
+        captureBlocked: false,
+        owner: 'NT SERVICE\\TrustedInstaller',
+        accessToString: 'BUILTIN\\Administrators Allow FullControl',
+      },
     },
     result: {status: null, error: {code: 'LOCAL_MICROSOFT_SDKS_UNREADABLE'}},
   });
@@ -154,7 +186,121 @@ test('formatReleaseFailureDiagnostics includes local-sdk-acl-denied guidance', (
   assert(diagnostics.includes('ToolLocationHelper cannot read the per-user `Local Microsoft SDKs` directory.'));
   assert(diagnostics.includes('Portable MSBuild fallback does not bypass this class of failure'));
   assert(diagnostics.includes('OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1'));
+  assert(diagnostics.includes('npm run report:windows:release-probe'));
+  assert(diagnostics.includes('npm run report:windows:release-probe:json'));
+  assert(diagnostics.includes('Detected Local Microsoft SDKs ACL owner: NT SERVICE\\TrustedInstaller.'));
+  assert(diagnostics.includes('Detected Local Microsoft SDKs ACL entries (truncated): BUILTIN\\Administrators Allow FullControl.'));
   assert(diagnostics.includes('If `Get-Acl` is also unauthorized in the current session'));
+});
+
+test('formatReleaseFailureDiagnostics adds a PowerShell module hint when Get-Acl cannot load Microsoft.PowerShell.Security', () => {
+  const diagnostics = formatReleaseFailureDiagnostics({
+    args: [],
+    classification: {
+      code: 'local-sdk-acl-denied',
+      summary: 'Local Microsoft SDKs ACL blocks MSBuild SDK resolution',
+    },
+    command: 'node.exe',
+    failureSummary:
+      'release preflight blocked execution: Local Microsoft SDKs path is not readable (C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs): Access is denied.',
+    probe: {
+      cmdPath: 'C:\\Windows\\System32\\cmd.exe',
+      cmdExists: true,
+      cmdProbe: {ok: true, status: 0},
+      minimumVisualStudioVersion: null,
+      visualStudioVersion: null,
+      vswherePath: 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe',
+      vswhereExists: true,
+      vswhereProbe: {ok: true, status: 0},
+      msbuildCandidates: [],
+      localMicrosoftSdkProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        exists: true,
+        accessible: false,
+        errorMessage: 'Access is denied.',
+      },
+      localMicrosoftSdkAclProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        ok: false,
+        status: 0,
+        errorCode: 'GET_ACL_FAILED',
+        errorMessage:
+          "The 'Get-Acl' command was found in the module 'Microsoft.PowerShell.Security', but the module could not be loaded. For more information, run 'Import-Module Microsoft.PowerShell.Security'.",
+        captureBlocked: false,
+        owner: null,
+        accessToString: null,
+      },
+    },
+    result: {status: null, error: {code: 'LOCAL_MICROSOFT_SDKS_UNREADABLE'}},
+  });
+
+  assert(diagnostics.includes('Automated Get-Acl probe failed (GET_ACL_FAILED)'));
+  assert(diagnostics.includes('retry `Get-Acl` from Windows PowerShell or an elevated/full-trust session'));
+});
+
+test('formatReleaseProbeReport renders a success summary when no blocking issue is detected', () => {
+  const report = formatReleaseProbeReport({
+    command: 'node.exe',
+    probe: {
+      cmdPath: 'C:\\Windows\\System32\\cmd.exe',
+      cmdExists: true,
+      cmdProbe: {ok: true, status: 0},
+      minimumVisualStudioVersion: null,
+      visualStudioVersion: '17.0',
+      vswherePath: 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe',
+      vswhereExists: true,
+      vswhereProbe: {ok: true, status: 0},
+      msbuildCandidates: [
+        {
+          installationVersion: '17.11.2',
+          msbuildPath: 'C:\\VS\\MSBuild\\Current\\Bin\\amd64\\msbuild.exe',
+          exists: true,
+        },
+      ],
+      localMicrosoftSdkProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        exists: true,
+        accessible: true,
+        errorMessage: null,
+      },
+    },
+    blockingFailure: null,
+  });
+
+  assert(report.includes('Windows release preflight probe found no blocking toolchain issue.'));
+  assert(report.includes('Release toolchain probe:'));
+  assert(report.includes('msbuild candidates=1 available=1'));
+});
+
+test('formatReleaseProbeReport uses a preflight-specific intro when a blocker is present', () => {
+  const report = formatReleaseProbeReport({
+    command: 'node.exe',
+    probe: {
+      cmdPath: 'C:\\Windows\\System32\\cmd.exe',
+      cmdExists: true,
+      cmdProbe: {ok: true, status: 0},
+      minimumVisualStudioVersion: null,
+      visualStudioVersion: null,
+      vswherePath: 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe',
+      vswhereExists: true,
+      vswhereProbe: {ok: true, status: 0},
+      msbuildCandidates: [],
+      localMicrosoftSdkProbe: {
+        path: 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+        exists: true,
+        accessible: false,
+        errorMessage: 'Access is denied.',
+      },
+    },
+    blockingFailure: {
+      code: 'LOCAL_MICROSOFT_SDKS_UNREADABLE',
+      reason: 'Local Microsoft SDKs path is not readable (C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs): Access is denied.',
+      classifierHint: 'Local Microsoft SDKs path is not readable (C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs): Access is denied.',
+    },
+  });
+
+  assert(report.startsWith('Windows release preflight probe detected a blocking toolchain issue.'));
+  assert(!report.includes('Windows release smoke failed while running `run-windows --release`.'));
 });
 
 test('getBlockingReleaseProbeFailure reports cmd EPERM as blocking', () => {
@@ -364,6 +510,27 @@ test('collectReleaseBuildProbe marks local sdk path inaccessible when directory 
         }
         return {status: 0, error: null, stdout: '', stderr: ''};
       }
+      if (normalized.endsWith('powershell.exe')) {
+        const commandText = String(_args?.[_args.length - 1] ?? '');
+        const outputPathMatch = commandText.match(/Set-Content -LiteralPath '([^']+)' -Encoding utf8/);
+        if (outputPathMatch?.[1]) {
+          writeFileSync(
+            outputPathMatch[1],
+            JSON.stringify({
+              Path: 'Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs',
+              Owner: 'NT SERVICE\\TrustedInstaller',
+              AccessToString: 'BUILTIN\\Administrators Allow FullControl',
+            }),
+            'utf8',
+          );
+        }
+        return {
+          status: 0,
+          error: null,
+          stdout: '',
+          stderr: '',
+        };
+      }
       return {status: 0, error: null, stdout: '', stderr: ''};
     },
     exists: targetPath => {
@@ -371,6 +538,7 @@ test('collectReleaseBuildProbe marks local sdk path inaccessible when directory 
       return (
         normalized.endsWith('cmd.exe') ||
         normalized.endsWith('vswhere.exe') ||
+        normalized.endsWith('powershell.exe') ||
         normalized.includes('microsoft sdks')
       );
     },
@@ -386,4 +554,67 @@ test('collectReleaseBuildProbe marks local sdk path inaccessible when directory 
   assert.equal(probe.localMicrosoftSdkProbe.exists, true);
   assert.equal(probe.localMicrosoftSdkProbe.accessible, false);
   assert(probe.localMicrosoftSdkProbe.errorMessage.includes('Access is denied'));
+  assert.equal(probe.localMicrosoftSdkAclProbe.path, 'Microsoft.PowerShell.Core\\FileSystem::C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs');
+  assert.equal(probe.localMicrosoftSdkAclProbe.owner, 'NT SERVICE\\TrustedInstaller');
+  assert.equal(probe.localMicrosoftSdkAclProbe.accessToString, 'BUILTIN\\Administrators Allow FullControl');
+});
+
+test('collectReleaseBuildProbe recovers vswhere installs via temp-file redirect when pipe capture is blocked', () => {
+  const probe = collectReleaseBuildProbe({
+    env: {
+      SystemRoot: 'C:\\Windows',
+      ProgramFiles: 'C:\\Program Files',
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+      LOCALAPPDATA: 'C:\\Users\\ArrayZoneYour\\AppData\\Local',
+    },
+    spawn: (command, args, options) => {
+      const normalized = String(command).toLowerCase();
+      if (normalized.endsWith('cmd.exe')) {
+        return {status: 0, error: null, stdout: '', stderr: ''};
+      }
+      if (normalized.endsWith('vswhere.exe')) {
+        if (Array.isArray(options?.stdio) && options.stdio[1] === 'pipe') {
+          return {status: null, error: {code: 'EPERM', message: 'capture blocked'}, stdout: '', stderr: ''};
+        }
+        return {status: 0, error: null, stdout: '', stderr: ''};
+      }
+      if (normalized.endsWith('powershell.exe')) {
+        const commandText = String(args?.[args.length - 1] ?? '');
+        const outputPathMatch = commandText.match(/Set-Content -LiteralPath '([^']+)' -Encoding utf8/);
+        if (outputPathMatch?.[1] && commandText.includes('$vswhereArgs')) {
+          writeFileSync(
+            outputPathMatch[1],
+            JSON.stringify([
+              {
+                installationPath: 'C:\\VS',
+                installationVersion: '17.11.2',
+                displayName: 'VS Build Tools',
+              },
+            ]),
+            'utf8',
+          );
+        }
+        return {status: 0, error: null, stdout: '', stderr: ''};
+      }
+      return {status: 0, error: null, stdout: '', stderr: ''};
+    },
+    exists: targetPath => {
+      const normalized = String(targetPath).toLowerCase();
+      return (
+        normalized.endsWith('cmd.exe') ||
+        normalized.endsWith('vswhere.exe') ||
+        normalized.endsWith('powershell.exe') ||
+        normalized === 'c:\\vs\\msbuild\\current\\bin\\amd64\\msbuild.exe'
+      );
+    },
+    readDir: () => ['placeholder'],
+  });
+
+  assert.equal(probe.vswhereProbe.ok, true);
+  assert.equal(probe.vswhereProbe.captureBlocked, false);
+  assert(probe.vswhereProbe.errorMessage.includes('temp file'));
+  assert.equal(probe.msbuildCandidatesUnknown, false);
+  assert.equal(probe.msbuildCandidates.length, 1);
+  assert.equal(probe.msbuildCandidates[0].msbuildPath, 'C:\\VS\\MSBuild\\Current\\Bin\\amd64\\msbuild.exe');
+  assert.equal(probe.msbuildCandidates[0].exists, true);
 });

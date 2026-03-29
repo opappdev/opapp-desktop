@@ -1,5 +1,6 @@
 import {spawnSync} from 'node:child_process';
-import {existsSync, readdirSync} from 'node:fs';
+import {existsSync, mkdtempSync, readdirSync, readFileSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import path from 'node:path';
 
 function normalizeText(value) {
@@ -103,12 +104,114 @@ function runProbe(spawn, command, args, {captureOutput = false} = {}) {
   };
 }
 
-function parseVswhereOutput(rawOutput) {
+function parseJsonOutput(rawOutput) {
   try {
-    const parsed = JSON.parse(rawOutput);
-    return Array.isArray(parsed) ? parsed : [];
+    return JSON.parse(String(rawOutput ?? '').replace(/^\uFEFF/, '').trim());
   } catch {
     return null;
+  }
+}
+
+function parseVswhereOutput(rawOutput) {
+  const parsed = parseJsonOutput(rawOutput);
+  return Array.isArray(parsed) ? parsed : null;
+}
+
+function probeVswhereWithTempFile(vswherePath, {
+  spawn = spawnSync,
+} = {}) {
+  const normalizedVswherePath = normalizeText(vswherePath);
+  if (!normalizedVswherePath) {
+    return {
+      probe: null,
+      installs: null,
+    };
+  }
+
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'opapp-vswhere-'));
+  const outputPath = path.join(tempDir, 'vswhere.json');
+  const escapedVswherePath = normalizedVswherePath.replace(/'/g, "''");
+  const escapedOutputPath = outputPath.replace(/'/g, "''");
+
+  try {
+    const result = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `$ErrorActionPreference = 'Stop'; ` +
+          `$vswhereArgs = @('-products', '*', '-requires', 'Microsoft.Component.MSBuild', '-latest', '-format', 'json', '-utf8'); ` +
+          `& '${escapedVswherePath}' @vswhereArgs | Set-Content -LiteralPath '${escapedOutputPath}' -Encoding utf8`,
+      ],
+      {
+        stdio: 'ignore',
+        windowsHide: false,
+      },
+    );
+
+    if (result.status !== 0 || result.error) {
+      return {
+        probe: {
+          ok: false,
+          status: result.status,
+          errorCode: result.error?.code ?? null,
+          errorMessage: truncateOneLine(result.error?.message ?? '', 160),
+          stdout: '',
+          stderr: '',
+          captureBlocked: false,
+        },
+        installs: null,
+      };
+    }
+
+    if (!existsSync(outputPath)) {
+      return {
+        probe: {
+          ok: false,
+          status: result.status,
+          errorCode: 'NO_OUTPUT',
+          errorMessage: 'vswhere temp-file probe did not produce JSON output',
+          stdout: '',
+          stderr: '',
+          captureBlocked: false,
+        },
+        installs: null,
+      };
+    }
+
+    const parsed = parseVswhereOutput(readFileSync(outputPath, 'utf8'));
+    if (!parsed) {
+      return {
+        probe: {
+          ok: false,
+          status: result.status,
+          errorCode: 'PARSE_ERROR',
+          errorMessage: 'vswhere temp-file probe returned non-JSON output',
+          stdout: '',
+          stderr: '',
+          captureBlocked: false,
+        },
+        installs: null,
+      };
+    }
+
+    return {
+      probe: {
+        ok: true,
+        status: result.status,
+        errorCode: null,
+        errorMessage: 'Output capture redirected to temp file because pipe capture is blocked.',
+        stdout: '',
+        stderr: '',
+        captureBlocked: false,
+      },
+      installs: parsed,
+    };
+  } finally {
+    rmSync(tempDir, {recursive: true, force: true});
   }
 }
 
@@ -150,6 +253,112 @@ function probePathAccess(pathValue, {
       accessible: false,
       errorMessage: truncateOneLine(error?.message ?? String(error), 160),
     };
+  }
+}
+
+function probePathAcl(pathValue, {
+  spawn = spawnSync,
+} = {}) {
+  const targetPath = normalizeText(pathValue);
+  if (!targetPath) {
+    return null;
+  }
+
+  const escapedPath = targetPath.replace(/'/g, "''");
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'opapp-windows-acl-'));
+  const outputPath = path.join(tempDir, 'acl.json');
+  const escapedOutputPath = outputPath.replace(/'/g, "''");
+
+  try {
+    const aclProbe = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `$ErrorActionPreference = 'Stop'; ` +
+          `try { ` +
+          `$acl = Get-Acl -LiteralPath '${escapedPath}'; ` +
+          `[pscustomobject]@{Ok=$true;Path=$acl.Path;Owner=$acl.Owner;AccessToString=$acl.AccessToString;ErrorMessage=$null} | ` +
+          `ConvertTo-Json -Compress | Set-Content -LiteralPath '${escapedOutputPath}' -Encoding utf8; ` +
+          `} catch { ` +
+          `[pscustomobject]@{Ok=$false;Path='${escapedPath}';Owner=$null;AccessToString=$null;ErrorMessage=$_.Exception.Message} | ` +
+          `ConvertTo-Json -Compress | Set-Content -LiteralPath '${escapedOutputPath}' -Encoding utf8; ` +
+          `}`,
+      ],
+      {
+        stdio: 'ignore',
+        windowsHide: false,
+      },
+    );
+
+    if (aclProbe.status !== 0 || aclProbe.error) {
+      return {
+        path: targetPath,
+        ok: false,
+        status: aclProbe.status,
+        errorCode: aclProbe.error?.code ?? null,
+        errorMessage: truncateOneLine(aclProbe.error?.message ?? '', 160),
+        captureBlocked: false,
+        owner: null,
+        accessToString: null,
+      };
+    }
+
+    if (!existsSync(outputPath)) {
+      return {
+        path: targetPath,
+        ok: false,
+        status: aclProbe.status,
+        errorCode: 'NO_OUTPUT',
+        errorMessage: 'Get-Acl probe did not produce a JSON report file',
+        captureBlocked: false,
+        owner: null,
+        accessToString: null,
+      };
+    }
+
+    const parsed = parseJsonOutput(readFileSync(outputPath, 'utf8'));
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      return {
+        path: targetPath,
+        ok: false,
+        status: aclProbe.status,
+        errorCode: 'PARSE_ERROR',
+        errorMessage: 'Get-Acl returned non-JSON output',
+        captureBlocked: false,
+        owner: null,
+        accessToString: null,
+      };
+    }
+
+    if (parsed.Ok === false) {
+      return {
+        path: normalizeText(parsed.Path) ?? targetPath,
+        ok: false,
+        status: aclProbe.status,
+        errorCode: 'GET_ACL_FAILED',
+        errorMessage: truncateOneLine(parsed.ErrorMessage ?? 'Get-Acl failed', 160),
+        captureBlocked: false,
+        owner: null,
+        accessToString: null,
+      };
+    }
+
+    return {
+      path: normalizeText(parsed.Path) ?? targetPath,
+      ok: true,
+      status: aclProbe.status,
+      errorCode: null,
+      errorMessage: null,
+      captureBlocked: false,
+      owner: normalizeText(parsed.Owner),
+      accessToString: normalizeText(parsed.AccessToString),
+    };
+  } finally {
+    rmSync(tempDir, {recursive: true, force: true});
   }
 }
 
@@ -206,7 +415,15 @@ export function collectReleaseBuildProbe({
       };
 
   let vswhereInstalls = [];
-  if (vswhereProbe.ok && !vswhereProbe.captureBlocked) {
+  if (vswhereProbe.ok && vswhereProbe.captureBlocked) {
+    const redirectedVswhereProbe = probeVswhereWithTempFile(vswherePath, {spawn});
+    if (redirectedVswhereProbe.probe) {
+      vswhereProbe = redirectedVswhereProbe.probe;
+      if (redirectedVswhereProbe.probe.ok && Array.isArray(redirectedVswhereProbe.installs)) {
+        vswhereInstalls = redirectedVswhereProbe.installs;
+      }
+    }
+  } else if (vswhereProbe.ok && !vswhereProbe.captureBlocked) {
     const parsed = parseVswhereOutput(vswhereProbe.stdout);
     if (parsed) {
       vswhereInstalls = parsed;
@@ -246,6 +463,9 @@ export function collectReleaseBuildProbe({
       readDir,
     },
   );
+  const localMicrosoftSdkAclProbe = localMicrosoftSdkProbe?.exists
+    ? probePathAcl(localMicrosoftSdkProbe.path, {spawn})
+    : null;
 
   return {
     cmdPath,
@@ -260,6 +480,7 @@ export function collectReleaseBuildProbe({
     msbuildCandidatesUnknown,
     msbuildCandidates,
     localMicrosoftSdkProbe,
+    localMicrosoftSdkAclProbe,
   };
 }
 
@@ -471,6 +692,20 @@ export function formatReleaseProbeForLogs(probe) {
     }
   }
 
+  if (probe.localMicrosoftSdkAclProbe?.path) {
+    lines.push(`local sdk acl probe=${probeStatusSummary(probe.localMicrosoftSdkAclProbe)}`);
+    if (probe.localMicrosoftSdkAclProbe.ok && probe.localMicrosoftSdkAclProbe.owner) {
+      lines.push(
+        `local sdk acl owner=${truncateOneLine(probe.localMicrosoftSdkAclProbe.owner, 160)}`,
+      );
+    }
+    if (probe.localMicrosoftSdkAclProbe.ok && probe.localMicrosoftSdkAclProbe.accessToString) {
+      lines.push(
+        `local sdk acl access=${truncateOneLine(probe.localMicrosoftSdkAclProbe.accessToString, 160)}`,
+      );
+    }
+  }
+
   if (probe.msbuildCandidatesUnknown) {
     lines.push('msbuild candidates=<unknown (vswhere output capture blocked)>');
     return lines;
@@ -509,6 +744,9 @@ function buildActionHints(classification, probe) {
     );
     hints.push(
       'If you need the full upstream MSBuild output after confirming the preflight diagnosis, rerun once with `OPAPP_WINDOWS_RELEASE_SKIP_PREFLIGHT_FAILFAST=1`.',
+    );
+    hints.push(
+      'Use `npm run report:windows:release-probe` or `npm run report:windows:release-probe:json` to capture the same blocker diagnosis without running the smoke harness.',
     );
   } else if (classification.code === 'cmd-spawn-eperm') {
     hints.push(
@@ -556,9 +794,34 @@ function buildActionHints(classification, probe) {
 
   if (probe.localMicrosoftSdkProbe?.exists && !probe.localMicrosoftSdkProbe.accessible) {
     const sdkPath = probe.localMicrosoftSdkProbe.path;
+    const aclProbe = probe.localMicrosoftSdkAclProbe;
     hints.push(
       `Local Microsoft SDKs path is not readable (${sdkPath}): ${probe.localMicrosoftSdkProbe.errorMessage ?? 'access denied'}.`,
     );
+    if (aclProbe?.ok) {
+      if (aclProbe.captureBlocked) {
+        hints.push('Automated `Get-Acl` probing succeeded, but structured output capture is blocked in this environment.');
+      } else {
+        if (aclProbe.owner) {
+          hints.push(`Detected Local Microsoft SDKs ACL owner: ${aclProbe.owner}.`);
+        }
+        if (aclProbe.accessToString) {
+          hints.push(
+            `Detected Local Microsoft SDKs ACL entries (truncated): ${truncateOneLine(aclProbe.accessToString, 160)}.`,
+          );
+        }
+      }
+    } else if (aclProbe?.path) {
+      hints.push(
+        `Automated Get-Acl probe failed (${aclProbe.errorCode ?? aclProbe.status ?? 'unknown'}): ` +
+          `${truncateOneLine(aclProbe.errorMessage ?? 'unknown ACL probe failure', 160)}.`,
+      );
+      if (/module could not be loaded|Import-Module/i.test(aclProbe.errorMessage ?? '')) {
+        hints.push(
+          'The current PowerShell host cannot load `Microsoft.PowerShell.Security`; retry `Get-Acl` from Windows PowerShell or an elevated/full-trust session.',
+        );
+      }
+    }
     hints.push(
       `Inspect ACL details before retrying portable fallback: powershell -NoProfile -Command "Get-Acl '${sdkPath}' | Format-List"`,
     );
@@ -644,11 +907,12 @@ export function formatReleaseFailureDiagnostics({
   classification,
   command,
   failureSummary,
+  introLine = 'Windows release smoke failed while running `run-windows --release`.',
   probe,
   result,
 }) {
   const lines = [
-    'Windows release smoke failed while running `run-windows --release`.',
+    introLine,
     `Failure summary: ${failureSummary}`,
     `Failure classification: ${classification.code} (${classification.summary})`,
     `Process exit status: ${result.status ?? 'null'}${result.error?.code ? `, errorCode=${result.error.code}` : ''}`,
@@ -669,4 +933,28 @@ export function formatReleaseFailureDiagnostics({
   }
 
   return lines.join('\n');
+}
+
+export function formatReleaseProbeReport({
+  command = process.execPath,
+  probe,
+  blockingFailure,
+}) {
+  if (blockingFailure) {
+    return formatReleaseFailureDiagnostics({
+      args: [],
+      classification: classifyRunWindowsFailure(blockingFailure.classifierHint),
+      command,
+      failureSummary: `release preflight blocked execution: ${blockingFailure.reason}`,
+      introLine: 'Windows release preflight probe detected a blocking toolchain issue.',
+      probe,
+      result: {status: null, error: {code: blockingFailure.code}},
+    });
+  }
+
+  return [
+    'Windows release preflight probe found no blocking toolchain issue.',
+    'Release toolchain probe:',
+    ...formatReleaseProbeForLogs(probe).map(line => `  - ${line}`),
+  ].join('\n');
 }

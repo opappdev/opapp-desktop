@@ -34,6 +34,20 @@ Use `npm run smoke:windows:release` when you only need the packaged host smoke.
 Use `npm run smoke:windows:portable` when you only need the portable/direct-exe
 smoke.
 
+Use `npm run report:windows:release-probe` when you need the release toolchain
+blocker diagnosis without running the smoke harness. It reuses the same
+preflight probe and suggested next actions as `verify:windows:*:preflight`.
+
+Use `npm run report:windows:release-probe:json` when you want the same release
+probe as machine-readable JSON for automation or handoff notes.
+
+Use `npm run report:windows:release-probe:fail` when you want the standalone
+probe to exit non-zero whenever it detects a blocking release-toolchain issue.
+
+All three report commands also accept `-- --output=<path>` to write the text or
+JSON payload to a file. In restricted sessions, prefer `%TEMP%` or another
+known writable directory if repo-root temp folders still hit `EPERM`.
+
 Use `npm run verify:windows:dev:window-capture` or
 `npm run smoke:windows:window-capture` when you need to validate the native
 `OpappWindowCapture` bridge end to end.
