@@ -241,6 +241,14 @@ function extractRuntimeBundleRoot(logContents) {
   );
 }
 
+function extractOtaSpawnHostBundleDir(logContents) {
+  return (
+    normalizeLogContents(logContents).match(
+      /OTA\.SpawnUpdateProcess [^\r\n]*hostBundleDir=([^\r\n]+?)(?: currentVersion=| channel=| force=true|$)/,
+    )?.[1] ?? null
+  )?.trim() ?? null;
+}
+
 function extractOtaLoggedCurrentVersion(logContents) {
   return normalizeLogContents(logContents).match(/OTA\.SpawnUpdateProcess .* currentVersion=([^\r\n ]+)/)?.[1] ?? null;
 }
@@ -2562,8 +2570,11 @@ async function verifyOtaSideEffects(logContents) {
     return;
   }
 
+  const normalizedLog = normalizeLogContents(logContents);
   const runtimeBundleRoot = extractRuntimeBundleRoot(logContents);
-  if (!normalizeLogContents(logContents).includes(`hostBundleDir=${runtimeBundleRoot}`)) {
+  const otaSpawnHostBundleDir = extractOtaSpawnHostBundleDir(logContents);
+  const expectedOtaHostBundleDir = otaSpawnHostBundleDir ?? runtimeBundleRoot;
+  if (!otaSpawnHostBundleDir && !normalizedLog.includes(`hostBundleDir=${runtimeBundleRoot}`)) {
     throw new Error(
       `Windows release smoke failed: ota spawn log did not target the runtime bundle root '${runtimeBundleRoot}'.`,
     );
@@ -2580,7 +2591,6 @@ async function verifyOtaSideEffects(logContents) {
     timeoutFlag: '--scenario-ms',
   });
 
-  const normalizedLog = normalizeLogContents(logContents);
   const otaResolvedBundleMetadata =
     normalizedLog.includes('OTA.Native.BundleInfoMissing bundleId=') ||
     normalizedLog.includes('OTA.Native.LatestVersionMissing bundleId=') ||
@@ -2679,9 +2689,9 @@ async function verifyOtaSideEffects(logContents) {
     timeoutMs: scenarioTimeoutMs,
     timeoutFlag: '--scenario-ms',
   });
-  if (otaState.hostBundleDir !== runtimeBundleRoot) {
+  if (otaState.hostBundleDir !== expectedOtaHostBundleDir) {
     throw new Error(
-      `Windows release smoke failed: ota-state hostBundleDir was '${otaState.hostBundleDir ?? 'unknown'}', expected '${runtimeBundleRoot}'.`,
+      `Windows release smoke failed: ota-state hostBundleDir was '${otaState.hostBundleDir ?? 'unknown'}', expected '${expectedOtaHostBundleDir}'.`,
     );
   }
   if (otaState.version !== otaLastRun.version) {

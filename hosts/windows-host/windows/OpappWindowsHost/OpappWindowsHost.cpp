@@ -118,6 +118,115 @@ std::optional<std::wstring> ReadBundleManifestBundleId(std::wstring const &bundl
   }
 }
 
+std::optional<StartupTargetPreference> LoadLegacyStartupTargetPreference() noexcept {
+  try {
+    DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+    if (required == 0) {
+      return std::nullopt;
+    }
+
+    std::wstring localAppData(required > 0 ? required - 1 : 0, L'\0');
+    if (required > 1) {
+      GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData.data(), required);
+    }
+    if (localAppData.empty()) {
+      return std::nullopt;
+    }
+
+    auto legacyStartupTargetPath =
+        std::filesystem::path(localAppData) / L"OPApp" / L"startup" / L"companion-startup-target.json";
+    std::ifstream stream(legacyStartupTargetPath, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    auto jsonObject = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
+
+    auto surfaceIdHstr = jsonObject.GetNamedString(L"surfaceId", L"");
+    auto bundleIdHstr = jsonObject.GetNamedString(L"bundleId", L"");
+    auto policyNameHstr = jsonObject.GetNamedString(L"policy", L"");
+    auto presentationHstr = jsonObject.GetNamedString(L"presentation", L"");
+    std::wstring surfaceId(surfaceIdHstr.c_str(), surfaceIdHstr.size());
+    std::wstring bundleId(bundleIdHstr.c_str(), bundleIdHstr.size());
+    std::wstring policyName(policyNameHstr.c_str(), policyNameHstr.size());
+    std::wstring presentation(presentationHstr.c_str(), presentationHstr.size());
+    if (surfaceId.empty() || bundleId.empty() || policyName.empty() || presentation.empty()) {
+      return std::nullopt;
+    }
+
+    auto parsedPolicy = ParseWindowPolicy(ToUtf8(policyName));
+    if (!parsedPolicy) {
+      return std::nullopt;
+    }
+
+    return StartupTargetPreference{
+        std::wstring(surfaceId),
+        std::wstring(bundleId),
+        parsedPolicy->Policy,
+        NormalizeStartupTargetPresentation(presentation),
+    };
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+struct ResolvedOtaBundleTarget {
+  std::wstring BundleId{L"opapp.companion.main"};
+  std::wstring Source{L"main-bundle"};
+};
+
+ResolvedOtaBundleTarget ResolveOtaBundleTarget(
+    std::optional<AutoOpenSurfaceConfig> const &startupInitialOpenSurface) noexcept {
+  auto resolveCurrentWindowTarget =
+      [](std::wstring const &bundleId, std::wstring const &presentation, std::wstring source) {
+        if (!bundleId.empty() && NormalizeStartupTargetPresentation(presentation) == L"current-window") {
+          return ResolvedOtaBundleTarget{bundleId, std::move(source)};
+        }
+
+        return ResolvedOtaBundleTarget{};
+      };
+
+  if (startupInitialOpenSurface) {
+    if (startupInitialOpenSurface->BundleId && !startupInitialOpenSurface->BundleId->empty()) {
+      return resolveCurrentWindowTarget(
+          *startupInitialOpenSurface->BundleId,
+          startupInitialOpenSurface->Presentation,
+          L"launch-config-initial-open");
+    }
+
+    return ResolvedOtaBundleTarget{L"opapp.companion.main", L"launch-config-main-bundle"};
+  }
+
+  if (auto startupTargetPreference = LoadStartupTargetPreference()) {
+    return resolveCurrentWindowTarget(
+        startupTargetPreference->BundleId,
+        startupTargetPreference->Presentation,
+        L"startup-target-preference");
+  }
+
+  if (auto legacyStartupTargetPreference = LoadLegacyStartupTargetPreference()) {
+    return resolveCurrentWindowTarget(
+        legacyStartupTargetPreference->BundleId,
+        legacyStartupTargetPreference->Presentation,
+        L"legacy-startup-target-file");
+  }
+
+  return {};
+}
+
+std::wstring ResolveHostedBundleDirectory(
+    std::wstring const &appDirectory,
+    std::wstring const &bundleId) noexcept {
+  auto bundleRoot = std::filesystem::path(appDirectory) / L"Bundle";
+  if (!bundleId.empty() && bundleId != L"opapp.companion.main") {
+    bundleRoot /= L"bundles";
+    bundleRoot /= bundleId;
+  }
+
+  return bundleRoot.wstring();
+}
+
 void LogRedBoxError(std::string const &phase, winrt::Microsoft::ReactNative::IRedBoxErrorInfo const &info) noexcept {
   AppendLog(phase + ".Message=" + ToUtf8(info.Message()));
   AppendLog(phase + ".OriginalMessage=" + ToUtf8(info.OriginalMessage()));
@@ -1626,6 +1735,7 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     auto startupSecondarySurface = GetSecondaryStartupSurface();
     auto restoredSecondarySurfaces = LoadRestorableSecondarySurfaces(startupSecondarySurface);
     auto startupInitialOpenSurface = GetInitialAutoOpenSurface();
+    auto otaBundleTarget = ResolveOtaBundleTarget(startupInitialOpenSurface);
 
     // Capture the app directory for use in the InstanceLoaded heartbeat callback.
     std::wstring const appDir(appDirectory);
@@ -1732,8 +1842,12 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
       std::optional<std::wstring> hostBundleDir;
       std::optional<std::wstring> currentBundleVersion;
 #if BUNDLE
-      hostBundleDir = std::wstring(appDirectory).append(L"\\Bundle");
+      hostBundleDir = ResolveHostedBundleDirectory(std::wstring(appDirectory), otaBundleTarget.BundleId);
       currentBundleVersion = ReadBundleManifestVersion(*hostBundleDir);
+      AppendLog(
+          "OTA.BundleTarget bundleId=" + ToUtf8(otaBundleTarget.BundleId) +
+          " source=" + ToUtf8(otaBundleTarget.Source) +
+          " hostBundleDir=" + ToUtf8(*hostBundleDir));
 #endif
       SpawnOtaUpdateProcess(
           std::wstring(appDirectory),

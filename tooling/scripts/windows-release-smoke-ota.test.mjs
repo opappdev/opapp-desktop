@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import {createPrivateSmokeScenarios} from './.private-companion/windows-private-scenarios.mjs';
 import {
   resolveExpectedOtaLatestVersion,
   validateOtaLastRunRecord,
@@ -34,6 +35,27 @@ function createFailedLastRun(overrides = {}) {
     stagedAt: undefined,
     ...overrides,
   });
+}
+
+function createPrivateStartupTargetScenario() {
+  const privateScenarios = createPrivateSmokeScenarios({
+    assertPersistedSessionContains() {},
+    assertPersistedSessionHasSurfaceId() {},
+    assertPersistedSessionLacksSurfaceId() {},
+    assertRectMatchesPolicy: async () => {},
+    buildPersistedSessionFile: () => '',
+    commonSuccessMarkers: [],
+    companionStartupTargetPath: 'C:\\temp\\companion-startup-target.json',
+    defaultPreferences: {},
+    fileExists: async () => false,
+    normalizeLogContents: value => value.replace(/\r/g, ''),
+    preferencesPath: 'C:\\temp\\preferences.ini',
+    readFile: async () => '',
+    sessionsPath: 'C:\\temp\\sessions.ini',
+    writeFile: async () => {},
+  });
+
+  return privateScenarios['startup-target-private-bundle'];
 }
 
 test('validateOtaLastRunRecord accepts updated runs with a staged version', () => {
@@ -477,4 +499,32 @@ test('validateOtaLastRunRecord rejects successful runs with missing resolved OTA
       `missing ${field} should fail validation`,
     );
   }
+});
+
+test('private startup target smoke rejects OTA runs that still stage the main bundle', async () => {
+  const scenario = createPrivateStartupTargetScenario();
+  const logContents = [
+    '[2026-03-29 16:15:29.795] NativeLogger[1] [frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
+    '[2026-03-29 16:15:29.798] BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main root=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace file=index.private.windows',
+    '[2026-03-29 16:15:29.656] OTA.SpawnUpdateProcess remoteUrl=https://r2.opapp.dev hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle currentVersion=0.1.2 channel=nightly force=true',
+    '[2026-03-29 16:15:30.220] OTA.Native.DownloadManifest.OK url=https://r2.opapp.dev/opapp.companion.main/0.1.2/windows/bundle-manifest.json target=D:\\code\\opappdev\\opapp-desktop\\.ota-cache\\opapp.companion.main\\0.1.2\\windows\\bundle-manifest.json',
+  ].join('\n');
+
+  await assert.rejects(
+    scenario.verifyLog(logContents),
+    /did not target OTA staging at the private bundle root/,
+  );
+});
+
+test('private startup target smoke accepts OTA runs that stage the private bundle', async () => {
+  const scenario = createPrivateStartupTargetScenario();
+  const logContents = [
+    '[2026-03-29 16:15:29.795] NativeLogger[1] [frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
+    '[2026-03-29 16:15:29.798] BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main root=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace file=index.private.windows',
+    '[2026-03-29 16:15:29.656] OTA.SpawnUpdateProcess remoteUrl=https://r2.opapp.dev hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace currentVersion=0.1.2 channel=nightly force=true',
+    '[2026-03-29 16:15:30.220] OTA.Native.DownloadManifest.OK url=https://r2.opapp.dev/opapp.hbr.workspace/0.1.2/windows/bundle-manifest.json target=D:\\code\\opappdev\\opapp-desktop\\.ota-cache\\opapp.hbr.workspace\\0.1.2\\windows\\bundle-manifest.json',
+    '[2026-03-29 16:15:30.520] OTA.Native.Updated bundleId=opapp.hbr.workspace version=0.1.2',
+  ].join('\n');
+
+  await assert.doesNotReject(scenario.verifyLog(logContents));
 });
