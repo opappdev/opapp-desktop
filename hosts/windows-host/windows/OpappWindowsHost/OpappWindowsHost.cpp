@@ -1005,7 +1005,8 @@ void WriteOtaLastRun(
     std::optional<std::wstring> const &stagedAt,
     std::optional<std::wstring> const &deviceId = std::nullopt,
     std::optional<bool> inRollout = std::nullopt,
-    std::optional<int32_t> rolloutPercent = std::nullopt) {
+    std::optional<int32_t> rolloutPercent = std::nullopt,
+    std::optional<bool> hasUpdate = std::nullopt) {
   winrt::Windows::Data::Json::JsonObject lastRunObject;
   InsertStringField(lastRunObject, L"mode", L"update");
   InsertStringField(lastRunObject, L"remoteBase", remoteUrl);
@@ -1018,6 +1019,11 @@ void WriteOtaLastRun(
   InsertOptionalStringField(lastRunObject, L"previousVersion", previousVersion);
   InsertOptionalStringField(lastRunObject, L"stagedAt", stagedAt);
   InsertOptionalStringField(lastRunObject, L"deviceId", deviceId);
+  if (hasUpdate.has_value()) {
+    lastRunObject.Insert(L"hasUpdate", winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(*hasUpdate));
+  } else {
+    lastRunObject.Insert(L"hasUpdate", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+  }
   if (inRollout.has_value()) {
     lastRunObject.Insert(L"inRollout", winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(*inRollout));
   } else {
@@ -1289,7 +1295,8 @@ void RunNativeOtaUpdate(
           std::nullopt,
           resolvedDeviceId,
           inRollout,
-          rolloutPercent);
+          rolloutPercent,
+          false);
       return;
     }
 
@@ -1502,7 +1509,8 @@ void RunNativeOtaUpdate(
         nowIso,
         resolvedDeviceId,
         inRollout,
-        rolloutPercent);
+        rolloutPercent,
+        true);
     AppendLog(
         "OTA.Native.Updated bundleId=" + ToUtf8(*resolvedBundleId) +
         " version=" + ToUtf8(latestVersion));

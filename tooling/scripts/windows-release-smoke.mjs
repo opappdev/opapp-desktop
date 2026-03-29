@@ -2160,9 +2160,34 @@ async function waitForOtaLastRun({timeoutMs, timeoutFlag}) {
 }
 
 export function validateOtaLastRunRecord({otaLastRun, otaRemoteBase, loggedCurrentVersion}) {
+  if (otaLastRun.mode !== 'update') {
+    throw new Error(
+      `Windows release smoke failed: ota last-run mode was '${otaLastRun.mode ?? 'unknown'}', expected 'update'.`,
+    );
+  }
   if (otaLastRun.remoteBase !== otaRemoteBase) {
     throw new Error(
       `Windows release smoke failed: ota last-run remoteBase was '${otaLastRun.remoteBase ?? 'unknown'}', expected '${otaRemoteBase}'.`,
+    );
+  }
+  if (typeof otaLastRun.bundleId !== 'string' || !otaLastRun.bundleId) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing the resolved bundleId.',
+    );
+  }
+  if (typeof otaLastRun.channel !== 'string' || !otaLastRun.channel) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing the resolved channel.',
+    );
+  }
+  if (typeof otaLastRun.latestVersion !== 'string' || !otaLastRun.latestVersion) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing the resolved latestVersion.',
+    );
+  }
+  if (typeof otaLastRun.hasUpdate !== 'boolean') {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing boolean hasUpdate.',
     );
   }
   if (typeof otaLastRun.deviceId !== 'string' || !otaLastRun.deviceId) {
@@ -2199,9 +2224,24 @@ export function validateOtaLastRunRecord({otaLastRun, otaRemoteBase, loggedCurre
     );
   }
   if (otaLastRun.status === 'up-to-date') {
+    if (otaLastRun.hasUpdate) {
+      throw new Error(
+        'Windows release smoke failed: ota last-run reported hasUpdate=true even though no update was applied.',
+      );
+    }
     if (otaLastRun.version !== null && otaLastRun.version !== undefined) {
       throw new Error(
         `Windows release smoke failed: ota last-run reported version '${otaLastRun.version}' even though no update was applied.`,
+      );
+    }
+    if (otaLastRun.previousVersion !== null && otaLastRun.previousVersion !== undefined) {
+      throw new Error(
+        `Windows release smoke failed: ota last-run reported previousVersion '${otaLastRun.previousVersion}' even though no update was applied.`,
+      );
+    }
+    if (otaLastRun.stagedAt !== null && otaLastRun.stagedAt !== undefined) {
+      throw new Error(
+        `Windows release smoke failed: ota last-run reported stagedAt '${otaLastRun.stagedAt}' even though no update was applied.`,
       );
     }
     return {requiresOtaState: false, status: otaLastRun.status};
@@ -2209,6 +2249,16 @@ export function validateOtaLastRunRecord({otaLastRun, otaRemoteBase, loggedCurre
   if (typeof otaLastRun.version !== 'string' || !otaLastRun.version) {
     throw new Error(
       'Windows release smoke failed: ota last-run is missing the staged version for an updated run.',
+    );
+  }
+  if (!otaLastRun.hasUpdate) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run reported hasUpdate=false even though an update was applied.',
+    );
+  }
+  if (typeof otaLastRun.stagedAt !== 'string' || !otaLastRun.stagedAt) {
+    throw new Error(
+      'Windows release smoke failed: ota last-run is missing stagedAt for an updated run.',
     );
   }
   return {requiresOtaState: true, status: otaLastRun.status};

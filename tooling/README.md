@@ -52,7 +52,9 @@ Windows verification entrypoints:
 - `npm run test:windows:release-diagnostics`: single-process diagnostics assertions for environments where `node --test` runner spawning is restricted.
 - `npm run test:windows:release-smoke:ota`: direct-node assertions for OTA
   `last-run.json` contract checks inside `windows-release-smoke`, including the
-  guard that `up-to-date` runs must not report a staged `version`.
+  guards that successful runs must persist resolved `mode` / `bundleId` /
+  `channel` / `latestVersion` / `hasUpdate`, and that `up-to-date` runs must
+  not report staged metadata.
 - `npm run smoke:windows:validate`: validate direct release-smoke packaged args only.
 - `npm run smoke:windows:portable:validate`: validate direct release-smoke portable args only.
 - `npm run smoke:windows:preflight`: packaged release preflight probe only (no bundle/build/launch).

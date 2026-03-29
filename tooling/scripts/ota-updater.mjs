@@ -440,6 +440,7 @@ async function _writeOtaLastRun(cacheDir, result) {
  */
 export function buildOtaUpdateLastRunRecord(checkResult, applyResult) {
   const record = {
+    hasUpdate: true,
     status: 'updated',
     bundleId: applyResult.bundleId ?? checkResult.bundleId,
     channel: checkResult.channel,

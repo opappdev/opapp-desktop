@@ -26,6 +26,7 @@ test('buildOtaUpdateLastRunRecord preserves rollout and channel context', () => 
   );
 
   assert.deepEqual(record, {
+    hasUpdate: true,
     status: 'updated',
     bundleId: 'opapp.companion.main',
     channel: 'nightly',
@@ -65,6 +66,7 @@ test('buildOtaUpdateLastRunRecord omits optional rollout metadata when absent', 
   assert.equal(record.bundleId, 'opapp.companion.main');
   assert.equal(record.previousVersion, null);
   assert.equal(record.inRollout, false);
+  assert.equal(record.hasUpdate, true);
 });
 
 test('buildOtaUpToDateLastRunRecord keeps check metadata without inventing a staged version', () => {
