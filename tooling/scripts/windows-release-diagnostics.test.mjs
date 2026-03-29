@@ -565,6 +565,42 @@ test('collectPortableMsbuildFallbackProfiles allows disabling no-restore retry v
   );
 });
 
+test('collectReleaseBuildProbe skips ACL detail probes when local sdk path is readable', () => {
+  const probe = collectReleaseBuildProbe({
+    env: {
+      SystemRoot: 'C:\\Windows',
+      ProgramFiles: 'C:\\Program Files',
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+      LOCALAPPDATA: 'C:\\Users\\ArrayZoneYour\\AppData\\Local',
+    },
+    spawn: command => {
+      const normalized = String(command).toLowerCase();
+      if (normalized.endsWith('cmd.exe')) {
+        return {status: 0, error: null, stdout: '', stderr: ''};
+      }
+      if (normalized.endsWith('vswhere.exe')) {
+        return {status: 0, error: null, stdout: '[]', stderr: ''};
+      }
+      throw new Error('ACL detail probes should be skipped when the SDK directory is readable.');
+    },
+    exists: targetPath => {
+      const normalized = String(targetPath).toLowerCase();
+      return (
+        normalized.endsWith('cmd.exe') ||
+        normalized.endsWith('vswhere.exe') ||
+        normalized.includes('microsoft sdks')
+      );
+    },
+    readDir: () => [],
+  });
+
+  assert.equal(probe.localMicrosoftSdkProbe.path, 'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs');
+  assert.equal(probe.localMicrosoftSdkProbe.exists, true);
+  assert.equal(probe.localMicrosoftSdkProbe.accessible, true);
+  assert.equal(probe.localMicrosoftSdkAclProbe, null);
+  assert.equal(probe.localMicrosoftSdkIcaclsProbe, null);
+});
+
 test('collectReleaseBuildProbe marks local sdk path inaccessible when directory enumeration fails', () => {
   const probe = collectReleaseBuildProbe({
     env: {
@@ -576,6 +612,30 @@ test('collectReleaseBuildProbe marks local sdk path inaccessible when directory 
     spawn: (command, _args, options) => {
       const normalized = String(command).toLowerCase();
       if (normalized.endsWith('cmd.exe')) {
+        const commandText = String(_args?.[_args.length - 1] ?? '');
+        if (Array.isArray(options?.stdio) && options.stdio[1] === 'pipe' && commandText.includes('icacls "')) {
+          return {
+            status: null,
+            error: {code: 'EPERM', message: 'capture blocked'},
+            stdout: '',
+            stderr: '',
+          };
+        }
+        const redirectedOutputMatch = commandText.match(/>\s*"([^"]+)"\s*2>&1$/);
+        if (redirectedOutputMatch?.[1] && commandText.includes('icacls "')) {
+          writeFileSync(
+            redirectedOutputMatch[1],
+            'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs: Access is denied.\n' +
+              'Successfully processed 0 files; Failed processing 1 files\n',
+            'utf8',
+          );
+          return {
+            status: 1,
+            error: null,
+            stdout: '',
+            stderr: '',
+          };
+        }
         return {status: 0, error: null, stdout: '', stderr: ''};
       }
       if (normalized.endsWith('vswhere.exe')) {
@@ -597,20 +657,6 @@ test('collectReleaseBuildProbe marks local sdk path inaccessible when directory 
             }),
             'utf8',
           );
-        }
-        if (outputPathMatch?.[1] && commandText.includes('icacls.exe')) {
-          writeFileSync(
-            outputPathMatch[1],
-            'C:\\Users\\ArrayZoneYour\\AppData\\Local\\Microsoft SDKs: Access is denied.\n' +
-              'Successfully processed 0 files; Failed processing 1 files\n',
-            'utf8',
-          );
-          return {
-            status: 1,
-            error: null,
-            stdout: '',
-            stderr: '',
-          };
         }
         return {
           status: 0,

@@ -417,29 +417,20 @@ function probePathIcacls(pathValue, {
     };
   }
 
-  const escapedPath = targetPath.replace(/'/g, "''");
   const tempDir = mkdtempSync(path.join(tmpdir(), 'opapp-windows-icacls-'));
   const outputPath = path.join(tempDir, 'icacls.txt');
-  const escapedOutputPath = outputPath.replace(/'/g, "''");
+  const escapedOutputPath = outputPath.replace(/"/g, '""');
 
   try {
-    const icaclsProbe = spawn(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        `$ErrorActionPreference = 'Stop'; ` +
-          `& icacls.exe '${escapedPath}' 2>&1 | Set-Content -LiteralPath '${escapedOutputPath}' -Encoding utf8; ` +
-          `exit $LASTEXITCODE`,
-      ],
-      {
-        stdio: 'ignore',
-        windowsHide: false,
-      },
-    );
+    const icaclsProbe = spawn(cmdPath, [
+      '/d',
+      '/s',
+      '/c',
+      `icacls "${escapedCmdPath}" > "${escapedOutputPath}" 2>&1`,
+    ], {
+      stdio: 'ignore',
+      windowsHide: false,
+    });
     const detail = existsSync(outputPath)
       ? summarizeIcaclsOutput(readFileSync(outputPath, 'utf8'), '')
       : null;
@@ -562,10 +553,12 @@ export function collectReleaseBuildProbe({
       readDir,
     },
   );
-  const localMicrosoftSdkAclProbe = localMicrosoftSdkProbe?.exists
+  const localMicrosoftSdkAclProbe =
+    localMicrosoftSdkProbe?.exists && !localMicrosoftSdkProbe.accessible
     ? probePathAcl(localMicrosoftSdkProbe.path, {spawn})
     : null;
-  const localMicrosoftSdkIcaclsProbe = localMicrosoftSdkProbe?.exists
+  const localMicrosoftSdkIcaclsProbe =
+    localMicrosoftSdkProbe?.exists && !localMicrosoftSdkProbe.accessible
     ? probePathIcacls(localMicrosoftSdkProbe.path, {spawn, cmdPath})
     : null;
 
