@@ -1,13 +1,36 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {createPrivateSmokeScenarios} from './.private-companion/windows-private-scenarios.mjs';
 import {
   assertLauncherRemoteCatalogDiagnostics,
   extractFrontendDiagnosticEvents,
   resolveExpectedOtaLatestVersion,
   validateOtaLastRunRecord,
 } from './windows-release-smoke.mjs';
+
+async function loadOptionalCreatePrivateSmokeScenarios() {
+  try {
+    const privateScenarioModule = await import(
+      './.private-companion/windows-private-scenarios.mjs'
+    );
+    return privateScenarioModule.createPrivateSmokeScenarios ?? null;
+  } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'ERR_MODULE_NOT_FOUND' &&
+      String(error.message ?? '').includes('/.private-companion/windows-private-scenarios.mjs')
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+const createPrivateSmokeScenarios = await loadOptionalCreatePrivateSmokeScenarios();
+const hasPrivateSmokeScenarios = typeof createPrivateSmokeScenarios === 'function';
 
 function createBaseLastRun(overrides = {}) {
   return {
@@ -584,7 +607,10 @@ test('validateOtaLastRunRecord rejects successful runs with missing resolved OTA
   }
 });
 
-test('private startup target smoke rejects OTA runs that still stage the main bundle', async () => {
+test(
+  'private startup target smoke rejects OTA runs that still stage the main bundle',
+  {skip: !hasPrivateSmokeScenarios},
+  async () => {
   const scenario = createPrivateStartupTargetScenario();
   const logContents = [
     '[2026-03-29 16:15:29.795] NativeLogger[1] [frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
@@ -599,7 +625,10 @@ test('private startup target smoke rejects OTA runs that still stage the main bu
   );
 });
 
-test('private startup target smoke accepts OTA runs that stage the private bundle', async () => {
+test(
+  'private startup target smoke accepts OTA runs that stage the private bundle',
+  {skip: !hasPrivateSmokeScenarios},
+  async () => {
   const scenario = createPrivateStartupTargetScenario();
   const logContents = [
     '[2026-03-29 16:15:29.795] NativeLogger[1] [frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
