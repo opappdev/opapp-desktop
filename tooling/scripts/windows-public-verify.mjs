@@ -70,7 +70,7 @@ async function assertFrontendPublicVerifyContract() {
     for (const marker of markers) {
       if (!content.includes(marker)) {
         throw new Error(
-          `Windows public verify requires an opapp-frontend checkout with the launcher cache bridge contract. Missing marker '${marker}' in ${filePath}. Update the checkout or point OPAPP_FRONTEND_REF at a compatible frontend ref.`,
+          `Windows public verify requires an opapp-frontend checkout with the launcher cache bridge contract. Missing marker '${marker}' in ${filePath}. Update the checkout or pin tooling/config/opapp-frontend-ref.txt (or OPAPP_FRONTEND_REF) to a compatible frontend ref.`,
         );
       }
     }

@@ -1,0 +1,127 @@
+name: Windows Nightly Release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 17 * * *'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-nightly-release
+  cancel-in-progress: false
+
+jobs:
+  publish-windows-nightly:
+    name: Publish Windows Nightly
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout opapp-desktop
+        uses: actions/checkout@v6
+        with:
+          path: opapp-desktop
+
+      - name: Resolve opapp-frontend ref
+        id: frontend-ref
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          OPAPP_FRONTEND_REF: ${{ vars.OPAPP_FRONTEND_REF }}
+        run: |
+          $ref = node ./tooling/scripts/resolve-public-frontend-ref.mjs
+          "ref=$ref" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout opapp-frontend
+        uses: actions/checkout@v6
+        with:
+          repository: opappdev/opapp-frontend
+          ref: ${{ steps.frontend-ref.outputs.ref }}
+          path: opapp-frontend
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          cache-dependency-path: |
+            opapp-desktop/pnpm-lock.yaml
+            opapp-frontend/pnpm-lock.yaml
+
+      - name: Install desktop dependencies
+        working-directory: opapp-desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        working-directory: opapp-frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Windows release diagnostics
+        working-directory: opapp-desktop
+        run: pnpm test:windows:release-diagnostics
+
+      - name: Windows packaged and portable public verify
+        working-directory: opapp-desktop
+        run: pnpm verify:windows:public:ci
+
+      - name: Prepare Windows nightly assets
+        id: assets
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          DESKTOP_SHA: ${{ github.sha }}
+          FRONTEND_REF: ${{ steps.frontend-ref.outputs.ref }}
+        run: |
+          $outDir = Join-Path $env:RUNNER_TEMP 'opapp-windows-nightly'
+          node ./tooling/scripts/windows-nightly-release-assets.mjs --out-dir="$outDir" --desktop-sha="$env:DESKTOP_SHA" --frontend-ref="$env:FRONTEND_REF"
+          "out_dir=$outDir" >> $env:GITHUB_OUTPUT
+
+      - name: Compute nightly release metadata
+        id: release
+        shell: pwsh
+        run: |
+          $nightlyNow = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([datetimeoffset]::UtcNow, 'China Standard Time')
+          $stamp = $nightlyNow.ToString('yyyyMMdd')
+          $shortSha = '${{ github.sha }}'.Substring(0, 7)
+          $tag = "windows-nightly-$stamp-run${{ github.run_number }}.${{ github.run_attempt }}"
+          $title = "OPApp Windows Nightly $stamp ($shortSha)"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "title=$title" >> $env:GITHUB_OUTPUT
+
+      - name: Upload staged nightly assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-nightly-release-assets
+          path: |
+            ${{ steps.assets.outputs.out_dir }}\*.zip
+            ${{ steps.assets.outputs.out_dir }}\*.txt
+            ${{ steps.assets.outputs.out_dir }}\*.json
+            ${{ steps.assets.outputs.out_dir }}\*.md
+
+      - name: Publish GitHub prerelease
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.release.outputs.title }}
+          RELEASE_NOTES: ${{ steps.assets.outputs.out_dir }}\opapp-windows-nightly-release-notes.md
+          PORTABLE_ZIP: ${{ steps.assets.outputs.out_dir }}\opapp-windows-nightly-x64-portable.zip
+          MSIX_BUNDLE_ZIP: ${{ steps.assets.outputs.out_dir }}\opapp-windows-nightly-x64-msix-bundle.zip
+          CHECKSUMS_FILE: ${{ steps.assets.outputs.out_dir }}\opapp-windows-nightly-SHA256SUMS.txt
+        run: |
+          gh release create $env:RELEASE_TAG $env:PORTABLE_ZIP $env:MSIX_BUNDLE_ZIP $env:CHECKSUMS_FILE --repo '${{ github.repository }}' --target '${{ github.sha }}' --title $env:RELEASE_TITLE --notes-file $env:RELEASE_NOTES --prerelease
+
+      - name: Upload Windows host log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-nightly-host-log
+          path: ${{ runner.temp }}/opapp-windows-host.log

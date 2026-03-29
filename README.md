@@ -72,6 +72,28 @@ surface model behavior through the direct-run release directory artifact.
 All smoke entrypoints clean up the launched Windows host process before
 returning.
 
+## Windows Nightly Release
+
+The GitHub Actions workflow at `.github/workflows/windows-nightly.yml` publishes
+a prerelease Windows nightly from a pinned public `opapp-frontend` ref plus the
+current `opapp-desktop` commit.
+
+Nightly assets are intentionally user-installable or user-runnable:
+
+- `opapp-windows-nightly-x64-portable.zip`: unzip and run
+  `OpappWindowsHost.exe` from the extracted folder.
+- `opapp-windows-nightly-x64-msix-bundle.zip`: unzip and run `Install.ps1` for
+  the packaged MSIX path with bundled dependencies.
+
+Official Windows release builds default their OTA remote base to
+`https://r2.opapp.dev`. Only local smoke or targeted rehearsal runs should
+override it via launch config or `OPAPP_OTA_REMOTE_URL`.
+
+The pinned frontend checkout lives in
+`tooling/config/opapp-frontend-ref.txt`. Override with
+`OPAPP_FRONTEND_REF` only when you intentionally want to test a different
+frontend commit.
+
 ## External Window Capture
 
 Use `npm run capture:windows:window -- ...` to capture an external top-level
@@ -146,7 +168,7 @@ Common examples:
 - Build the Windows bundle and prepare a publish dry-run using `.env.r2.local`:
   `npm run ota:build:publish:cloudflare -- --channel=stable --rollout-percent=100 --dry-run`
 - Publish an existing frontend dist directory with explicit overrides:
-  `npm run ota:publish:cloudflare -- --source-dir=..\\opapp-frontend\\.dist\\bundles\\companion-app\\windows --channel=beta --rollout-percent=10 --remote-base=https://pub-xxxx.r2.dev --cloudflare-bucket=cross-platform-ota`
+  `npm run ota:publish:cloudflare -- --source-dir=..\\opapp-frontend\\.dist\\bundles\\companion-app\\windows --channel=beta --rollout-percent=10 --remote-base=https://r2.opapp.dev --cloudflare-bucket=cross-platform-ota`
 
 ## Contributing
 

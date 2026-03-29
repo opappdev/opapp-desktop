@@ -4,6 +4,8 @@
 namespace OpappWindowsHost {
 namespace {
 
+// Official Windows release OTA remote base. Override only for local smoke or
+// targeted rehearsal environments via launch config or OPAPP_OTA_REMOTE_URL.
 constexpr wchar_t kDefaultOtaRemoteUrl[] = L"https://r2.opapp.dev";
 
 std::optional<std::wstring> GetEnvironmentString(std::wstring const &name) noexcept {

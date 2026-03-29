@@ -42,11 +42,21 @@ jobs:
         with:
           path: opapp-desktop
 
+      - name: Resolve opapp-frontend ref
+        id: frontend-ref
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          OPAPP_FRONTEND_REF: ${{ vars.OPAPP_FRONTEND_REF }}
+        run: |
+          $ref = node ./tooling/scripts/resolve-public-frontend-ref.mjs
+          "ref=$ref" >> $env:GITHUB_OUTPUT
+
       - name: Checkout opapp-frontend
         uses: actions/checkout@v6
         with:
           repository: opappdev/opapp-frontend
-          ref: ${{ vars.OPAPP_FRONTEND_REF || 'main' }}
+          ref: ${{ steps.frontend-ref.outputs.ref }}
           path: opapp-frontend
 
       - uses: pnpm/action-setup@v5
