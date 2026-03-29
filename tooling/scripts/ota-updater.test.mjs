@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {buildOtaUpToDateLastRunRecord, buildOtaUpdateLastRunRecord} from './ota-updater.mjs';
+import {
+  buildOtaFailedLastRunRecord,
+  buildOtaUpToDateLastRunRecord,
+  buildOtaUpdateLastRunRecord,
+} from './ota-updater.mjs';
 
 test('buildOtaUpdateLastRunRecord preserves rollout and channel context', () => {
   const record = buildOtaUpdateLastRunRecord(
@@ -101,4 +105,58 @@ test('buildOtaUpToDateLastRunRecord keeps check metadata without inventing a sta
     },
   });
   assert.equal(record.version, undefined);
+});
+
+test('buildOtaFailedLastRunRecord preserves resolved update metadata for diagnostics', () => {
+  const record = buildOtaFailedLastRunRecord({
+    hasUpdate: true,
+    bundleId: 'opapp.companion.main',
+    channel: 'nightly',
+    currentVersion: '0.9.0',
+    latestVersion: '1.0.0',
+    deviceId: 'device-321',
+    inRollout: true,
+    rolloutPercent: 25,
+    channels: {
+      stable: '0.9.0',
+      nightly: '1.0.0',
+    },
+  });
+
+  assert.deepEqual(record, {
+    status: 'failed',
+    hasUpdate: true,
+    bundleId: 'opapp.companion.main',
+    channel: 'nightly',
+    currentVersion: '0.9.0',
+    latestVersion: '1.0.0',
+    deviceId: 'device-321',
+    inRollout: true,
+    rolloutPercent: 25,
+    channels: {
+      stable: '0.9.0',
+      nightly: '1.0.0',
+    },
+  });
+});
+
+test('buildOtaFailedLastRunRecord omits undefined staging-only fields', () => {
+  const record = buildOtaFailedLastRunRecord({
+    bundleId: 'opapp.companion.main',
+    currentVersion: null,
+    latestVersion: '1.0.0',
+    hasUpdate: false,
+    version: '1.0.0',
+    stagedAt: '2026-03-29T02:00:00.000Z',
+  });
+
+  assert.deepEqual(record, {
+    status: 'failed',
+    bundleId: 'opapp.companion.main',
+    currentVersion: null,
+    latestVersion: '1.0.0',
+    hasUpdate: false,
+  });
+  assert.equal(record.version, undefined);
+  assert.equal(record.stagedAt, undefined);
 });

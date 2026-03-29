@@ -471,6 +471,38 @@ export function buildOtaUpToDateLastRunRecord(checkResult) {
   };
 }
 
+export function buildOtaFailedLastRunRecord(context = {}) {
+  const record = {status: 'failed'};
+  for (const key of [
+    'hasUpdate',
+    'bundleId',
+    'channel',
+    'currentVersion',
+    'latestVersion',
+    'deviceId',
+    'inRollout',
+    'rolloutPercent',
+    'channels',
+  ]) {
+    if (context[key] !== undefined) {
+      record[key] = context[key];
+    }
+  }
+  return record;
+}
+
+async function _writeFailedOtaLastRun({cacheDir, mode, remoteBase, context}) {
+  try {
+    await _writeOtaLastRun(cacheDir, {
+      mode,
+      remoteBase,
+      ...buildOtaFailedLastRunRecord(context),
+    });
+  } catch (writeErr) {
+    console.error(`[ota-updater] failed to persist last-run.json: ${writeErr.message}`);
+  }
+}
+
 async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
   const base = remoteBase.replace(/\/$/, '');
   const indexUrl = `${base}/index.json`;
@@ -672,20 +704,86 @@ async function main() {
     throw new Error(`OtaUpdater: --remote=<url> is required for --mode=${modeArg}.`);
   }
 
-  if (modeArg === 'rollback') {
-    const result = await rollbackOtaUpdate({
-      cacheDir: cacheDirArg,
-      hostBundleDir: hostBundleDirArg !== DEFAULT_HOST_BUNDLE_DIR ? hostBundleDirArg : undefined,
-      platform: platformArg !== DEFAULT_PLATFORM ? platformArg : undefined,
-      bundleId: bundleIdArg,
-    });
-    await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: null, ...result});
-    console.log(JSON.stringify(result));
-    return;
-  }
+  const lastRunRemoteBase = modeArg === 'apply' || modeArg === 'rollback' ? null : remoteArg;
+  let failedLastRunContext = {};
 
-  if (modeArg === 'check') {
-    const result = await checkForUpdate({
+  try {
+    if (modeArg === 'rollback') {
+      failedLastRunContext = {bundleId: bundleIdArg};
+      const result = await rollbackOtaUpdate({
+        cacheDir: cacheDirArg,
+        hostBundleDir: hostBundleDirArg !== DEFAULT_HOST_BUNDLE_DIR ? hostBundleDirArg : undefined,
+        platform: platformArg !== DEFAULT_PLATFORM ? platformArg : undefined,
+        bundleId: bundleIdArg,
+      });
+      await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: null, ...result});
+      console.log(JSON.stringify(result));
+      return;
+    }
+
+    if (modeArg === 'check') {
+      failedLastRunContext = {
+        bundleId: bundleIdArg,
+        channel: channelArg,
+        currentVersion: currentVersionArg,
+        deviceId: deviceIdArg,
+      };
+      const result = await checkForUpdate({
+        remoteBase: remoteArg,
+        platform: platformArg,
+        cacheDir: cacheDirArg,
+        bundleId: bundleIdArg,
+        currentVersion: currentVersionArg,
+        deviceId: deviceIdArg,
+        channel: channelArg,
+      });
+      await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: remoteArg, ...result});
+      console.log(JSON.stringify(result));
+      return;
+    }
+
+    if (modeArg === 'download') {
+      failedLastRunContext = {
+        bundleId: bundleIdArg,
+        channel: channelArg,
+        latestVersion: versionArg,
+      };
+      const result = await downloadOtaUpdate({
+        remoteBase: remoteArg,
+        platform: platformArg,
+        cacheDir: cacheDirArg,
+        bundleId: bundleIdArg,
+        version: versionArg,
+        force: forceFlag,
+        channel: channelArg,
+      });
+      await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: remoteArg, ...result});
+      console.log(JSON.stringify(result));
+      return;
+    }
+
+    if (modeArg === 'apply') {
+      failedLastRunContext = {bundleId: bundleIdArg};
+      const result = await applyOtaUpdate({
+        cacheDir: cacheDirArg,
+        hostBundleDir: hostBundleDirArg,
+        platform: platformArg,
+        bundleId: bundleIdArg,
+        version: versionArg,
+      });
+      await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: null, ...result});
+      console.log(JSON.stringify(result));
+      return;
+    }
+
+    // mode === 'update': atomically check + download + apply
+    failedLastRunContext = {
+      bundleId: bundleIdArg,
+      channel: channelArg,
+      currentVersion: currentVersionArg,
+      deviceId: deviceIdArg,
+    };
+    const checkResult = await checkForUpdate({
       remoteBase: remoteArg,
       platform: platformArg,
       cacheDir: cacheDirArg,
@@ -694,90 +792,61 @@ async function main() {
       deviceId: deviceIdArg,
       channel: channelArg,
     });
-    await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: remoteArg, ...result});
-    console.log(JSON.stringify(result));
-    return;
-  }
+    failedLastRunContext = checkResult;
 
-  if (modeArg === 'download') {
-    const result = await downloadOtaUpdate({
+    if (!checkResult.hasUpdate) {
+      const lastRunRecord = buildOtaUpToDateLastRunRecord(checkResult);
+      await _writeOtaLastRun(cacheDirArg, {
+        mode: modeArg,
+        remoteBase: remoteArg,
+        ...lastRunRecord,
+      });
+      console.log(JSON.stringify(lastRunRecord));
+      return;
+    }
+
+    const downloadResult = await downloadOtaUpdate({
       remoteBase: remoteArg,
       platform: platformArg,
       cacheDir: cacheDirArg,
-      bundleId: bundleIdArg,
-      version: versionArg,
+      bundleId: checkResult.bundleId,
+      version: checkResult.latestVersion,
       force: forceFlag,
-      channel: channelArg,
     });
-    await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: remoteArg, ...result});
-    console.log(JSON.stringify(result));
-    return;
-  }
+    failedLastRunContext = {
+      ...checkResult,
+      bundleId: downloadResult.bundleId ?? checkResult.bundleId,
+    };
 
-  if (modeArg === 'apply') {
-    const result = await applyOtaUpdate({
+    const applyResult = await applyOtaUpdate({
       cacheDir: cacheDirArg,
       hostBundleDir: hostBundleDirArg,
       platform: platformArg,
-      bundleId: bundleIdArg,
-      version: versionArg,
+      bundleId: downloadResult.bundleId,
+      version: downloadResult.version,
     });
-    await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: null, ...result});
-    console.log(JSON.stringify(result));
-    return;
-  }
 
-  // mode === 'update': atomically check + download + apply
-  const checkResult = await checkForUpdate({
-    remoteBase: remoteArg,
-    platform: platformArg,
-    cacheDir: cacheDirArg,
-    bundleId: bundleIdArg,
-    currentVersion: currentVersionArg,
-    deviceId: deviceIdArg,
-    channel: channelArg,
-  });
-
-  if (!checkResult.hasUpdate) {
-    const lastRunRecord = buildOtaUpToDateLastRunRecord(checkResult);
     await _writeOtaLastRun(cacheDirArg, {
       mode: modeArg,
       remoteBase: remoteArg,
-      ...lastRunRecord,
+      ...buildOtaUpdateLastRunRecord(checkResult, applyResult),
     });
-    console.log(JSON.stringify(lastRunRecord));
-    return;
+    console.log(
+      JSON.stringify({
+        status: 'updated',
+        previousVersion: checkResult.currentVersion,
+        ...applyResult,
+      }),
+    );
+  } catch (err) {
+    await _writeFailedOtaLastRun({
+      cacheDir: cacheDirArg,
+      mode: modeArg,
+      remoteBase: lastRunRemoteBase,
+      context: failedLastRunContext,
+    });
+    throw err;
   }
-
-  const downloadResult = await downloadOtaUpdate({
-    remoteBase: remoteArg,
-    platform: platformArg,
-    cacheDir: cacheDirArg,
-    bundleId: checkResult.bundleId,
-    version: checkResult.latestVersion,
-    force: forceFlag,
-  });
-
-  const applyResult = await applyOtaUpdate({
-    cacheDir: cacheDirArg,
-    hostBundleDir: hostBundleDirArg,
-    platform: platformArg,
-    bundleId: downloadResult.bundleId,
-    version: downloadResult.version,
-  });
-
-  await _writeOtaLastRun(cacheDirArg, {
-    mode: modeArg,
-    remoteBase: remoteArg,
-    ...buildOtaUpdateLastRunRecord(checkResult, applyResult),
-  });
-  console.log(
-    JSON.stringify({
-      status: 'updated',
-      previousVersion: checkResult.currentVersion,
-      ...applyResult,
-    }),
-  );
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

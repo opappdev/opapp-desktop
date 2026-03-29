@@ -1056,10 +1056,31 @@ void RunNativeOtaUpdate(
   auto normalizedRemoteUrl = TrimTrailingSlashes(remoteUrl);
   auto resolvedChannel = std::wstring(L"stable");
   auto cacheRoot = ResolveOtaCacheRoot(appDirectory);
+  std::optional<std::wstring> resolvedBundleIdForLastRun;
   std::optional<std::wstring> resolvedDeviceIdForLastRun;
+  std::optional<std::wstring> latestVersionForLastRun;
   std::optional<bool> inRolloutForLastRun;
+  std::optional<bool> hasUpdateForLastRun;
   std::optional<int32_t> rolloutPercentForLastRun;
   std::optional<std::wstring> channelsJsonForLastRun;
+  auto writeFailedLastRun = [&]() {
+    WriteOtaLastRun(
+        cacheRoot,
+        normalizedRemoteUrl,
+        L"failed",
+        resolvedBundleIdForLastRun,
+        resolvedChannel,
+        currentVersion,
+        latestVersionForLastRun,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        resolvedDeviceIdForLastRun,
+        inRolloutForLastRun,
+        rolloutPercentForLastRun,
+        hasUpdateForLastRun,
+        channelsJsonForLastRun);
+  };
 
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -1107,17 +1128,7 @@ void RunNativeOtaUpdate(
     auto bundlesObject = indexObject->GetNamedObject(L"bundles", nullptr);
     if (!bundlesObject) {
       AppendLog("OTA.Native.IndexMissingBundles");
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          std::nullopt,
-          resolvedChannel,
-          currentVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt);
+      writeFailedLastRun();
       return;
     }
 
@@ -1136,34 +1147,15 @@ void RunNativeOtaUpdate(
 
     if (!resolvedBundleId) {
       AppendLog("OTA.Native.BundleResolutionFailed localBundleId=" + (localBundleId ? ToUtf8(*localBundleId) : "null"));
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          std::nullopt,
-          resolvedChannel,
-          currentVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt);
+      writeFailedLastRun();
       return;
     }
+    resolvedBundleIdForLastRun = resolvedBundleId;
 
     auto bundleInfoObject = bundlesObject.GetNamedObject(winrt::hstring(*resolvedBundleId), nullptr);
     if (!bundleInfoObject) {
       AppendLog("OTA.Native.BundleInfoMissing bundleId=" + ToUtf8(*resolvedBundleId));
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt);
+      writeFailedLastRun();
       return;
     }
 
@@ -1209,19 +1201,10 @@ void RunNativeOtaUpdate(
 
     if (latestVersion.empty()) {
       AppendLog("OTA.Native.LatestVersionMissing bundleId=" + ToUtf8(*resolvedBundleId));
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt);
+      writeFailedLastRun();
       return;
     }
+    latestVersionForLastRun = latestVersion;
     AppendLog(
         "OTA.Native.LatestVersion source=" + latestVersionSource +
         " value=" + ToUtf8(latestVersion));
@@ -1229,39 +1212,20 @@ void RunNativeOtaUpdate(
     auto resolvedDeviceId = GetOrCreateOtaDeviceId(cacheRoot);
     if (!resolvedDeviceId) {
       AppendLog("OTA.Native.DeviceIdResolutionFailed");
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          latestVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt);
+      writeFailedLastRun();
       return;
     }
     AppendLog("OTA.Native.DeviceId value=" + ToUtf8(*resolvedDeviceId));
     resolvedDeviceIdForLastRun = resolvedDeviceId;
 
     auto rolloutPercent = ParseRolloutPercent(bundleInfoObject);
+    rolloutPercentForLastRun = rolloutPercent;
     auto inRollout = true;
     if (rolloutPercent && *rolloutPercent < 100) {
       auto rolloutBucket = ComputeRolloutBucket(*resolvedBundleId, *resolvedDeviceId);
       if (!rolloutBucket) {
         AppendLog("OTA.Native.RolloutBucketFailed");
-        WriteOtaLastRun(
-            cacheRoot,
-            normalizedRemoteUrl,
-            L"failed",
-            resolvedBundleId,
-            resolvedChannel,
-            currentVersion,
-            latestVersion,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt);
+        writeFailedLastRun();
         return;
       }
       inRollout = *rolloutBucket < *rolloutPercent;
@@ -1277,12 +1241,12 @@ void RunNativeOtaUpdate(
       AppendLog("OTA.Native.Rollout percent=100 inRollout=true");
     }
     inRolloutForLastRun = inRollout;
-    rolloutPercentForLastRun = rolloutPercent;
 
     auto shouldUpdate = inRollout && forceUpdate;
     if (!shouldUpdate && inRollout) {
       shouldUpdate = !currentVersion || latestVersion > *currentVersion;
     }
+    hasUpdateForLastRun = shouldUpdate;
 
     if (!shouldUpdate) {
       auto reason = inRollout ? "version" : "rollout";
@@ -1316,40 +1280,14 @@ void RunNativeOtaUpdate(
             artifactBaseUrl + L"/bundle-manifest.json",
             manifestPath,
             "OTA.Native.DownloadManifest")) {
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          latestVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          resolvedDeviceId,
-          inRollout,
-          rolloutPercent);
+      writeFailedLastRun();
       return;
     }
 
     auto manifestObject = ReadJsonFile(manifestPath);
     if (!manifestObject) {
       AppendLog("OTA.Native.ManifestParseFailed path=" + ToUtf8(manifestPath.wstring()));
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          latestVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          resolvedDeviceId,
-          inRollout,
-          rolloutPercent);
+      writeFailedLastRun();
       return;
     }
 
@@ -1357,20 +1295,7 @@ void RunNativeOtaUpdate(
         manifestObject->GetNamedString(L"entryFile", L"").c_str();
     if (entryFileName.empty()) {
       AppendLog("OTA.Native.ManifestMissingEntryFile");
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          latestVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          resolvedDeviceId,
-          inRollout,
-          rolloutPercent);
+      writeFailedLastRun();
       return;
     }
 
@@ -1380,38 +1305,12 @@ void RunNativeOtaUpdate(
             artifactBaseUrl + L"/" + entryFileName,
             entryFilePath,
             "OTA.Native.DownloadEntryFile")) {
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          latestVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          resolvedDeviceId,
-          inRollout,
-          rolloutPercent);
+      writeFailedLastRun();
       return;
     }
 
     if (!VerifyBundleChecksum(*manifestObject, entryFilePath)) {
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          latestVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          resolvedDeviceId,
-          inRollout,
-          rolloutPercent);
+      writeFailedLastRun();
       return;
     }
 
@@ -1430,20 +1329,7 @@ void RunNativeOtaUpdate(
           cacheRoot / *resolvedBundleId / L"previous" / L"windows";
       if (!ReplaceDirectoryWithCopy(std::filesystem::path(hostBundleDir), snapshotDir)) {
         AppendLog("OTA.Native.SnapshotFailed snapshotDir=" + ToUtf8(snapshotDir.wstring()));
-        WriteOtaLastRun(
-            cacheRoot,
-            normalizedRemoteUrl,
-            L"failed",
-            resolvedBundleId,
-            resolvedChannel,
-            currentVersion,
-            latestVersion,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            resolvedDeviceId,
-            inRollout,
-            rolloutPercent);
+        writeFailedLastRun();
         return;
       }
       previousSnapshotDir = snapshotDir;
@@ -1461,20 +1347,7 @@ void RunNativeOtaUpdate(
             std::wstring(L"sibling-staging"),
             *resolvedBundleId == L"opapp.companion.main")) {
       AppendLog("OTA.Native.ApplyFailed hostBundleDir=" + ToUtf8(hostBundleDir));
-      WriteOtaLastRun(
-          cacheRoot,
-          normalizedRemoteUrl,
-          L"failed",
-          resolvedBundleId,
-          resolvedChannel,
-          currentVersion,
-          latestVersion,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          resolvedDeviceId,
-          inRollout,
-          rolloutPercent);
+      writeFailedLastRun();
       return;
     }
 
@@ -1528,52 +1401,13 @@ void RunNativeOtaUpdate(
     AppendLog(
         "OTA.Native.HResultError code=" + std::to_string(static_cast<int32_t>(error.code().value)) +
         " message=" + ToUtf8(error.message()));
-    WriteOtaLastRun(
-        cacheRoot,
-        normalizedRemoteUrl,
-        L"failed",
-        std::nullopt,
-        resolvedChannel,
-        currentVersion,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        resolvedDeviceIdForLastRun,
-        inRolloutForLastRun,
-        rolloutPercentForLastRun);
+    writeFailedLastRun();
   } catch (std::exception const &error) {
     AppendLog(std::string("OTA.Native.StdException message=") + error.what());
-    WriteOtaLastRun(
-        cacheRoot,
-        normalizedRemoteUrl,
-        L"failed",
-        std::nullopt,
-        resolvedChannel,
-        currentVersion,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        resolvedDeviceIdForLastRun,
-        inRolloutForLastRun,
-        rolloutPercentForLastRun);
+    writeFailedLastRun();
   } catch (...) {
     AppendLog("OTA.Native.UnknownException");
-    WriteOtaLastRun(
-        cacheRoot,
-        normalizedRemoteUrl,
-        L"failed",
-        std::nullopt,
-        resolvedChannel,
-        currentVersion,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        resolvedDeviceIdForLastRun,
-        inRolloutForLastRun,
-        rolloutPercentForLastRun);
+    writeFailedLastRun();
   }
 }
 
