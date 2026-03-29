@@ -4,6 +4,8 @@
 namespace OpappWindowsHost {
 namespace {
 
+constexpr wchar_t kDefaultOtaRemoteUrl[] = L"https://r2.opapp.dev";
+
 std::optional<std::wstring> GetEnvironmentString(std::wstring const &name) noexcept {
   DWORD required = GetEnvironmentVariableW(name.c_str(), nullptr, 0);
   if (required == 0) {
@@ -189,7 +191,11 @@ std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept {
 }
 
 std::optional<std::wstring> GetOtaRemoteUrl() noexcept {
-  return GetStartupOverride(L"ota", L"remote", L"OPAPP_OTA_REMOTE_URL");
+  if (auto configured = GetStartupOverride(L"ota", L"remote", L"OPAPP_OTA_REMOTE_URL")) {
+    return configured;
+  }
+
+  return std::wstring(kDefaultOtaRemoteUrl);
 }
 
 std::optional<std::wstring> GetOtaChannel() noexcept {
