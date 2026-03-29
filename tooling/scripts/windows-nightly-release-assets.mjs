@@ -135,6 +135,13 @@ export function compareMsixCandidates(a, b) {
   return a.filePath.localeCompare(b.filePath);
 }
 
+export function detectMsixArchitecture(filePath) {
+  const match = filePath
+    .replace(/\\/g, '/')
+    .match(/_(arm64|x64|x86|arm)(?=_|\.msix$)/i);
+  return match ? match[1].toLowerCase() : 'unknown';
+}
+
 export function buildReleaseNotes({
   desktopSha,
   frontendRef,
@@ -213,8 +220,20 @@ export async function findPreferredMsixFile(searchRoot) {
     throw new Error(`Could not find a user-installable .msix under ${searchRoot}.`);
   }
 
-  candidates.sort(compareMsixCandidates);
-  return candidates[0].filePath;
+  const preferredArchitecture = 'x64';
+  const preferredCandidates = candidates.filter(
+    candidate => detectMsixArchitecture(candidate.filePath) === preferredArchitecture,
+  );
+
+  if (preferredCandidates.length === 0) {
+    const discoveredArchitectures = [...new Set(candidates.map(candidate => detectMsixArchitecture(candidate.filePath)))].sort();
+    throw new Error(
+      `Could not find a user-installable ${preferredArchitecture} .msix under ${searchRoot}. Found architectures: ${discoveredArchitectures.join(', ')}.`,
+    );
+  }
+
+  preferredCandidates.sort(compareMsixCandidates);
+  return preferredCandidates[0].filePath;
 }
 
 async function copyTreeFiltered(sourceRoot, destinationRoot, filterRelativePath) {
