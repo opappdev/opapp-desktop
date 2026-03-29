@@ -90,6 +90,13 @@ struct OpappWindowManagerModule {
             std::wstring(winrt::to_hstring(bundleId))));
   }
 
+  REACT_METHOD(GetOtaRemoteUrl, L"getOtaRemoteUrl")
+  void GetOtaRemoteUrl(
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    auto otaRemoteUrl = OpappWindowsHost::GetOtaRemoteUrl();
+    result.Resolve(otaRemoteUrl ? OpappWindowsHost::ToUtf8(*otaRemoteUrl) : std::string{});
+  }
+
   REACT_METHOD(GetWindowSession, L"getWindowSession")
   void GetWindowSession(
       std::string windowId,
