@@ -59,6 +59,7 @@
     "ota:apply": "node ./tooling/scripts/ota-updater.mjs --mode=apply",
     "ota:update": "node ./tooling/scripts/ota-updater.mjs --mode=update",
     "ota:rollback": "node ./tooling/scripts/ota-updater.mjs --mode=rollback",
+    "ota:fixture:native-failure": "node ./tooling/scripts/ota-native-failure-fixture.mjs",
     "registry:prune": "node ./tooling/scripts/registry-pruner.mjs",
     "ota:prune": "node ./tooling/scripts/registry-pruner.mjs --dir=.ota-cache",
     "watchdog:guard": "node ./tooling/scripts/crash-watchdog.mjs --mode=guard",
@@ -74,6 +75,7 @@
     "ota:build:publish:cloudflare": "node ./tooling/scripts/ota-cloudflare-publish.mjs --build",
     "test:ota:publish": "node ./tooling/scripts/ota-cloudflare-publish.test-runner.mjs",
     "test:registry:ops": "node ./tooling/scripts/registry-ops.test.mjs",
-    "test:ota:updater": "node ./tooling/scripts/ota-updater.test.mjs"
+    "test:ota:updater": "node ./tooling/scripts/ota-updater.test.mjs",
+    "test:ota:native-failure-fixture": "node ./tooling/scripts/ota-native-failure-fixture.test.mjs"
   }
 }

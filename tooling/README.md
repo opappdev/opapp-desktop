@@ -78,6 +78,16 @@ Windows verification entrypoints:
   diagnostics contract without first pretending the run succeeded.
 - real failure-sample example:
   `npm run verify:windows -- --ota-remote=http://127.0.0.1:8787 --ota-expected-status=failed`
+- `npm run ota:fixture:native-failure -- --mode=<mode> [--out-dir=<dir>]` creates a
+  static OTA registry tree for native `failed`-status rehearsals. Supported
+  remote-only modes currently cover `download-manifest-404`,
+  `manifest-parse`, `manifest-missing-entry-file`, `download-entry-file-404`,
+  `checksum-invalid-metadata`, `checksum-unsupported-algorithm`, and
+  `checksum-mismatch`.
+- Generated fixture directories are meant to be served over localhost (or any
+  static HTTPS host) and paired with `--ota-expected-status=failed`; snapshot /
+  apply failures still require local host/cache perturbation rather than a pure
+  remote fixture.
 
 Windows smoke timeout knobs:
 
