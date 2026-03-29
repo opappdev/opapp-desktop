@@ -2,6 +2,7 @@
 #include "WindowManager.h"
 
 #include "NativeModules.h"
+#include <winrt/Windows.Data.Json.h>
 
 namespace OpappWindowsHostModules {
 
@@ -95,6 +96,17 @@ struct OpappWindowManagerModule {
       winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
     auto otaRemoteUrl = OpappWindowsHost::GetOtaRemoteUrl();
     result.Resolve(otaRemoteUrl ? OpappWindowsHost::ToUtf8(*otaRemoteUrl) : std::string{});
+  }
+
+  REACT_METHOD(GetStagedBundleIds, L"getStagedBundleIds")
+  void GetStagedBundleIds(
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    winrt::Windows::Data::Json::JsonArray payload;
+    for (auto const &bundleId : OpappWindowsHost::ListStagedBundleIds()) {
+      payload.Append(winrt::Windows::Data::Json::JsonValue::CreateStringValue(bundleId));
+    }
+
+    result.Resolve(OpappWindowsHost::ToUtf8(payload.Stringify()));
   }
 
   REACT_METHOD(GetWindowSession, L"getWindowSession")

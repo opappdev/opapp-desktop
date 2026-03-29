@@ -52,6 +52,28 @@ std::optional<std::wstring> ReadBundleManifestEntryFile(std::wstring const &bund
   }
 }
 
+std::optional<std::wstring> ReadBundleManifestBundleId(std::wstring const &bundleRoot) noexcept {
+  try {
+    auto manifestPath = std::filesystem::path(bundleRoot) / L"bundle-manifest.json";
+    std::ifstream stream(manifestPath, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    auto jsonObject = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(contents));
+    auto bundleIdHstr = jsonObject.GetNamedString(L"bundleId");
+    std::wstring bundleId(bundleIdHstr.c_str(), bundleIdHstr.size());
+    if (bundleId.empty()) {
+      return std::nullopt;
+    }
+
+    return bundleId;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 RECT GetWindowWorkArea(HWND hwnd) noexcept {
   RECT workArea{0, 0, 1920, 1080};
   HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -640,6 +662,50 @@ bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept {
   }
 
   return ReadBundleManifestEntryFile(*bundleRootPath).has_value();
+}
+
+std::vector<std::wstring> ListStagedBundleIds() noexcept {
+  std::vector<std::wstring> bundleIds;
+  auto &state = GetWindowManagerState();
+  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+    return bundleIds;
+  }
+
+  try {
+    auto bundlesRoot = std::filesystem::path(state.AppDirectory) / L"Bundle" / L"bundles";
+    if (!std::filesystem::exists(bundlesRoot) || !std::filesystem::is_directory(bundlesRoot)) {
+      return bundleIds;
+    }
+
+    std::set<std::wstring> seenBundleIds;
+    for (auto const &entry : std::filesystem::directory_iterator(bundlesRoot)) {
+      if (!entry.is_directory()) {
+        continue;
+      }
+
+      auto bundleRoot = entry.path();
+      auto entryFile = ReadBundleManifestEntryFile(bundleRoot.wstring());
+      if (!entryFile) {
+        continue;
+      }
+
+      auto bundleId = ReadBundleManifestBundleId(bundleRoot.wstring());
+      auto fallbackBundleId = bundleRoot.filename().wstring();
+      auto resolvedBundleId = bundleId && !bundleId->empty() ? *bundleId : fallbackBundleId;
+      if (resolvedBundleId.empty() || resolvedBundleId == L"opapp.companion.main") {
+        continue;
+      }
+
+      if (seenBundleIds.insert(resolvedBundleId).second) {
+        bundleIds.push_back(std::move(resolvedBundleId));
+      }
+    }
+
+    std::sort(bundleIds.begin(), bundleIds.end());
+  } catch (...) {
+  }
+
+  return bundleIds;
 }
 
 std::optional<std::string> OpenManagedWindow(LaunchSurfaceConfig const &launchSurface) noexcept {
