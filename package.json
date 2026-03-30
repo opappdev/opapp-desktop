@@ -14,7 +14,7 @@
     "test:windows:release-diagnostics": "node ./tooling/scripts/windows-release-diagnostics.test.mjs",
     "test:windows:release-smoke:ota": "node ./tooling/scripts/windows-release-smoke-ota.test.mjs",
     "test:frontend-ref:resolve": "node --test ./tooling/scripts/resolve-public-frontend-ref.test.mjs",
-    "test:windows:nightly-assets": "node --test ./tooling/scripts/windows-nightly-release-assets.test.mjs",
+    "test:windows:nightly-assets": "node --test ./tooling/scripts/windows-nightly-release-assets.test.mjs ./tooling/scripts/windows-signing.test.mjs ./tooling/scripts/windows-official-release-manifest.test.mjs ./tooling/scripts/windows-official-release-assets.test.mjs",
     "dev:windows": "node ./tooling/scripts/dev-windows.mjs",
     "dev:windows:fast-fail": "node ./tooling/scripts/dev-windows.mjs --readiness-ms=15000 --smoke-ms=1000",
     "dev:windows:window-capture": "node ./tooling/scripts/dev-windows.mjs --scenario=window-capture-current-window",

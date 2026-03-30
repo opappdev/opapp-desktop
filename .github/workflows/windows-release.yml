@@ -1,0 +1,164 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - 'windows-v*.*.*'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish-windows-release:
+    name: Publish Windows Release
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout opapp-desktop
+        uses: actions/checkout@v6
+        with:
+          path: opapp-desktop
+
+      - name: Resolve opapp-frontend ref
+        id: frontend-ref
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          OPAPP_FRONTEND_REF: ${{ vars.OPAPP_FRONTEND_REF }}
+        run: |
+          $ref = node ./tooling/scripts/resolve-public-frontend-ref.mjs
+          "ref=$ref" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout opapp-frontend
+        uses: actions/checkout@v6
+        with:
+          repository: opappdev/opapp-frontend
+          ref: ${{ steps.frontend-ref.outputs.ref }}
+          path: opapp-frontend
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          cache-dependency-path: |
+            opapp-desktop/pnpm-lock.yaml
+            opapp-frontend/pnpm-lock.yaml
+
+      - name: Install desktop dependencies
+        working-directory: opapp-desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        working-directory: opapp-frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Decode official signing PFX
+        id: signing
+        shell: pwsh
+        env:
+          OPAPP_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.OPAPP_WINDOWS_SIGNING_PFX_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:OPAPP_WINDOWS_SIGNING_PFX_BASE64)) {
+            throw 'Missing GitHub secret OPAPP_WINDOWS_SIGNING_PFX_BASE64.'
+          }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'opapp-windows-signing.pfx'
+          [System.IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:OPAPP_WINDOWS_SIGNING_PFX_BASE64))
+          "pfx_path=$pfxPath" >> $env:GITHUB_OUTPUT
+
+      - name: Validate official release config
+        id: release-config
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          OPAPP_WINDOWS_OFFICIAL_PUBLISHER: ${{ vars.OPAPP_WINDOWS_OFFICIAL_PUBLISHER }}
+          OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME: ${{ vars.OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME }}
+          OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL: ${{ vars.OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL }}
+          OPAPP_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.OPAPP_WINDOWS_SIGNING_PFX_PASSWORD }}
+          OPAPP_WINDOWS_SIGNING_PFX_PATH: ${{ steps.signing.outputs.pfx_path }}
+        run: |
+          $json = node ./tooling/scripts/windows-official-release-assets.mjs --validate-only --tag="$env:RELEASE_TAG" --publisher="$env:OPAPP_WINDOWS_OFFICIAL_PUBLISHER" --publisher-display-name="$env:OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME" --signing-pfx-path="$env:OPAPP_WINDOWS_SIGNING_PFX_PATH" --signing-pfx-password="$env:OPAPP_WINDOWS_SIGNING_PFX_PASSWORD" --timestamp-url="$env:OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL"
+          $config = $json | ConvertFrom-Json
+          "release_tag=$($config.releaseTag)" >> $env:GITHUB_OUTPUT
+          "release_version=$($config.releaseVersion)" >> $env:GITHUB_OUTPUT
+          "msix_version=$($config.msixVersion)" >> $env:GITHUB_OUTPUT
+          "release_title=$($config.releaseTitle)" >> $env:GITHUB_OUTPUT
+
+      - name: Rewrite package manifest for official release identity
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          RELEASE_TAG: ${{ steps.release-config.outputs.release_tag }}
+          OPAPP_WINDOWS_OFFICIAL_PUBLISHER: ${{ vars.OPAPP_WINDOWS_OFFICIAL_PUBLISHER }}
+          OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME: ${{ vars.OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          node ./tooling/scripts/windows-official-release-manifest.mjs --tag="$env:RELEASE_TAG" --publisher="$env:OPAPP_WINDOWS_OFFICIAL_PUBLISHER" --publisher-display-name="$env:OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME"
+
+      - name: Windows release diagnostics
+        working-directory: opapp-desktop
+        run: pnpm test:windows:release-diagnostics
+
+      - name: Windows packaged and portable public verify
+        working-directory: opapp-desktop
+        run: pnpm verify:windows:public:ci
+
+      - name: Prepare official Windows release assets
+        id: assets
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          RELEASE_TAG: ${{ steps.release-config.outputs.release_tag }}
+          DESKTOP_SHA: ${{ github.sha }}
+          FRONTEND_REF: ${{ steps.frontend-ref.outputs.ref }}
+          OPAPP_WINDOWS_OFFICIAL_PUBLISHER: ${{ vars.OPAPP_WINDOWS_OFFICIAL_PUBLISHER }}
+          OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME: ${{ vars.OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME }}
+          OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL: ${{ vars.OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL }}
+          OPAPP_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.OPAPP_WINDOWS_SIGNING_PFX_PASSWORD }}
+          OPAPP_WINDOWS_SIGNING_PFX_PATH: ${{ steps.signing.outputs.pfx_path }}
+        run: |
+          $outDir = Join-Path $env:RUNNER_TEMP 'opapp-windows-release'
+          node ./tooling/scripts/windows-official-release-assets.mjs --out-dir="$outDir" --tag="$env:RELEASE_TAG" --desktop-sha="$env:DESKTOP_SHA" --frontend-ref="$env:FRONTEND_REF" --publisher="$env:OPAPP_WINDOWS_OFFICIAL_PUBLISHER" --publisher-display-name="$env:OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME" --signing-pfx-path="$env:OPAPP_WINDOWS_SIGNING_PFX_PATH" --signing-pfx-password="$env:OPAPP_WINDOWS_SIGNING_PFX_PASSWORD" --timestamp-url="$env:OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL"
+          "out_dir=$outDir" >> $env:GITHUB_OUTPUT
+
+      - name: Upload staged release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-assets
+          path: |
+            ${{ steps.assets.outputs.out_dir }}\*.zip
+            ${{ steps.assets.outputs.out_dir }}\*.txt
+            ${{ steps.assets.outputs.out_dir }}\*.json
+            ${{ steps.assets.outputs.out_dir }}\*.md
+
+      - name: Publish GitHub release
+        shell: pwsh
+        working-directory: opapp-desktop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release-config.outputs.release_tag }}
+          RELEASE_TITLE: ${{ steps.release-config.outputs.release_title }}
+          RELEASE_NOTES: ${{ steps.assets.outputs.out_dir }}\opapp-windows-release-notes.md
+          PORTABLE_ZIP: ${{ steps.assets.outputs.out_dir }}\opapp-windows-x64-portable.zip
+          MSIX_BUNDLE_ZIP: ${{ steps.assets.outputs.out_dir }}\opapp-windows-x64-msix-bundle.zip
+          CHECKSUMS_FILE: ${{ steps.assets.outputs.out_dir }}\opapp-windows-SHA256SUMS.txt
+        run: |
+          gh release create $env:RELEASE_TAG $env:PORTABLE_ZIP $env:MSIX_BUNDLE_ZIP $env:CHECKSUMS_FILE --repo '${{ github.repository }}' --target '${{ github.sha }}' --title $env:RELEASE_TITLE --notes-file $env:RELEASE_NOTES
+
+      - name: Upload Windows host log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-host-log
+          path: ${{ runner.temp }}/opapp-windows-host.log

@@ -56,6 +56,16 @@ Windows verification entrypoints:
   build outputs after public verify, emits a user-runnable portable zip, an
   installable MSIX bundle zip, checksums, and release notes for GitHub nightly
   publishing.
+- `scripts/windows-official-release-manifest.mjs`: rewrites
+  `Package.appxmanifest` for a tagged official release so `Publisher`,
+  `PublisherDisplayName`, and `Version` match the configured signing identity.
+- `scripts/windows-official-release-assets.mjs`: stages the official portable
+  + MSIX assets from the packaged build outputs, signs the staged MSIX from the
+  configured PFX, exports the signer `.cer`, and writes release notes +
+  checksums for GitHub Releases.
+- `scripts/windows-signing.mjs`: shared helper layer for locating `signtool`,
+  validating PFX subject/publisher alignment, building nightly self-signed test
+  certificates, exporting `.cer` files, and verifying MSIX signatures.
 - `npm run report:windows:timing -- --input=<log-path>[,<log-path-2>] [--input=<log-path-3>] [--launch=all|packaged|portable] [--percentile=95] [--headroom-ms=5000] [--allow-verify-only] [--defaults-only] [--output=<report-path>]`: parse and aggregate `timing summary` lines across one or more logs, then print recommended `--startup-ms` / `--scenario-ms`（可选写入文件）。
 - `npm run test:windows:release-diagnostics`: single-process diagnostics assertions for environments where `node --test` runner spawning is restricted.
 - `npm run test:windows:release-smoke:ota`: direct-node assertions for OTA

@@ -86,6 +86,10 @@ MSIX sideload path for internal validation:
 - `opapp-windows-nightly-x64-msix-bundle.zip`: unzip and run `Install.ps1` for
   the packaged MSIX sideload flow. Do not open the `.msix` directly; the
   nightly zip includes the matching test certificate for `Install.ps1`.
+  The bundled certificate now includes the extensions required by Visual
+  Studio's sideloading script (`Basic Constraints`, `DigitalSignature`, and
+  `Code Signing EKU`), and the nightly workflow validates that trust path in
+  CI by importing the staged `.cer` into `LocalMachine\TrustedPeople`.
 
 Packaged Windows public/nightly builds must only embed the main companion
 bundle `opapp.companion.main`. Private bundles such as `opapp.hbr.workspace`
@@ -99,6 +103,41 @@ The pinned frontend checkout lives in
 `tooling/config/opapp-frontend-ref.txt`. Override with
 `OPAPP_FRONTEND_REF` only when you intentionally want to test a different
 frontend commit.
+
+## Official Windows Release
+
+The GitHub Actions workflow at `.github/workflows/windows-release.yml` publishes
+the official Windows release when a git tag matching `windows-vX.Y.Z` is
+pushed.
+
+Release rules:
+
+- the tag is the release version source
+- `windows-v1.2.3` maps to MSIX version `1.2.3.0`
+- the workflow rewrites `Package.appxmanifest` in CI so the packaged
+  `Publisher`, `PublisherDisplayName`, and `Version` match the official
+  signing identity for that release
+- the packaged MSIX is signed from the configured PFX and must pass
+  `signtool verify /pa /v` before the release is published
+
+Required GitHub configuration:
+
+- secret `OPAPP_WINDOWS_SIGNING_PFX_BASE64`
+- secret `OPAPP_WINDOWS_SIGNING_PFX_PASSWORD`
+- variable `OPAPP_WINDOWS_OFFICIAL_PUBLISHER`
+- variable `OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME`
+- variable `OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL`
+
+Official release assets:
+
+- `opapp-windows-x64-portable.zip`
+- `opapp-windows-x64-msix-bundle.zip`
+- `opapp-windows-SHA256SUMS.txt`
+
+Migration note:
+
+- existing nightly/test-signed package installs are not treated as an upgrade
+  path; uninstall the nightly package first, then install the official release
 
 ## External Window Capture
 

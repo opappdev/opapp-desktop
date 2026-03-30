@@ -83,6 +83,31 @@ jobs:
           node ./tooling/scripts/windows-nightly-release-assets.mjs --out-dir="$outDir" --desktop-sha="$env:DESKTOP_SHA" --frontend-ref="$env:FRONTEND_REF"
           "out_dir=$outDir" >> $env:GITHUB_OUTPUT
 
+      - name: Verify nightly MSIX trust path
+        shell: pwsh
+        working-directory: opapp-desktop
+        run: |
+          $metadataPath = Join-Path '${{ steps.assets.outputs.out_dir }}' 'opapp-windows-nightly-metadata.json'
+          $metadata = Get-Content $metadataPath | ConvertFrom-Json
+          $certificatePath = [string]$metadata.msixSupport.certificatePath
+          $stagedMsixPath = [string]$metadata.msixSupport.stagedMsixPath
+          if (-not (Test-Path $certificatePath)) {
+            throw "Nightly certificate path missing: $certificatePath"
+          }
+          if (-not (Test-Path $stagedMsixPath)) {
+            throw "Nightly staged MSIX path missing: $stagedMsixPath"
+          }
+
+          $imported = Import-Certificate -FilePath $certificatePath -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople'
+          try {
+            node -e "import('./tooling/scripts/windows-signing.mjs').then(async signing => { const signtoolPath = await signing.resolveSigntoolPath(); const inspection = signing.inspectMsixSignature(process.argv[1], signtoolPath, {cwd: process.cwd()}); if (inspection.state !== 'trusted') { signing.writeChildProcessOutput(inspection.result); throw new Error('Expected nightly staged MSIX signature to be trusted after importing the staged certificate, got ' + inspection.state + '.'); } }).catch(error => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); })" "$stagedMsixPath"
+          }
+          finally {
+            if ($imported -and $imported.Thumbprint) {
+              Remove-Item -LiteralPath ("Cert:\LocalMachine\TrustedPeople\" + $imported.Thumbprint) -Force -ErrorAction SilentlyContinue
+            }
+          }
+
       - name: Compute nightly release metadata
         id: release
         shell: pwsh
