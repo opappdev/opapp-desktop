@@ -89,9 +89,9 @@ test('buildReleaseNotes explains installable nightly assets', () => {
   });
 
   assert.match(notes, /portable/);
-  assert.match(notes, /Install\.ps1/);
-  assert.match(notes, /do not open the \`\.msix\` directly/i);
-  assert.match(notes, /test-signed/i);
+  assert.doesNotMatch(notes, /Install\.ps1/);
+  assert.match(notes, /does not ship a packaged MSIX bundle/i);
+  assert.match(notes, /official releases/i);
   assert.match(notes, /opapp\.companion\.main/);
   assert.match(notes, /opapp\.hbr\.workspace/);
   assert.match(notes, /remote OTA catalog/i);

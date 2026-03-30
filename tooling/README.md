@@ -53,9 +53,11 @@ Windows verification entrypoints:
   `opapp-frontend` checkout ref from `tooling/config/opapp-frontend-ref.txt`
   unless `OPAPP_FRONTEND_REF` explicitly overrides it.
 - `scripts/windows-nightly-release-assets.mjs`: collects the packaged Windows
-  build outputs after public verify, emits a user-runnable portable zip, an
-  installable MSIX bundle zip, checksums, and release notes for GitHub nightly
-  publishing.
+  build outputs after public verify, emits a user-runnable portable zip,
+  checksums, and release notes for GitHub nightly publishing. Nightly no
+  longer uploads an MSIX bundle because local Debug AppX installs can collide
+  with the same package identity/version and make sideload validation look like
+  a dev launch.
 - `scripts/windows-official-release-manifest.mjs`: rewrites
   `Package.appxmanifest` for a tagged official release so `Publisher`,
   `PublisherDisplayName`, and `Version` match the configured signing identity.

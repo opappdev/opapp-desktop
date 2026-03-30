@@ -79,17 +79,16 @@ a prerelease Windows nightly from a pinned public `opapp-frontend` ref plus the
 current `opapp-desktop` commit.
 
 Nightly assets are intentionally user-runnable, with a secondary packaged
-MSIX sideload path for internal validation:
+portable path for internal validation:
 
 - `opapp-windows-nightly-x64-portable.zip`: unzip and run
   `OpappWindowsHost.exe` from the extracted folder.
-- `opapp-windows-nightly-x64-msix-bundle.zip`: unzip and run `Install.ps1` for
-  the packaged MSIX sideload flow. Do not open the `.msix` directly; the
-  nightly zip includes the matching test certificate for `Install.ps1`.
-  The bundled certificate now includes the extensions required by Visual
-  Studio's sideloading script (`Basic Constraints`, `DigitalSignature`, and
-  `Code Signing EKU`), and the nightly workflow validates that trust path in
-  CI by importing the staged `.cer` into `LocalMachine\TrustedPeople`.
+
+Nightly publishing no longer uploads a packaged MSIX bundle. Local Debug AppX
+installs can share the same package identity/version (`OpappWindowsHost`
+`1.0.0.0`) and make a nightly sideload appear to launch the dev package
+instead. Keep the nightly channel portable-only, and reserve packaged MSIX
+distribution for tagged official releases.
 
 Packaged Windows public/nightly builds must only embed the main companion
 bundle `opapp.companion.main`. Private bundles such as `opapp.hbr.workspace`

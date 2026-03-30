@@ -271,7 +271,7 @@ function extractRuntimeBundleRoot(logContents) {
 function extractOtaSpawnHostBundleDir(logContents) {
   return (
     normalizeLogContents(logContents).match(
-      /OTA\.SpawnUpdateProcess [^\r\n]*hostBundleDir=([^\r\n]+?)(?: currentVersion=| channel=| force=true|$)/,
+      /OTA\.SpawnUpdateProcess [^\r\n]*hostBundleDir=([^\r\n]+)/,
     )?.[1] ?? null
   )?.trim() ?? null;
 }
