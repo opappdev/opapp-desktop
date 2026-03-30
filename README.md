@@ -126,7 +126,7 @@ Required GitHub configuration:
 - secret `OPAPP_WINDOWS_SIGNING_PFX_PASSWORD`
 - variable `OPAPP_WINDOWS_OFFICIAL_PUBLISHER`
 - variable `OPAPP_WINDOWS_OFFICIAL_PUBLISHER_DISPLAY_NAME`
-- variable `OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL`
+- variable `OPAPP_WINDOWS_SIGNING_TIMESTAMP_URL` (must be an `https://` timestamp server URL)
 
 Official release assets:
 

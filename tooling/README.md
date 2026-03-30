@@ -62,7 +62,8 @@ Windows verification entrypoints:
 - `scripts/windows-official-release-assets.mjs`: stages the official portable
   + MSIX assets from the packaged build outputs, signs the staged MSIX from the
   configured PFX, exports the signer `.cer`, and writes release notes +
-  checksums for GitHub Releases.
+  checksums for GitHub Releases. It now also rejects non-HTTPS timestamp URLs
+  and manifest/publisher display-name mismatches before asset staging.
 - `scripts/windows-signing.mjs`: shared helper layer for locating `signtool`,
   validating PFX subject/publisher alignment, building nightly self-signed test
   certificates, exporting `.cer` files, and verifying MSIX signatures.

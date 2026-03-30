@@ -1,4 +1,4 @@
-import {mkdir, rm, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath} from 'node:url';
@@ -18,8 +18,6 @@ import {
 import {
   ensurePathExists,
   normalizeCliValue,
-  readPackagePublisher,
-  readPackageVersion,
   readPfxSubject,
   resolveSigntoolPath,
   signMsixWithPfxAndExportCertificate,
@@ -38,6 +36,76 @@ export const msixBundleZipName = `${msixBundleFolderName}.zip`;
 export const checksumsFileName = 'opapp-windows-SHA256SUMS.txt';
 export const metadataFileName = 'opapp-windows-release-metadata.json';
 export const releaseNotesFileName = 'opapp-windows-release-notes.md';
+
+function readRequiredManifestValue(manifestContent, pattern, label) {
+  const match = manifestContent.match(pattern);
+  if (!match?.[1]) {
+    throw new Error(`Could not resolve ${label} from Package.appxmanifest.`);
+  }
+
+  return match[1];
+}
+
+export function readPackagePublisherFromManifest(manifestContent) {
+  return readRequiredManifestValue(
+    manifestContent,
+    /<Identity\b[^>]*\bPublisher="([^"]+)"/i,
+    'Publisher',
+  );
+}
+
+export function readPackageVersionFromManifest(manifestContent) {
+  return readRequiredManifestValue(
+    manifestContent,
+    /<Identity\b[^>]*\bVersion="([^"]+)"/i,
+    'Version',
+  );
+}
+
+export function readPackagePublisherDisplayNameFromManifest(manifestContent) {
+  return readRequiredManifestValue(
+    manifestContent,
+    /<PublisherDisplayName>([^<]*)<\/PublisherDisplayName>/i,
+    'PublisherDisplayName',
+  );
+}
+
+export function assertHttpsUrl(value, label = 'timestamp URL') {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(value);
+  } catch {
+    throw new Error(`Invalid ${label} '${value}'. Provide --timestamp-url=<https-url>.`);
+  }
+
+  if (parsedUrl.protocol !== 'https:') {
+    throw new Error(`Invalid ${label} '${value}'. Provide --timestamp-url=<https-url>.`);
+  }
+}
+
+export function assertOfficialManifestOverridesApplied(manifestContent, options) {
+  const manifestPublisher = readPackagePublisherFromManifest(manifestContent);
+  if (manifestPublisher !== options.publisher) {
+    throw new Error(
+      `Package.appxmanifest Publisher is '${manifestPublisher}', but the official release expects '${options.publisher}'. Run windows-official-release-manifest.mjs before building release assets.`,
+    );
+  }
+
+  const manifestVersion = readPackageVersionFromManifest(manifestContent);
+  if (manifestVersion !== options.msixVersion) {
+    throw new Error(
+      `Package.appxmanifest Version is '${manifestVersion}', but the official release expects '${options.msixVersion}'. Run windows-official-release-manifest.mjs before building release assets.`,
+    );
+  }
+
+  const manifestPublisherDisplayName =
+    readPackagePublisherDisplayNameFromManifest(manifestContent);
+  if (manifestPublisherDisplayName !== options.publisherDisplayName) {
+    throw new Error(
+      `Package.appxmanifest PublisherDisplayName is '${manifestPublisherDisplayName}', but the official release expects '${options.publisherDisplayName}'. Run windows-official-release-manifest.mjs before building release assets.`,
+    );
+  }
+}
 
 export function parseArgs(argv, env = process.env) {
   const options = {
@@ -139,6 +207,7 @@ export function validateOfficialReleaseOptions(options) {
   if (!options.timestampUrl) {
     throw new Error('Missing timestamp URL. Provide --timestamp-url=<https-url>.');
   }
+  assertHttpsUrl(options.timestampUrl);
 
   return {
     ...options,
@@ -213,19 +282,8 @@ async function validateOfficialSigningConfig(options) {
 }
 
 async function assertManifestReadyForOfficialRelease(options) {
-  const manifestPublisher = await readPackagePublisher(packageManifestPath);
-  if (manifestPublisher !== options.publisher) {
-    throw new Error(
-      `Package.appxmanifest Publisher is '${manifestPublisher}', but the official release expects '${options.publisher}'. Run windows-official-release-manifest.mjs before building release assets.`,
-    );
-  }
-
-  const manifestVersion = await readPackageVersion(packageManifestPath);
-  if (manifestVersion !== options.msixVersion) {
-    throw new Error(
-      `Package.appxmanifest Version is '${manifestVersion}', but the official release expects '${options.msixVersion}'. Run windows-official-release-manifest.mjs before building release assets.`,
-    );
-  }
+  const manifestContent = await readFile(packageManifestPath, 'utf8');
+  assertOfficialManifestOverridesApplied(manifestContent, options);
 }
 
 async function writePortableReadme(destinationRoot, releaseVersion) {
