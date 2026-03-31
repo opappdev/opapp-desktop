@@ -164,6 +164,62 @@ struct OpappWindowManagerModule {
     result.Resolve(OpappWindowsHost::ToUtf8(payload.Stringify()));
   }
 
+  REACT_METHOD(GetBundleUpdateStatuses, L"getBundleUpdateStatuses")
+  void GetBundleUpdateStatuses(
+      std::string bundleIdsPayload,
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    std::vector<std::wstring> bundleIds;
+
+    try {
+      auto normalizedPayload = winrt::to_hstring(bundleIdsPayload);
+      if (!normalizedPayload.empty()) {
+        auto parsedArray = winrt::Windows::Data::Json::JsonArray::Parse(normalizedPayload);
+        for (uint32_t index = 0; index < parsedArray.Size(); ++index) {
+          auto value = parsedArray.GetAt(index);
+          if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::String) {
+            continue;
+          }
+
+          auto bundleId = std::wstring(value.GetString().c_str());
+          if (!bundleId.empty()) {
+            bundleIds.push_back(bundleId);
+          }
+        }
+      }
+    } catch (...) {
+      result.Reject(L"Invalid bundle update status filter payload.");
+      return;
+    }
+
+    auto payload = OpappWindowsHost::GetBundleUpdateStatusesPayload(bundleIds);
+    result.Resolve(payload ? *payload : std::string("[]"));
+  }
+
+  REACT_METHOD(RunBundleUpdate, L"runBundleUpdate")
+  void RunBundleUpdate(
+      std::string bundleId,
+      winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    auto normalizedBundleId = std::wstring(winrt::to_hstring(bundleId));
+    if (normalizedBundleId.empty()) {
+      result.Reject(L"Bundle ID is required.");
+      return;
+    }
+
+    try {
+      std::thread([normalizedBundleId, result = std::move(result)]() mutable noexcept {
+        auto payload = OpappWindowsHost::RunBundleUpdatePayload(normalizedBundleId);
+        if (!payload || payload->empty()) {
+          result.Reject(L"Failed to run bundle update.");
+          return;
+        }
+
+        result.Resolve(*payload);
+      }).detach();
+    } catch (...) {
+      result.Reject(L"Failed to schedule bundle update.");
+    }
+  }
+
   REACT_METHOD(GetStagedBundleIds, L"getStagedBundleIds")
   void GetStagedBundleIds(
       winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {

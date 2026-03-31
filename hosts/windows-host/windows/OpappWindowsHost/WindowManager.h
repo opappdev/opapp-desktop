@@ -33,6 +33,10 @@ bool FocusManagedWindow(std::wstring const &windowId) noexcept;
 bool CloseManagedWindow(std::wstring const &windowId) noexcept;
 bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept;
 std::optional<std::string> GetCachedOtaRemoteCatalogPayload() noexcept;
+std::optional<std::string> GetBundleUpdateStatusesPayload(
+    std::vector<std::wstring> const &bundleIds = {}) noexcept;
+std::optional<std::string> RunBundleUpdatePayload(
+    std::wstring const &bundleId) noexcept;
 std::vector<StagedBundleDescriptor> ListStagedBundles() noexcept;
 std::vector<std::wstring> ListStagedBundleIds() noexcept;
 std::optional<std::string> OpenManagedWindow(LaunchSurfaceConfig const &launchSurface) noexcept;

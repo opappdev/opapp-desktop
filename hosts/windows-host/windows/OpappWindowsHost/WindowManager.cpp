@@ -898,6 +898,169 @@ std::optional<std::string> GetCachedOtaRemoteCatalogPayload() noexcept {
   }
 }
 
+std::optional<std::string> GetBundleUpdateStatusesPayload(
+    std::vector<std::wstring> const &bundleIds) noexcept {
+  auto &state = GetWindowManagerState();
+  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+    return std::nullopt;
+  }
+
+  try {
+    winrt::Windows::Data::Json::JsonArray payload;
+    for (auto const &status :
+         ResolveBundleUpdateStatuses(state.AppDirectory, bundleIds)) {
+      winrt::Windows::Data::Json::JsonObject statusObject;
+      statusObject.Insert(
+          L"bundleId",
+          winrt::Windows::Data::Json::JsonValue::CreateStringValue(status.BundleId));
+
+      auto insertOptionalString = [&](wchar_t const *key, std::optional<std::wstring> const &value) {
+        if (value && !value->empty()) {
+          statusObject.Insert(
+              key,
+              winrt::Windows::Data::Json::JsonValue::CreateStringValue(*value));
+        } else {
+          statusObject.Insert(key, winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+        }
+      };
+
+      insertOptionalString(L"remoteUrl", status.RemoteUrl);
+      insertOptionalString(L"channel", status.Channel);
+      insertOptionalString(L"currentVersion", status.CurrentVersion);
+      insertOptionalString(L"latestVersion", status.LatestVersion);
+      insertOptionalString(L"version", status.Version);
+      insertOptionalString(L"previousVersion", status.PreviousVersion);
+      insertOptionalString(L"stagedAt", status.StagedAt);
+      insertOptionalString(L"recordedAt", status.RecordedAt);
+      insertOptionalString(L"errorMessage", status.ErrorMessage);
+      statusObject.Insert(
+          L"status",
+          winrt::Windows::Data::Json::JsonValue::CreateStringValue(status.Status));
+
+      if (status.HasUpdate.has_value()) {
+        statusObject.Insert(
+            L"hasUpdate",
+            winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(*status.HasUpdate));
+      } else {
+        statusObject.Insert(L"hasUpdate", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
+      if (status.InRollout.has_value()) {
+        statusObject.Insert(
+            L"inRollout",
+            winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(*status.InRollout));
+      } else {
+        statusObject.Insert(L"inRollout", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
+      if (status.RolloutPercent.has_value()) {
+        statusObject.Insert(
+            L"rolloutPercent",
+            winrt::Windows::Data::Json::JsonValue::CreateNumberValue(*status.RolloutPercent));
+      } else {
+        statusObject.Insert(
+            L"rolloutPercent",
+            winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
+      if (status.ChannelsJson && !status.ChannelsJson->empty()) {
+        statusObject.Insert(
+            L"channels",
+            winrt::Windows::Data::Json::JsonValue::Parse(winrt::hstring(*status.ChannelsJson)));
+      } else {
+        statusObject.Insert(L"channels", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+
+      payload.Append(statusObject);
+    }
+
+    return ToUtf8(payload.Stringify());
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::string> RunBundleUpdatePayload(
+    std::wstring const &bundleId) noexcept {
+  auto &state = GetWindowManagerState();
+  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+    return std::nullopt;
+  }
+
+  try {
+    auto result = RunBundleUpdateNow(state.AppDirectory, bundleId);
+    if (!result) {
+      return std::nullopt;
+    }
+
+    winrt::Windows::Data::Json::JsonObject payload;
+    payload.Insert(
+        L"bundleId",
+        winrt::Windows::Data::Json::JsonValue::CreateStringValue(result->BundleId));
+
+    auto insertOptionalString = [&](wchar_t const *key, std::optional<std::wstring> const &value) {
+      if (value && !value->empty()) {
+        payload.Insert(
+            key,
+            winrt::Windows::Data::Json::JsonValue::CreateStringValue(*value));
+      } else {
+        payload.Insert(key, winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+      }
+    };
+
+    insertOptionalString(L"remoteUrl", result->RemoteUrl);
+    insertOptionalString(L"channel", result->Channel);
+    insertOptionalString(L"currentVersion", result->CurrentVersion);
+    insertOptionalString(L"latestVersion", result->LatestVersion);
+    insertOptionalString(L"version", result->Version);
+    insertOptionalString(L"previousVersion", result->PreviousVersion);
+    insertOptionalString(L"stagedAt", result->StagedAt);
+    insertOptionalString(L"recordedAt", result->RecordedAt);
+    insertOptionalString(L"errorMessage", result->ErrorMessage);
+    payload.Insert(
+        L"status",
+        winrt::Windows::Data::Json::JsonValue::CreateStringValue(result->Status));
+
+    if (result->HasUpdate.has_value()) {
+      payload.Insert(
+          L"hasUpdate",
+          winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(*result->HasUpdate));
+    } else {
+      payload.Insert(L"hasUpdate", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+    }
+
+    if (result->InRollout.has_value()) {
+      payload.Insert(
+          L"inRollout",
+          winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(*result->InRollout));
+    } else {
+      payload.Insert(L"inRollout", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+    }
+
+    if (result->RolloutPercent.has_value()) {
+      payload.Insert(
+          L"rolloutPercent",
+          winrt::Windows::Data::Json::JsonValue::CreateNumberValue(*result->RolloutPercent));
+    } else {
+      payload.Insert(
+          L"rolloutPercent",
+          winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+    }
+
+    if (result->ChannelsJson && !result->ChannelsJson->empty()) {
+      payload.Insert(
+          L"channels",
+          winrt::Windows::Data::Json::JsonValue::Parse(winrt::hstring(*result->ChannelsJson)));
+    } else {
+      payload.Insert(L"channels", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
+    }
+
+    return ToUtf8(payload.Stringify());
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 std::vector<StagedBundleDescriptor> ListStagedBundles() noexcept {
   std::vector<StagedBundleDescriptor> bundles;
   auto &state = GetWindowManagerState();

@@ -86,6 +86,24 @@ struct WindowPolicyDefinition {
 
 using WindowPolicyRegistry = std::map<WindowPolicyId, WindowPolicyDefinition>;
 
+struct BundleUpdateStatus {
+  std::wstring BundleId;
+  std::optional<std::wstring> RemoteUrl;
+  std::optional<std::wstring> Channel;
+  std::optional<std::wstring> CurrentVersion;
+  std::optional<std::wstring> LatestVersion;
+  std::optional<std::wstring> Version;
+  std::optional<std::wstring> PreviousVersion;
+  std::optional<bool> HasUpdate;
+  std::optional<bool> InRollout;
+  std::optional<int32_t> RolloutPercent;
+  std::wstring Status{L"failed"};
+  std::optional<std::wstring> StagedAt;
+  std::optional<std::wstring> RecordedAt;
+  std::optional<std::wstring> ChannelsJson;
+  std::optional<std::wstring> ErrorMessage;
+};
+
 std::string ToUtf8(winrt::hstring const &value);
 std::string ToUtf8(std::wstring const &value);
 std::string ToUtf8(WindowPolicyId policy);
@@ -138,6 +156,12 @@ std::optional<std::wstring> GetOtaChannel() noexcept;
 bool GetOtaForceUpdate() noexcept;
 bool GetOtaDisableNativeUpdate() noexcept;
 std::filesystem::path ResolveOtaCacheRoot(std::wstring const &appDirectory);
+std::vector<BundleUpdateStatus> ResolveBundleUpdateStatuses(
+    std::wstring const &appDirectory,
+    std::vector<std::wstring> const &bundleIds = {}) noexcept;
+std::optional<BundleUpdateStatus> RunBundleUpdateNow(
+    std::wstring const &appDirectory,
+    std::wstring const &bundleId) noexcept;
 bool EnsureRemoteBundleAvailable(
     std::wstring const &appDirectory,
     std::wstring const &bundleId) noexcept;

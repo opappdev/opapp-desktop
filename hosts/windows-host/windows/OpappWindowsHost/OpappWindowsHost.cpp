@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <urlmon.h>
@@ -1124,7 +1125,8 @@ void WriteOtaLastRun(
     std::optional<bool> inRollout = std::nullopt,
     std::optional<int32_t> rolloutPercent = std::nullopt,
     std::optional<bool> hasUpdate = std::nullopt,
-    std::optional<std::wstring> const &channelsJson = std::nullopt) {
+    std::optional<std::wstring> const &channelsJson = std::nullopt,
+    std::optional<std::wstring> const &errorMessage = std::nullopt) {
   winrt::Windows::Data::Json::JsonObject lastRunObject;
   InsertStringField(lastRunObject, L"mode", L"update");
   InsertStringField(lastRunObject, L"remoteBase", remoteUrl);
@@ -1159,6 +1161,7 @@ void WriteOtaLastRun(
   } else {
     lastRunObject.Insert(L"rolloutPercent", winrt::Windows::Data::Json::JsonValue::CreateNullValue());
   }
+  InsertOptionalStringField(lastRunObject, L"errorMessage", errorMessage);
   InsertStringField(lastRunObject, L"recordedAt", NowIso8601Utc());
   WriteJsonFile(cacheRoot / L"last-run.json", lastRunObject);
 }
@@ -1181,6 +1184,7 @@ void RunNativeOtaUpdate(
   std::optional<bool> hasUpdateForLastRun;
   std::optional<int32_t> rolloutPercentForLastRun;
   std::optional<std::wstring> channelsJsonForLastRun;
+  std::optional<std::wstring> errorMessageForLastRun = L"Bundle update failed.";
   auto writeFailedLastRun = [&]() {
     WriteOtaLastRun(
         cacheRoot,
@@ -1197,7 +1201,8 @@ void RunNativeOtaUpdate(
         inRolloutForLastRun,
         rolloutPercentForLastRun,
         hasUpdateForLastRun,
-        channelsJsonForLastRun);
+        channelsJsonForLastRun,
+        errorMessageForLastRun);
   };
 
   try {
@@ -1212,6 +1217,7 @@ void RunNativeOtaUpdate(
     auto indexUrl = AppendCacheBustQuery(normalizedRemoteUrl + L"/index.json");
     auto indexPath = cacheRoot / L"index.json";
     if (!DownloadUrlToFile(indexUrl, indexPath, "OTA.Native.DownloadIndex")) {
+      errorMessageForLastRun = L"Failed to download OTA index.";
       WriteOtaLastRun(
           cacheRoot,
           normalizedRemoteUrl,
@@ -1222,13 +1228,19 @@ void RunNativeOtaUpdate(
           std::nullopt,
           std::nullopt,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          errorMessageForLastRun);
       return;
     }
 
     auto indexObject = ReadJsonFile(indexPath);
     if (!indexObject) {
       AppendLog("OTA.Native.IndexParseFailed path=" + ToUtf8(indexPath.wstring()));
+      errorMessageForLastRun = L"Failed to parse OTA index.";
       WriteOtaLastRun(
           cacheRoot,
           normalizedRemoteUrl,
@@ -1239,13 +1251,19 @@ void RunNativeOtaUpdate(
           std::nullopt,
           std::nullopt,
           std::nullopt,
-          std::nullopt);
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          errorMessageForLastRun);
       return;
     }
 
     auto bundlesObject = indexObject->GetNamedObject(L"bundles", nullptr);
     if (!bundlesObject) {
       AppendLog("OTA.Native.IndexMissingBundles");
+      errorMessageForLastRun = L"OTA index is missing bundle metadata.";
       writeFailedLastRun();
       return;
     }
@@ -1260,6 +1278,7 @@ void RunNativeOtaUpdate(
     if (requestedBundleId && !requestedBundleId->empty()) {
       if (!bundlesObject.HasKey(winrt::hstring(*requestedBundleId))) {
         AppendLog("OTA.Native.RequestedBundleMissing bundleId=" + ToUtf8(*requestedBundleId));
+        errorMessageForLastRun = L"Requested bundle is not present in the OTA index.";
         writeFailedLastRun();
         return;
       }
@@ -1276,6 +1295,7 @@ void RunNativeOtaUpdate(
           "OTA.Native.BundleResolutionFailed requestedBundleId=" +
           (requestedBundleId ? ToUtf8(*requestedBundleId) : std::string("null")) +
           " localBundleId=" + (localBundleId ? ToUtf8(*localBundleId) : std::string("null")));
+      errorMessageForLastRun = L"Unable to resolve a bundle to update.";
       writeFailedLastRun();
       return;
     }
@@ -1284,6 +1304,7 @@ void RunNativeOtaUpdate(
     auto bundleInfoObject = bundlesObject.GetNamedObject(winrt::hstring(*resolvedBundleId), nullptr);
     if (!bundleInfoObject) {
       AppendLog("OTA.Native.BundleInfoMissing bundleId=" + ToUtf8(*resolvedBundleId));
+      errorMessageForLastRun = L"OTA bundle metadata is missing.";
       writeFailedLastRun();
       return;
     }
@@ -1330,6 +1351,7 @@ void RunNativeOtaUpdate(
 
     if (latestVersion.empty()) {
       AppendLog("OTA.Native.LatestVersionMissing bundleId=" + ToUtf8(*resolvedBundleId));
+      errorMessageForLastRun = L"Unable to resolve the latest available version.";
       writeFailedLastRun();
       return;
     }
@@ -1341,6 +1363,7 @@ void RunNativeOtaUpdate(
     auto resolvedDeviceId = GetOrCreateOtaDeviceId(cacheRoot);
     if (!resolvedDeviceId) {
       AppendLog("OTA.Native.DeviceIdResolutionFailed");
+      errorMessageForLastRun = L"Unable to resolve the device rollout identifier.";
       writeFailedLastRun();
       return;
     }
@@ -1354,6 +1377,7 @@ void RunNativeOtaUpdate(
       auto rolloutBucket = ComputeRolloutBucket(*resolvedBundleId, *resolvedDeviceId);
       if (!rolloutBucket) {
         AppendLog("OTA.Native.RolloutBucketFailed");
+        errorMessageForLastRun = L"Unable to compute the rollout bucket for this device.";
         writeFailedLastRun();
         return;
       }
@@ -1409,6 +1433,7 @@ void RunNativeOtaUpdate(
             artifactBaseUrl + L"/bundle-manifest.json",
             manifestPath,
             "OTA.Native.DownloadManifest")) {
+      errorMessageForLastRun = L"Failed to download the bundle manifest.";
       writeFailedLastRun();
       return;
     }
@@ -1416,6 +1441,7 @@ void RunNativeOtaUpdate(
     auto manifestObject = ReadJsonFile(manifestPath);
     if (!manifestObject) {
       AppendLog("OTA.Native.ManifestParseFailed path=" + ToUtf8(manifestPath.wstring()));
+      errorMessageForLastRun = L"Failed to parse the bundle manifest.";
       writeFailedLastRun();
       return;
     }
@@ -1424,6 +1450,7 @@ void RunNativeOtaUpdate(
         manifestObject->GetNamedString(L"entryFile", L"").c_str();
     if (entryFileName.empty()) {
       AppendLog("OTA.Native.ManifestMissingEntryFile");
+      errorMessageForLastRun = L"Bundle manifest is missing the entry file.";
       writeFailedLastRun();
       return;
     }
@@ -1434,11 +1461,13 @@ void RunNativeOtaUpdate(
             artifactBaseUrl + L"/" + entryFileName,
             entryFilePath,
             "OTA.Native.DownloadEntryFile")) {
+      errorMessageForLastRun = L"Failed to download the bundle entry file.";
       writeFailedLastRun();
       return;
     }
 
     if (!VerifyBundleChecksum(*manifestObject, entryFilePath)) {
+      errorMessageForLastRun = L"Bundle checksum verification failed.";
       writeFailedLastRun();
       return;
     }
@@ -1458,6 +1487,7 @@ void RunNativeOtaUpdate(
           cacheRoot / *resolvedBundleId / L"previous" / L"windows";
       if (!ReplaceDirectoryWithCopy(std::filesystem::path(hostBundleDir), snapshotDir)) {
         AppendLog("OTA.Native.SnapshotFailed snapshotDir=" + ToUtf8(snapshotDir.wstring()));
+        errorMessageForLastRun = L"Failed to snapshot the previous bundle version.";
         writeFailedLastRun();
         return;
       }
@@ -1476,6 +1506,7 @@ void RunNativeOtaUpdate(
             std::wstring(L"sibling-staging"),
             *resolvedBundleId == L"opapp.companion.main")) {
       AppendLog("OTA.Native.ApplyFailed hostBundleDir=" + ToUtf8(hostBundleDir));
+      errorMessageForLastRun = L"Failed to apply the downloaded bundle.";
       writeFailedLastRun();
       return;
     }
@@ -1691,10 +1722,393 @@ void SpawnWatchdogHeartbeat(std::wstring const &appDirectory) noexcept {
   }
 }
 
+std::optional<std::wstring> ReadOptionalJsonStringField(
+    winrt::Windows::Data::Json::JsonObject const &jsonObject,
+    std::wstring const &key) noexcept {
+  try {
+    if (!jsonObject.HasKey(key)) {
+      return std::nullopt;
+    }
+
+    auto value = jsonObject.GetNamedValue(key);
+    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::String) {
+      return std::nullopt;
+    }
+
+    std::wstring resolved = value.GetString().c_str();
+    return resolved.empty() ? std::nullopt : std::optional<std::wstring>(resolved);
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<bool> ReadOptionalJsonBoolField(
+    winrt::Windows::Data::Json::JsonObject const &jsonObject,
+    std::wstring const &key) noexcept {
+  try {
+    if (!jsonObject.HasKey(key)) {
+      return std::nullopt;
+    }
+
+    auto value = jsonObject.GetNamedValue(key);
+    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Boolean) {
+      return std::nullopt;
+    }
+
+    return value.GetBoolean();
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<int32_t> ReadOptionalJsonIntField(
+    winrt::Windows::Data::Json::JsonObject const &jsonObject,
+    std::wstring const &key) noexcept {
+  try {
+    if (!jsonObject.HasKey(key)) {
+      return std::nullopt;
+    }
+
+    auto value = jsonObject.GetNamedValue(key);
+    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Number) {
+      return std::nullopt;
+    }
+
+    return static_cast<int32_t>(std::llround(value.GetNumber()));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::wstring> ReadOptionalJsonObjectStringify(
+    winrt::Windows::Data::Json::JsonObject const &jsonObject,
+    std::wstring const &key) noexcept {
+  try {
+    if (!jsonObject.HasKey(key)) {
+      return std::nullopt;
+    }
+
+    auto value = jsonObject.GetNamedValue(key);
+    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Object) {
+      return std::nullopt;
+    }
+
+    return std::wstring(value.Stringify().c_str());
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::set<std::wstring> CollectInstalledBundleIds(std::wstring const &appDirectory) noexcept {
+  std::set<std::wstring> bundleIds;
+
+  try {
+    auto mainBundleDir = ResolveHostedBundleDirectory(appDirectory, L"opapp.companion.main");
+    if (ReadBundleManifestEntryFile(mainBundleDir).has_value()) {
+      bundleIds.insert(L"opapp.companion.main");
+    }
+
+    auto bundlesRoot = std::filesystem::path(appDirectory) / L"Bundle" / L"bundles";
+    if (!std::filesystem::exists(bundlesRoot) || !std::filesystem::is_directory(bundlesRoot)) {
+      return bundleIds;
+    }
+
+    for (auto const &entry : std::filesystem::directory_iterator(bundlesRoot)) {
+      if (!entry.is_directory()) {
+        continue;
+      }
+
+      auto bundleRoot = entry.path().wstring();
+      if (!ReadBundleManifestEntryFile(bundleRoot).has_value()) {
+        continue;
+      }
+
+      auto bundleId = ReadBundleManifestBundleId(bundleRoot);
+      if (bundleId && !bundleId->empty()) {
+        bundleIds.insert(*bundleId);
+      } else {
+        bundleIds.insert(entry.path().filename().wstring());
+      }
+    }
+  } catch (...) {
+  }
+
+  return bundleIds;
+}
+
+std::optional<BundleUpdateStatus> ReadLastRunBundleUpdateStatus(
+    std::filesystem::path const &cacheRoot,
+    std::wstring const &bundleId) noexcept {
+  auto lastRunObject = ReadJsonFile(cacheRoot / L"last-run.json");
+  if (!lastRunObject) {
+    return std::nullopt;
+  }
+
+  auto resolvedBundleId = ReadOptionalJsonStringField(*lastRunObject, L"bundleId");
+  if (!resolvedBundleId || *resolvedBundleId != bundleId) {
+    return std::nullopt;
+  }
+
+  BundleUpdateStatus status;
+  status.BundleId = *resolvedBundleId;
+  status.RemoteUrl = ReadOptionalJsonStringField(*lastRunObject, L"remoteBase");
+  status.Channel = ReadOptionalJsonStringField(*lastRunObject, L"channel");
+  status.CurrentVersion = ReadOptionalJsonStringField(*lastRunObject, L"currentVersion");
+  status.LatestVersion = ReadOptionalJsonStringField(*lastRunObject, L"latestVersion");
+  status.Version = ReadOptionalJsonStringField(*lastRunObject, L"version");
+  status.PreviousVersion = ReadOptionalJsonStringField(*lastRunObject, L"previousVersion");
+  status.HasUpdate = ReadOptionalJsonBoolField(*lastRunObject, L"hasUpdate");
+  status.InRollout = ReadOptionalJsonBoolField(*lastRunObject, L"inRollout");
+  status.RolloutPercent = ReadOptionalJsonIntField(*lastRunObject, L"rolloutPercent");
+  status.Status =
+      ReadOptionalJsonStringField(*lastRunObject, L"status").value_or(L"failed");
+  status.StagedAt = ReadOptionalJsonStringField(*lastRunObject, L"stagedAt");
+  status.RecordedAt = ReadOptionalJsonStringField(*lastRunObject, L"recordedAt");
+  status.ChannelsJson = ReadOptionalJsonObjectStringify(*lastRunObject, L"channels");
+  status.ErrorMessage = ReadOptionalJsonStringField(*lastRunObject, L"errorMessage");
+  return status;
+}
+
 } // namespace
 
 std::filesystem::path OpappWindowsHost::ResolveOtaCacheRoot(std::wstring const &appDirectory) {
   return ResolveOtaCacheRootImpl(appDirectory);
+}
+
+std::vector<BundleUpdateStatus> OpappWindowsHost::ResolveBundleUpdateStatuses(
+    std::wstring const &appDirectory,
+    std::vector<std::wstring> const &bundleIds) noexcept {
+  std::vector<BundleUpdateStatus> statuses;
+
+  try {
+    auto cacheRoot = ResolveOtaCacheRootImpl(appDirectory);
+    std::filesystem::create_directories(cacheRoot);
+
+    std::set<std::wstring> knownBundleIds;
+    for (auto const &bundleId : bundleIds) {
+      if (!bundleId.empty()) {
+        knownBundleIds.insert(bundleId);
+      }
+    }
+
+    auto installedBundleIds = CollectInstalledBundleIds(appDirectory);
+    if (knownBundleIds.empty()) {
+      knownBundleIds.insert(installedBundleIds.begin(), installedBundleIds.end());
+    }
+    if (knownBundleIds.empty()) {
+      knownBundleIds.insert(L"opapp.companion.main");
+    }
+
+    auto recordedAt = NowIso8601Utc();
+    auto resolvedChannel = ResolveOtaChannel(cacheRoot, GetOtaChannel());
+    auto buildBaseStatus = [&](std::wstring const &bundleId) {
+      BundleUpdateStatus status;
+      status.BundleId = bundleId;
+      status.Channel = resolvedChannel;
+      status.CurrentVersion =
+          ReadBundleManifestVersion(ResolveHostedBundleDirectory(appDirectory, bundleId));
+      status.Version = status.CurrentVersion;
+      status.RecordedAt = recordedAt;
+      return status;
+    };
+
+    auto remoteUrl = GetOtaRemoteUrl();
+    if (!remoteUrl || remoteUrl->empty()) {
+      for (auto const &bundleId : knownBundleIds) {
+        auto status = buildBaseStatus(bundleId);
+        status.Status = L"remote-unavailable";
+        statuses.push_back(std::move(status));
+      }
+
+      return statuses;
+    }
+
+    auto normalizedRemoteUrl = TrimTrailingSlashes(*remoteUrl);
+    auto indexUrl = AppendCacheBustQuery(normalizedRemoteUrl + L"/index.json");
+    auto indexPath = cacheRoot / L"index.json";
+    auto appendFailureStatuses = [&](std::wstring const &message) {
+      for (auto const &bundleId : knownBundleIds) {
+        auto status = buildBaseStatus(bundleId);
+        status.RemoteUrl = normalizedRemoteUrl;
+        status.Status = L"failed";
+        status.ErrorMessage = message;
+        statuses.push_back(std::move(status));
+      }
+    };
+
+    if (!DownloadUrlToFile(indexUrl, indexPath, "OTA.Native.Status.DownloadIndex")) {
+      appendFailureStatuses(L"Failed to download OTA index.");
+      return statuses;
+    }
+
+    auto indexObject = ReadJsonFile(indexPath);
+    if (!indexObject) {
+      appendFailureStatuses(L"Failed to parse OTA index.");
+      return statuses;
+    }
+
+    auto bundlesObject = indexObject->GetNamedObject(L"bundles", nullptr);
+    if (!bundlesObject) {
+      appendFailureStatuses(L"OTA index is missing bundle metadata.");
+      return statuses;
+    }
+
+    if (bundleIds.empty()) {
+      for (auto const &entry : bundlesObject) {
+        auto bundleId = std::wstring(entry.Key().c_str());
+        if (!bundleId.empty()) {
+          knownBundleIds.insert(bundleId);
+        }
+      }
+    }
+
+    for (auto const &bundleId : knownBundleIds) {
+      auto status = buildBaseStatus(bundleId);
+      status.RemoteUrl = normalizedRemoteUrl;
+
+      auto bundleInfoObject = bundlesObject.GetNamedObject(winrt::hstring(bundleId), nullptr);
+      if (!bundleInfoObject) {
+        status.Status = status.CurrentVersion ? L"local-only" : L"failed";
+        if (!status.CurrentVersion) {
+          status.ErrorMessage = L"Bundle was not found in the OTA index.";
+        }
+        statuses.push_back(std::move(status));
+        continue;
+      }
+
+      auto latestVersionFromVersions = ResolveLatestVersionFromVersions(bundleInfoObject);
+      std::wstring latestVersion;
+      auto tryUseLatestVersion = [&](std::wstring const &candidate) {
+        if (candidate.empty()) {
+          return false;
+        }
+        if (!IsListedVersion(bundleInfoObject, candidate)) {
+          return false;
+        }
+        latestVersion = candidate;
+        return true;
+      };
+
+      if (latestVersionFromVersions) {
+        latestVersion = *latestVersionFromVersions;
+      } else {
+        tryUseLatestVersion(bundleInfoObject.GetNamedString(L"latestVersion", L"").c_str());
+      }
+
+      if (auto channelsObject = bundleInfoObject.GetNamedObject(L"channels", nullptr)) {
+        status.ChannelsJson = channelsObject.Stringify().c_str();
+        std::wstring channelVersion =
+            channelsObject.GetNamedString(winrt::hstring(resolvedChannel), L"").c_str();
+        if (!tryUseLatestVersion(channelVersion) && resolvedChannel != L"stable") {
+          tryUseLatestVersion(channelsObject.GetNamedString(L"stable", L"").c_str());
+        }
+      }
+
+      if (latestVersion.empty()) {
+        status.Status = L"failed";
+        status.ErrorMessage = L"Unable to resolve the latest available version.";
+        statuses.push_back(std::move(status));
+        continue;
+      }
+      status.LatestVersion = latestVersion;
+
+      auto resolvedDeviceId = GetOrCreateOtaDeviceId(cacheRoot);
+      if (!resolvedDeviceId) {
+        status.Status = L"failed";
+        status.ErrorMessage = L"Unable to resolve the device rollout identifier.";
+        statuses.push_back(std::move(status));
+        continue;
+      }
+
+      auto rolloutPercent = ParseRolloutPercent(bundleInfoObject);
+      status.RolloutPercent = rolloutPercent;
+      auto inRollout = true;
+      if (rolloutPercent && *rolloutPercent < 100) {
+        auto rolloutBucket = ComputeRolloutBucket(bundleId, *resolvedDeviceId);
+        if (!rolloutBucket) {
+          status.Status = L"failed";
+          status.ErrorMessage = L"Unable to compute the rollout bucket for this device.";
+          statuses.push_back(std::move(status));
+          continue;
+        }
+
+        inRollout = *rolloutBucket < *rolloutPercent;
+      }
+      status.InRollout = inRollout;
+
+      auto hasUpdate = false;
+      if (inRollout) {
+        hasUpdate = !status.CurrentVersion || latestVersion > *status.CurrentVersion;
+      }
+      status.HasUpdate = hasUpdate;
+
+      if (!inRollout) {
+        status.Status = L"rollout-paused";
+      } else if (hasUpdate) {
+        status.Status = status.CurrentVersion ? L"update-available" : L"install-available";
+      } else {
+        status.Status = L"up-to-date";
+        status.Version = status.CurrentVersion ? status.CurrentVersion : status.LatestVersion;
+      }
+
+      statuses.push_back(std::move(status));
+    }
+  } catch (...) {
+  }
+
+  std::sort(
+      statuses.begin(),
+      statuses.end(),
+      [](BundleUpdateStatus const &left, BundleUpdateStatus const &right) {
+        return left.BundleId < right.BundleId;
+      });
+  return statuses;
+}
+
+std::optional<BundleUpdateStatus> OpappWindowsHost::RunBundleUpdateNow(
+    std::wstring const &appDirectory,
+    std::wstring const &bundleId) noexcept {
+  auto normalizedBundleId = bundleId.empty() ? std::wstring(L"opapp.companion.main") : bundleId;
+  auto hostBundleDir = ResolveHostedBundleDirectory(appDirectory, normalizedBundleId);
+  auto currentVersion = ReadBundleManifestVersion(hostBundleDir);
+  auto cacheRoot = ResolveOtaCacheRootImpl(appDirectory);
+
+  BundleUpdateStatus fallbackStatus;
+  fallbackStatus.BundleId = normalizedBundleId;
+  fallbackStatus.CurrentVersion = currentVersion;
+  fallbackStatus.Version = currentVersion;
+  fallbackStatus.RecordedAt = NowIso8601Utc();
+  fallbackStatus.Channel = GetOtaChannel();
+
+  if (GetOtaDisableNativeUpdate()) {
+    fallbackStatus.Status = L"failed";
+    fallbackStatus.ErrorMessage = L"Native bundle updates are disabled.";
+    return fallbackStatus;
+  }
+
+  auto remoteUrl = GetOtaRemoteUrl();
+  if (!remoteUrl || remoteUrl->empty()) {
+    fallbackStatus.Status = L"remote-unavailable";
+    return fallbackStatus;
+  }
+
+  fallbackStatus.RemoteUrl = TrimTrailingSlashes(*remoteUrl);
+  RunNativeOtaUpdate(
+      appDirectory,
+      *remoteUrl,
+      hostBundleDir,
+      normalizedBundleId,
+      currentVersion,
+      GetOtaChannel(),
+      GetOtaForceUpdate());
+
+  if (auto lastRunStatus = ReadLastRunBundleUpdateStatus(cacheRoot, normalizedBundleId)) {
+    return lastRunStatus;
+  }
+
+  fallbackStatus.Status = L"failed";
+  fallbackStatus.ErrorMessage = L"Bundle update did not produce a result payload.";
+  return fallbackStatus;
 }
 
 bool OpappWindowsHost::EnsureRemoteBundleAvailable(
