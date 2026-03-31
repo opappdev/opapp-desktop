@@ -34,21 +34,48 @@ Window capture entrypoints:
 
 Windows verification entrypoints:
 
+- `npm run dev:windows`: Metro-backed inner loop for seeing the current local
+  dev effect.
+- `npm run verify:windows:dev`: fast Metro-backed self-check after the UI or
+  bridge change feels right.
 - `npm run verify:windows`: full packaged validation.
 - `npm run verify:windows:portable`: full portable validation.
-- `npm run verify:windows:raw-release`: shortest raw `run-windows --release` repro from the native host root; skips verify/smoke wrappers and prints upstream React Native Windows / MSBuild output directly.
-- `npm run verify:windows:dev:window-capture`: Metro-backed `OpappWindowCapture`
-  scenario that opens the lab surface and validates WGC window/client capture.
-- `npm run smoke:windows:window-capture`: packaged `OpappWindowCapture`
-  scenario with the same end-to-end assertions.
-- `npm run verify:windows:ci-fast-fail`: validate-only packaged quick gate for CI.
-- `npm run verify:windows:portable:ci-fast-fail`: validate-only portable quick gate for CI.
-- `npm run verify:windows:preflight`: packaged preflight probe via verify entrypoint.
-- `npm run verify:windows:portable:preflight`: portable preflight probe via verify entrypoint.
+- `npm run smoke:windows`: packaged smoke only.
+- `npm run smoke:windows:portable`: portable smoke only.
+- `npm run verify:windows:raw-release`: shortest raw `run-windows --release`
+  repro from the native host root; skips verify/smoke wrappers and prints
+  upstream React Native Windows / MSBuild output directly.
+- `npm run verify:windows:public:ci`: Windows-hosted public verification
+  wrapper that spins up a local OTA registry fixture, then runs packaged +
+  portable release verify for the minimal public `launcher-provenance` smoke
+  (launcher startup, staged-bundle bridge, cached OTA catalog visibility, and
+  public diagnostics).
+- Specialized cases now stay behind flags instead of extra npm aliases:
+  - packaged validate-only:
+    `npm run verify:windows -- --validate-only`
+  - portable validate-only:
+    `npm run verify:windows:portable -- --validate-only`
+  - packaged preflight:
+    `npm run verify:windows -- --preflight-only`
+  - portable preflight:
+    `npm run verify:windows:portable -- --preflight-only`
+  - packaged quick CI gate:
+    `npm run verify:windows -- --validate-only --scenario=secondary-window --readiness-ms=15000 --smoke-ms=15000 --startup-ms=15000 --scenario-ms=15000`
+  - portable quick CI gate:
+    `npm run verify:windows:portable -- --validate-only --scenario=secondary-window --readiness-ms=15000 --smoke-ms=15000 --startup-ms=15000 --scenario-ms=15000`
+  - packaged CI preflight:
+    `npm run verify:windows -- --preflight-only --scenario=secondary-window --readiness-ms=15000 --smoke-ms=15000 --startup-ms=15000 --scenario-ms=15000`
+  - portable CI preflight:
+    `npm run verify:windows:portable -- --preflight-only --scenario=secondary-window --readiness-ms=15000 --smoke-ms=15000 --startup-ms=15000 --scenario-ms=15000`
+  - Metro `OpappWindowCapture` lab:
+    `npm run verify:windows:dev -- --scenario=window-capture-current-window`
+  - packaged `OpappWindowCapture` smoke:
+    `npm run smoke:windows -- --scenario=window-capture-current-window`
+  - packaged surface-model verify:
+    `npm run verify:windows -- --include-secondary-window`
+  - portable surface-model verify:
+    `npm run verify:windows:portable -- --include-secondary-window`
 - use `npm run verify:windows:raw-release` after preflight has already identified the blocker and you need the unwrapped upstream restore/build failure for the Windows host itself.
-- `npm run verify:windows:ci-preflight`: packaged preflight probe with CI-oriented timeout args.
-- `npm run verify:windows:portable:ci-preflight`: portable preflight probe with CI-oriented timeout args.
-- `npm run verify:windows:public:ci`: Windows-hosted public verification wrapper that spins up a local OTA registry fixture, then runs packaged + portable release verify for the minimal public `launcher-provenance` smoke (launcher startup, staged-bundle bridge, cached OTA catalog visibility, and public diagnostics).
 - `scripts/resolve-public-frontend-ref.mjs`: resolves the pinned public
   `opapp-frontend` checkout ref from `tooling/config/opapp-frontend-ref.txt`
   unless `OPAPP_FRONTEND_REF` explicitly overrides it.
@@ -79,10 +106,14 @@ Windows verification entrypoints:
   preserved when `index.json` exposes them, that `up-to-date` runs must not
   report staged metadata, and that `--ota-expected-status=failed` runs only pass
   when failure records keep the resolved remote metadata they already learned.
-- `npm run smoke:windows:validate`: validate direct release-smoke packaged args only.
-- `npm run smoke:windows:portable:validate`: validate direct release-smoke portable args only.
-- `npm run smoke:windows:preflight`: packaged release preflight probe only (no bundle/build/launch).
-- `npm run smoke:windows:portable:preflight`: portable release preflight probe only.
+- `npm run smoke:windows -- --validate-only`: validate direct release-smoke
+  packaged args only.
+- `npm run smoke:windows:portable -- --validate-only`: validate direct
+  release-smoke portable args only.
+- `npm run smoke:windows -- --preflight-only`: packaged release preflight
+  probe only (no bundle/build/launch).
+- `npm run smoke:windows:portable -- --preflight-only`: portable release
+  preflight probe only.
 - `node ./tooling/scripts/windows-release-smoke.mjs --validate-only ...`: validate direct smoke args without running bundle/build/launch.
 - `node ./tooling/scripts/windows-release-smoke.mjs --preflight-only ...`: collect release probe diagnostics without running bundle/build/launch.
 - preflight now fails fast with `local-sdk-acl-denied` when `C:\Users\<user>\AppData\Local\Microsoft SDKs` exists but is unreadable; this surfaces the real MSBuild blocker before bundle/build/deploy.

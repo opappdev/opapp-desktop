@@ -32,42 +32,43 @@ style: `desktop: ...`.
 
 ## Validation
 
-Use `npm run verify:windows` as the default packaged-app validation. It runs the
-frontend typecheck first, then the packaged Windows smoke.
+High-frequency commands:
 
-Use `npm run verify:windows:portable` when you want to validate the direct-run
-Windows release directory artifact (`x64\\Release\\OpappWindowsHost.exe` plus its
-sibling runtime files and `Bundle/`).
+- `npm run dev:windows`: Metro-backed inner loop. This is the default command
+  to see the local dev effect.
+- `npm run verify:windows:dev`: fast Metro-backed self-check after the UI feels
+  right.
+- `npm run verify:windows`: packaged/prod-like Windows verify. This is the
+  default command to see the local prod effect.
+- `npm run verify:windows:portable`: direct-run release directory verify for
+  `x64\\Release\\OpappWindowsHost.exe` plus its sibling runtime files and
+  `Bundle/`.
+- `npm run smoke:windows` / `npm run smoke:windows:portable`: smoke-only
+  variants when you do not need the frontend typecheck wrapper.
+- `npm run report:windows:release-probe`,
+  `npm run report:windows:release-probe:json`, and
+  `npm run report:windows:release-probe:fail`: release toolchain diagnosis
+  without launching the smoke harness.
 
-Use `npm run smoke:windows:release` when you only need the packaged host smoke.
+Advanced validation now stays behind flags instead of extra npm aliases:
 
-Use `npm run smoke:windows:portable` when you only need the portable/direct-exe
-smoke.
+- packaged validate-only: `npm run verify:windows -- --validate-only`
+- portable preflight-only:
+  `npm run verify:windows:portable -- --preflight-only`
+- multi-surface packaged verify:
+  `npm run verify:windows -- --include-secondary-window`
+- Metro `OpappWindowCapture` lab:
+  `npm run verify:windows:dev -- --scenario=window-capture-current-window`
+- packaged `OpappWindowCapture` smoke:
+  `npm run smoke:windows -- --scenario=window-capture-current-window`
+- packaged surface-model smoke:
+  `npm run smoke:windows -- --scenario=secondary-window`
+- portable surface-model smoke:
+  `npm run smoke:windows:portable -- --scenario=secondary-window`
 
-Use `npm run report:windows:release-probe` when you need the release toolchain
-blocker diagnosis without running the smoke harness. It reuses the same
-preflight probe and suggested next actions as `verify:windows:*:preflight`.
-
-Use `npm run report:windows:release-probe:json` when you want the same release
-probe as machine-readable JSON for automation or handoff notes.
-
-Use `npm run report:windows:release-probe:fail` when you want the standalone
-probe to exit non-zero whenever it detects a blocking release-toolchain issue.
-
-All three report commands also accept `-- --output=<path>` to write the text or
+All release-probe commands accept `-- --output=<path>` to write the text or
 JSON payload to a file. In restricted sessions, prefer `%TEMP%` or another
 known writable directory if repo-root temp folders still hit `EPERM`.
-
-Use `npm run verify:windows:dev:window-capture` or
-`npm run smoke:windows:window-capture` when you need to validate the native
-`OpappWindowCapture` bridge end to end.
-
-Use `npm run verify:windows:surface-model` or `npm run smoke:windows:surface-model`
-only when validating multi-surface or multi-window behavior.
-
-Use `npm run verify:windows:portable:surface-model` or
-`npm run smoke:windows:portable:surface-model` only when validating the same
-surface model behavior through the direct-run release directory artifact.
 
 All smoke entrypoints clean up the launched Windows host process before
 returning.

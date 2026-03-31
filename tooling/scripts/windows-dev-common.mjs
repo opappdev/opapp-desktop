@@ -59,18 +59,22 @@ function pipeStream(stream, label) {
   });
 }
 
-export function spawnCmd(command, {cwd, env, label}) {
-  return createCmdChild(command, {cwd, env, label});
+export function spawnCmd(command, {cwd, env, label, stdinMode = 'ignore'}) {
+  return createCmdChild(command, {cwd, env, label, stdinMode});
 }
 
-function createCmdChild(command, {cwd, env, label}) {
+function resolvePipeStdio(stdinMode = 'ignore') {
+  return [stdinMode === 'inherit' ? 'inherit' : 'ignore', 'pipe', 'pipe'];
+}
+
+function createCmdChild(command, {cwd, env, label, stdinMode = 'ignore'}) {
   const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
     cwd,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: resolvePipeStdio(stdinMode),
     windowsHide: false,
   });
-  child.opappSpawnMode = 'cmd.exe (stdio=pipe)';
+  child.opappSpawnMode = `cmd.exe (stdin=${stdinMode}, stdio=pipe)`;
 
   pipeStream(child.stdout, label);
   pipeStream(child.stderr, label);
@@ -80,9 +84,9 @@ function createCmdChild(command, {cwd, env, label}) {
 function createDirectChild(
   command,
   args,
-  {cwd, env, label, stdioMode = 'pipe', outputCapturePath = null},
+  {cwd, env, label, stdioMode = 'pipe', outputCapturePath = null, stdinMode = 'ignore'},
 ) {
-  let stdio = ['ignore', 'pipe', 'pipe'];
+  let stdio = resolvePipeStdio(stdinMode);
   let captureFd = null;
   if (stdioMode === 'ignore') {
     stdio = 'ignore';
@@ -102,7 +106,7 @@ function createDirectChild(
       stdio,
       windowsHide: false,
     });
-    child.opappSpawnMode = `${command} (stdio=${stdioMode})`;
+    child.opappSpawnMode = `${command} (stdin=${stdinMode}, stdio=${stdioMode})`;
 
     if (stdioMode === 'pipe') {
       pipeStream(child.stdout, label);
@@ -207,7 +211,10 @@ function isRetriableSpawnError(error) {
   return error?.code === 'EPERM' || message.includes('spawn EPERM');
 }
 
-async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath = null}) {
+async function spawnDirectFallback(
+  command,
+  {cwd, env, label, outputCapturePath = null, stdinMode = 'ignore'},
+) {
   const tokens = parseCommandTokens(command);
   if (tokens.length === 0) {
     return null;
@@ -250,6 +257,7 @@ async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath 
         env,
         label,
         stdioMode: 'pipe',
+        stdinMode,
       });
       await waitForChildSpawn(child);
       log(
@@ -275,6 +283,7 @@ async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath 
                 label,
                 stdioMode: 'capture-file',
                 outputCapturePath: captureCandidatePath,
+                stdinMode,
               });
               await waitForChildSpawn(child);
               log(
@@ -313,6 +322,7 @@ async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath 
             env,
             label,
             stdioMode: 'ignore',
+            stdinMode,
           });
           await waitForChildSpawn(child);
           log(
@@ -346,12 +356,20 @@ async function spawnDirectFallback(command, {cwd, env, label, outputCapturePath 
 
 export async function spawnCmdAsync(
   command,
-  {cwd, env, label, maxAttempts = 3, retryDelayMs = 1500, outputCapturePath = null},
+  {
+    cwd,
+    env,
+    label,
+    maxAttempts = 3,
+    retryDelayMs = 1500,
+    outputCapturePath = null,
+    stdinMode = 'ignore',
+  },
 ) {
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const child = createCmdChild(command, {cwd, env, label});
+      const child = createCmdChild(command, {cwd, env, label, stdinMode});
       await waitForChildSpawn(child);
       return child;
     } catch (error) {
@@ -365,6 +383,7 @@ export async function spawnCmdAsync(
           env,
           label,
           outputCapturePath,
+          stdinMode,
         });
         if (fallbackChild) {
           return fallbackChild;
@@ -560,7 +579,7 @@ export function describeMetroOutcome(outcome) {
   }
 }
 
-export async function ensureMetroRunning({reuseIfReady = true, label = 'metro'} = {}) {
+export async function ensureMetroRunning({reuseIfReady = true, label = 'metro', stdinMode = 'ignore'} = {}) {
   if (reuseIfReady && (await isMetroReady())) {
     const outcome = {child: null, reused: true, action: 'reused-existing', killedPids: []};
     log(label, describeMetroOutcome(outcome));
@@ -585,6 +604,7 @@ export async function ensureMetroRunning({reuseIfReady = true, label = 'metro'} 
       cwd: frontendRoot,
       env: buildFrontendEnv(),
       label,
+      stdinMode,
     });
 
     const result = await waitForMetroReadyOrExit(child, 60000);
@@ -604,6 +624,7 @@ export async function ensureMetroRunning({reuseIfReady = true, label = 'metro'} 
     cwd: frontendRoot,
     env: buildFrontendEnv(),
     label,
+    stdinMode,
   });
 
   const result = await waitForMetroReadyOrExit(child, 60000);

@@ -2,8 +2,10 @@ import {unlink} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {
+  clearDevSessions,
   clearHostLaunchConfig,
   clearHostLog,
+  devSessionsPath,
   detectDeterministicCommandFailureFromHost,
   describeMetroOutcome,
   ensureMetroRunning,
@@ -20,6 +22,7 @@ import {
   stopHostProcesses,
   tempRoot,
   waitForHostLogMarkers,
+  writeHostLaunchConfig,
 } from './windows-dev-common.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 
@@ -48,6 +51,8 @@ function cleanup() {
     return;
   }
   cleanedUp = true;
+  clearDevSessions();
+  clearHostLaunchConfig();
   stopHostProcesses();
   if (hostChild?.pid) {
     killProcessTree(hostChild.pid);
@@ -67,6 +72,10 @@ async function clearOptionalFile(targetPath) {
   } catch {
     // ignore
   }
+}
+
+function buildDevLaunchConfig() {
+  return `[sessions]\npath=${devSessionsPath}\n`;
 }
 
 function describeHostWaitFailure(result, phase, hostChild, timeoutMs = defaultReadinessTimeoutMs) {
@@ -112,8 +121,9 @@ async function buildHostWaitFailureMessage(
 }
 
 async function launchHost({label = 'host'} = {}) {
-  clearHostLaunchConfig();
+  clearDevSessions();
   clearHostLog();
+  await writeHostLaunchConfig(buildDevLaunchConfig());
   await clearOptionalFile(hostCommandOutputPath);
   stopHostProcesses();
   if (hostChild?.pid) {
@@ -166,7 +176,11 @@ async function restartMetroAndHost(reason) {
       metroChild = null;
     }
 
-    const metro = await ensureMetroRunning({reuseIfReady: false, label: 'metro'});
+    const metro = await ensureMetroRunning({
+      reuseIfReady: false,
+      label: 'metro',
+      stdinMode: 'inherit',
+    });
     metroChild = metro.child;
     log('dev', `Metro restart outcome: ${describeMetroOutcome(metro)}`);
     await launchHost({label: 'host'});
@@ -212,12 +226,23 @@ async function runHealthCheck() {
 
 async function main() {
   ensureWorkspaceTemp();
+  clearDevSessions();
   clearHostLaunchConfig();
   stopHostProcesses();
 
-  const metro = await ensureMetroRunning({reuseIfReady: true, label: 'metro'});
+  const metro = await ensureMetroRunning({
+    reuseIfReady: true,
+    label: 'metro',
+    stdinMode: 'inherit',
+  });
   metroChild = metro.child;
   log('dev', `Metro startup outcome: ${describeMetroOutcome(metro)}`);
+  if (!metroChild && metro.reused) {
+    log(
+      'dev',
+      'Metro was reused from another process. Interactive Metro shortcuts such as `j` stay attached to the terminal that started that Metro instance.',
+    );
+  }
   await launchHost({label: 'host'});
 
   log('dev', 'Windows host connected to Metro. Fast Refresh is ready.');

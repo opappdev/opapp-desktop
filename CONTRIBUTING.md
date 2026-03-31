@@ -13,6 +13,8 @@ explicitly says otherwise.
 1. Install Node.js 24 and enable Corepack.
 2. Run `corepack pnpm install`.
 3. Use `npm run dev:windows` for the Metro-backed Windows inner loop.
+4. Use `npm run verify:windows:dev` for the fast dev check and
+   `npm run verify:windows` for the packaged/prod-like result.
 
 ## Before opening a pull request
 
