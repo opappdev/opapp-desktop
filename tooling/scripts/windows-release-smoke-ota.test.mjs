@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   assertLauncherRemoteCatalogDiagnostics,
+  extractOtaSpawnHostBundleDir,
   extractFrontendDiagnosticEvents,
   resolveExpectedOtaLatestVersion,
   validateOtaLastRunRecord,
@@ -81,6 +82,27 @@ function createPrivateStartupTargetScenario() {
   });
 
   return privateScenarios['startup-target-private-bundle'];
+}
+
+function createRestorePrivateSessionScenario() {
+  const privateScenarios = createPrivateSmokeScenarios({
+    assertPersistedSessionContains() {},
+    assertPersistedSessionHasSurfaceId() {},
+    assertPersistedSessionLacksSurfaceId() {},
+    assertRectMatchesPolicy: async () => {},
+    buildPersistedSessionFile: () => '',
+    commonSuccessMarkers: [],
+    companionStartupTargetPath: 'C:\\temp\\companion-startup-target.json',
+    defaultPreferences: {},
+    fileExists: async () => false,
+    normalizeLogContents: value => value.replace(/\r/g, ''),
+    preferencesPath: 'C:\\temp\\preferences.ini',
+    readFile: async () => '',
+    sessionsPath: 'C:\\temp\\sessions.ini',
+    writeFile: async () => {},
+  });
+
+  return privateScenarios['restore-private-bundle-session'];
 }
 
 function createLauncherDiagnosticLog() {
@@ -260,6 +282,48 @@ test('extractFrontendDiagnosticEvents collects launcher remote catalog diagnosti
 
   assert.equal(events.length, 4);
   assert.equal(events[1]?.bundleId, 'opapp.hbr.workspace');
+});
+
+test('extractOtaSpawnHostBundleDir stops before trailing OTA fields', () => {
+  const hostBundleDir = extractOtaSpawnHostBundleDir(
+    [
+      '[2026-03-29 16:15:29.656] OTA.SpawnUpdateProcess',
+      'remoteUrl=https://r2.opapp.dev',
+      'bundleId=opapp.companion.main',
+      'hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle',
+      'currentVersion=0.1.3',
+      'channel=nightly',
+      'force=true',
+    ].join(' '),
+  );
+
+  assert.equal(
+    hostBundleDir,
+    'D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle',
+  );
+});
+
+test('extractOtaSpawnHostBundleDir selects the last spawn for the requested bundle id', () => {
+  const logContents = [
+    '[2026-03-29 16:15:29.656] OTA.SpawnUpdateProcess remoteUrl=https://r2.opapp.dev bundleId=opapp.companion.main hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle currentVersion=0.1.3 channel=nightly force=true',
+    '[2026-03-29 16:15:30.656] OTA.SpawnUpdateProcess remoteUrl=https://r2.opapp.dev bundleId=opapp.hbr.workspace hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace channel=nightly force=true',
+  ].join('\n');
+
+  assert.equal(
+    extractOtaSpawnHostBundleDir(logContents, 'opapp.hbr.workspace'),
+    'D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace',
+  );
+});
+
+test('extractOtaSpawnHostBundleDir falls back to OTA.EnsureBundle.Start for private bundle hydration', () => {
+  const logContents = [
+    '[2026-03-31 04:21:04.297] OTA.EnsureBundle.Start bundleId=opapp.hbr.workspace hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace currentVersion=null',
+  ].join('\n');
+
+  assert.equal(
+    extractOtaSpawnHostBundleDir(logContents, 'opapp.hbr.workspace'),
+    'D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace',
+  );
 });
 
 test('assertLauncherRemoteCatalogDiagnostics accepts matching launcher provenance snapshots', () => {
@@ -616,7 +680,7 @@ test(
   const logContents = [
     '[2026-03-29 16:15:29.795] NativeLogger[1] [frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
     '[2026-03-29 16:15:29.798] BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main root=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace file=index.private.windows',
-    '[2026-03-29 16:15:29.656] OTA.SpawnUpdateProcess remoteUrl=https://r2.opapp.dev hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle currentVersion=0.1.2 channel=nightly force=true',
+    '[2026-03-29 16:15:29.656] OTA.EnsureBundle.Start bundleId=opapp.hbr.workspace hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle currentVersion=null',
     '[2026-03-29 16:15:30.220] OTA.Native.DownloadManifest.OK url=https://r2.opapp.dev/opapp.companion.main/0.1.2/windows/bundle-manifest.json target=D:\\code\\opappdev\\opapp-desktop\\.ota-cache\\opapp.companion.main\\0.1.2\\windows\\bundle-manifest.json',
   ].join('\n');
 
@@ -634,9 +698,26 @@ test(
   const logContents = [
     '[2026-03-29 16:15:29.795] NativeLogger[1] [frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
     '[2026-03-29 16:15:29.798] BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main root=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace file=index.private.windows',
-    '[2026-03-29 16:15:29.656] OTA.SpawnUpdateProcess remoteUrl=https://r2.opapp.dev hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace currentVersion=0.1.2 channel=nightly force=true',
+    '[2026-03-29 16:15:29.656] OTA.SpawnUpdateProcess remoteUrl=https://r2.opapp.dev bundleId=opapp.hbr.workspace hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace currentVersion=0.1.2 channel=nightly force=true',
     '[2026-03-29 16:15:30.220] OTA.Native.DownloadManifest.OK url=https://r2.opapp.dev/opapp.hbr.workspace/0.1.2/windows/bundle-manifest.json target=D:\\code\\opappdev\\opapp-desktop\\.ota-cache\\opapp.hbr.workspace\\0.1.2\\windows\\bundle-manifest.json',
     '[2026-03-29 16:15:30.520] OTA.Native.Updated bundleId=opapp.hbr.workspace version=0.1.2',
+  ].join('\n');
+
+  await assert.doesNotReject(scenario.verifyLog(logContents));
+});
+
+test(
+  'restore private session smoke accepts main-bundle OTA when the private bundle is already staged',
+  {skip: !hasPrivateSmokeScenarios},
+  async () => {
+  const scenario = createRestorePrivateSessionScenario();
+  const logContents = [
+    '[2026-03-31 04:28:38.215] OTA.SpawnUpdateProcess remoteUrl=https://r2.opapp.dev bundleId=opapp.companion.main hostBundleDir=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle currentVersion=0.1.3 channel=nightly force=true',
+    '[2026-03-31 04:28:38.350] NativeLogger[1] [frontend-companion] restored-session-auto-open bundle=opapp.companion.main window=window.main surface=hbr.challenge-advisor presentation=current-window targetBundle=opapp.hbr.workspace',
+    '[2026-03-31 04:28:38.354] BundleSwitchPrepared window=window.main bundle=opapp.hbr.workspace surface=hbr.challenge-advisor policy=main root=D:\\code\\opappdev\\opapp-desktop\\hosts\\windows-host\\windows\\OpappWindowsHost.Package\\bin\\x64\\Release\\AppX\\OpappWindowsHost\\Bundle\\bundles\\opapp.hbr.workspace file=index.private.windows',
+    '[2026-03-31 04:28:38.355] BundleSwitchReloadRequested window=window.main bundle=opapp.hbr.workspace',
+    '[2026-03-31 04:28:38.387] NativeLogger[1] [frontend-companion] render bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
+    '[2026-03-31 04:28:38.447] NativeLogger[1] [frontend-companion] mounted bundle=opapp.hbr.workspace window=window.main surface=hbr.challenge-advisor policy=main',
   ].join('\n');
 
   await assert.doesNotReject(scenario.verifyLog(logContents));

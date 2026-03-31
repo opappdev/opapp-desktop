@@ -268,16 +268,36 @@ function extractRuntimeBundleRoot(logContents) {
   );
 }
 
-function extractOtaSpawnHostBundleDir(logContents) {
-  return (
-    normalizeLogContents(logContents).match(
-      /OTA\.SpawnUpdateProcess [^\r\n]*hostBundleDir=([^\r\n]+)/,
-    )?.[1] ?? null
-  )?.trim() ?? null;
+function extractOtaTargetEvents(logContents) {
+  return normalizeLogContents(logContents)
+    .split('\n')
+    .filter(
+      line =>
+        line.includes('OTA.SpawnUpdateProcess ') || line.includes('OTA.EnsureBundle.Start '),
+    )
+    .map(line => ({
+      bundleId: line.match(/\bbundleId=([^\r\n ]+)/)?.[1] ?? null,
+      hostBundleDir:
+        line.match(/\bhostBundleDir=(.+?)(?= currentVersion=| channel=| force=|$)/)?.[1]?.trim() ??
+        null,
+      currentVersion: line.match(/\bcurrentVersion=([^\r\n ]+)/)?.[1] ?? null,
+    }));
 }
 
-function extractOtaLoggedCurrentVersion(logContents) {
-  return normalizeLogContents(logContents).match(/OTA\.SpawnUpdateProcess .* currentVersion=([^\r\n ]+)/)?.[1] ?? null;
+export function extractOtaSpawnHostBundleDir(logContents, bundleId = null) {
+  const matches = extractOtaTargetEvents(logContents).filter(
+    event => event.hostBundleDir && (bundleId === null || event.bundleId === bundleId),
+  );
+
+  return matches.at(-1)?.hostBundleDir ?? null;
+}
+
+function extractOtaLoggedCurrentVersion(logContents, bundleId = null) {
+  const matches = extractOtaTargetEvents(logContents).filter(
+    event => event.currentVersion && (bundleId === null || event.bundleId === bundleId),
+  );
+
+  return matches.at(-1)?.currentVersion ?? null;
 }
 
 async function snapshotOptionalTextFile(filePath) {
@@ -3053,13 +3073,6 @@ async function verifyOtaSideEffects(logContents) {
 
   const normalizedLog = normalizeLogContents(logContents);
   const runtimeBundleRoot = extractRuntimeBundleRoot(logContents);
-  const otaSpawnHostBundleDir = extractOtaSpawnHostBundleDir(logContents);
-  const expectedOtaHostBundleDir = otaSpawnHostBundleDir ?? runtimeBundleRoot;
-  if (!otaSpawnHostBundleDir && !normalizedLog.includes(`hostBundleDir=${runtimeBundleRoot}`)) {
-    throw new Error(
-      `Windows release smoke failed: ota spawn log did not target the runtime bundle root '${runtimeBundleRoot}'.`,
-    );
-  }
 
   await waitForMarkers(['OTA.SpawnUpdateProcess.OK'], {
     timeoutMs: scenarioTimeoutMs,
@@ -3097,7 +3110,19 @@ async function verifyOtaSideEffects(logContents) {
     }
   }
 
-  const loggedCurrentVersion = extractOtaLoggedCurrentVersion(logContents);
+  const resolvedLoggedBundleId =
+    typeof otaLastRun.bundleId === 'string' && otaLastRun.bundleId ? otaLastRun.bundleId : null;
+  const otaSpawnHostBundleDir = extractOtaSpawnHostBundleDir(logContents, resolvedLoggedBundleId);
+  const expectedOtaHostBundleDir = otaSpawnHostBundleDir ?? runtimeBundleRoot;
+  if (
+    !otaSpawnHostBundleDir &&
+    !normalizedLog.includes(`hostBundleDir=${runtimeBundleRoot}`)
+  ) {
+    throw new Error(
+      `Windows release smoke failed: ota spawn log did not target the runtime bundle root '${runtimeBundleRoot}'.`,
+    );
+  }
+  const loggedCurrentVersion = extractOtaLoggedCurrentVersion(logContents, resolvedLoggedBundleId);
   let expectedChannels;
   let expectedLatestVersion;
   if (typeof otaLastRun.bundleId === 'string' && otaLastRun.bundleId) {

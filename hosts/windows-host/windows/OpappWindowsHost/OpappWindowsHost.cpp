@@ -678,6 +678,14 @@ bool DownloadUrlToFile(
   return true;
 }
 
+std::wstring AppendCacheBustQuery(std::wstring const &url) {
+  auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::system_clock::now().time_since_epoch())
+                   .count();
+  auto separator = url.find(L'?') == std::wstring::npos ? L'?' : L'&';
+  return url + separator + L"opappCacheBust=" + std::to_wstring(nowMs);
+}
+
 std::optional<std::string> ComputeSha256Hex(std::filesystem::path const &filePath) {
   BCRYPT_ALG_HANDLE algorithmHandle = nullptr;
   BCRYPT_HASH_HANDLE hashHandle = nullptr;
@@ -1201,7 +1209,7 @@ void RunNativeOtaUpdate(
     AppendLog("OTA.Native.CacheRoot path=" + ToUtf8(cacheRoot.wstring()));
     AppendLog("OTA.Native.Channel value=" + ToUtf8(resolvedChannel));
 
-    auto indexUrl = normalizedRemoteUrl + L"/index.json";
+    auto indexUrl = AppendCacheBustQuery(normalizedRemoteUrl + L"/index.json");
     auto indexPath = cacheRoot / L"index.json";
     if (!DownloadUrlToFile(indexUrl, indexPath, "OTA.Native.DownloadIndex")) {
       WriteOtaLastRun(
