@@ -106,6 +106,12 @@ const publicScenarios = [
 
 const publicOptionalScenarios = [
   {
+    name: 'companion-chat-current-window-server-error',
+    description:
+      'packaged auto-open companion chat surfaces an expected native SSE HTTP error in the current window',
+    args: ['--scenario=companion-chat-current-window-server-error', '--skip-prepare'],
+  },
+  {
     name: 'launcher-provenance',
     description:
       'launcher renders public remote-catalog diagnostics for staged provenance, local-only residue, and version drift',

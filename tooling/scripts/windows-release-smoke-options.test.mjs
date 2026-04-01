@@ -71,6 +71,14 @@ test('windows-release-smoke validate-only accepts explicit companion chat curren
   assert.equal(result.status, 0);
 });
 
+test('windows-release-smoke validate-only accepts explicit companion chat server-error scenario', () => {
+  const result = runSmokeValidateOnly([
+    '--scenario=companion-chat-current-window-server-error',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
 test('windows-release-smoke validate-only accepts explicit startup-target launcher scenario', () => {
   const result = runSmokeValidateOnly(['--scenario=startup-target-main-launcher']);
 

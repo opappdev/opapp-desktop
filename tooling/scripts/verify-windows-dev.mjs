@@ -256,63 +256,84 @@ const defaultScenarios = [
       await state?.close?.();
     },
     async verifyLog(logContents, state) {
-      assertLogContainsRegex(
+      assertCompanionChatCurrentWindowStayedOnChildBundle(
         logContents,
-        /\[frontend-companion\] session bundle=opapp\.companion\.chat window=window\.main tabs=1 active=tab:companion\.chat\.main:1 entries=tab:companion\.chat\.main:1:companion\.chat\.main/i,
-        'companion chat dev smoke did not persist the chat child bundle session in the main window.',
+        'companion chat dev smoke',
       );
-      if (
-        normalizeLogContents(logContents).includes(
-          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
-        )
-      ) {
-        throw new Error(
-          'Windows dev verify failed: companion chat dev smoke still rendered the main companion bundle instead of launching the chat child bundle directly.',
-        );
-      }
-
       assertLogDoesNotContain(
         logContents,
         '[frontend-llm-chat] dev-smoke-failed',
         'companion chat dev smoke logged a dev-smoke failure marker.',
       );
-
-      if (!state || state.requests.length !== 1) {
-        throw new Error(
-          `Windows dev verify failed: companion chat dev smoke expected exactly 1 SSE request, received ${state?.requests.length ?? 0}.`,
-        );
-      }
-
-      const request = state.requests[0];
-      if (request?.body?.model !== 'fixture-model') {
-        throw new Error(
-          'Windows dev verify failed: companion chat dev smoke did not send the fixture model to the local SSE server.',
-        );
-      }
-
-      if (request?.body?.stream !== true) {
-        throw new Error(
-          'Windows dev verify failed: companion chat dev smoke did not request stream=true from the local SSE server.',
-        );
-      }
-
-      const lastMessage = request?.body?.messages?.at?.(-1);
-      if (
-        !lastMessage ||
-        lastMessage.role !== 'user' ||
-        lastMessage.content !== 'Reply with exactly CHAT_TEST_OK and nothing else.'
-      ) {
-        throw new Error(
-          'Windows dev verify failed: companion chat dev smoke did not send the expected user prompt to the local SSE server.',
-        );
-      }
+      assertCompanionChatSmokeRequestCaptured(state, 'companion chat dev smoke');
     },
     successSummary:
       'Metro-backed Windows host completed direct chat child-bundle startup smoke.',
   },
 ];
 
-const scenarioByName = new Map(defaultScenarios.map(scenario => [scenario.name, scenario]));
+const optionalScenarios = [
+  {
+    name: 'companion-chat-current-window-server-error',
+    description:
+      'Metro-backed Windows host surfaces an expected native SSE HTTP error from the chat child bundle in the main window',
+    smokeMarkers: [
+      'Runtime=Metro entryFile=index.chat',
+      `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
+      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      '[frontend-llm-chat] dev-smoke-start',
+      '[frontend-llm-chat] dev-smoke-error message=EventSource requires HTTP 200, received 500.',
+      '[frontend-llm-chat] dev-smoke-complete',
+    ],
+    async prepareState() {
+      return await startCompanionChatSmokeServer({
+        scenario: 'llm-chat-native-sse-server-error',
+      });
+    },
+    buildLaunchConfig(state) {
+      return {
+        main: {
+          surface: companionChatSurfaceId,
+          policy: 'main',
+          'entry-file': 'index.chat',
+        },
+        mainProps: {
+          'dev-smoke-scenario': state?.scenario ?? 'llm-chat-native-sse-server-error',
+          'dev-smoke-base-url': state?.baseUrl ?? '',
+        },
+      };
+    },
+    async cleanupState(state) {
+      await state?.close?.();
+    },
+    async verifyLog(logContents, state) {
+      assertCompanionChatCurrentWindowStayedOnChildBundle(
+        logContents,
+        'companion chat server-error dev smoke',
+      );
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-failed',
+        'companion chat server-error dev smoke logged an unexpected failure marker.',
+      );
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-open',
+        'companion chat server-error dev smoke unexpectedly accepted an HTTP error response as an open SSE stream.',
+      );
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat server-error dev smoke',
+      );
+    },
+    successSummary:
+      'Metro-backed Windows host completed direct chat child-bundle server-error smoke.',
+  },
+];
+
+const allScenarios = [...defaultScenarios, ...optionalScenarios];
+const scenarioByName = new Map(allScenarios.map(scenario => [scenario.name, scenario]));
 
 function normalizeLogContents(logContents) {
   return logContents.replace(/\r/g, '');
@@ -337,6 +358,64 @@ function extractLoggedPath(logContents, regex, reason) {
   }
 
   return match[1].trim();
+}
+
+function assertCompanionChatCurrentWindowStayedOnChildBundle(
+  logContents,
+  failureLabel,
+) {
+  assertLogContainsRegex(
+    logContents,
+    /\[frontend-companion\] session bundle=opapp\.companion\.chat window=window\.main tabs=1 active=tab:companion\.chat\.main:1 entries=tab:companion\.chat\.main:1:companion\.chat\.main/i,
+    `${failureLabel} did not persist the chat child bundle session in the main window.`,
+  );
+  if (
+    normalizeLogContents(logContents).includes(
+      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
+    )
+  ) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} still rendered the main companion bundle instead of launching the chat child bundle directly.`,
+    );
+  }
+}
+
+function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {
+  if (!state || state.requests.length !== 1) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} expected exactly 1 SSE request, received ${state?.requests.length ?? 0}.`,
+    );
+  }
+
+  const request = state.requests[0];
+  if (request?.method !== 'POST') {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not send a POST request to the local SSE server.`,
+    );
+  }
+
+  if (request?.body?.model !== state.model) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not send the fixture model to the local SSE server.`,
+    );
+  }
+
+  if (request?.body?.stream !== true) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not request stream=true from the local SSE server.`,
+    );
+  }
+
+  const lastMessage = request?.body?.messages?.at?.(-1);
+  if (
+    !lastMessage ||
+    lastMessage.role !== 'user' ||
+    lastMessage.content !== state.requestPrompt
+  ) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not send the expected user prompt to the local SSE server.`,
+    );
+  }
 }
 
 function escapePowerShellSingleQuotedString(value) {

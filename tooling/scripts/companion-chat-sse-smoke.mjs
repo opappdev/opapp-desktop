@@ -2,6 +2,11 @@ import {createServer} from 'node:http';
 
 const companionChatSmokeAssistantText = 'CHAT_TEST_OK';
 const companionChatSmokeScenario = 'llm-chat-native-sse';
+const companionChatSmokeServerErrorScenario = 'llm-chat-native-sse-server-error';
+const companionChatSmokeRequestPrompt =
+  'Reply with exactly CHAT_TEST_OK and nothing else.';
+const companionChatSmokeExpectedServerErrorText =
+  'EventSource requires HTTP 200, received 500.';
 
 function createSseDataBlock(payload) {
   return `data: ${payload}\n\n`;
@@ -105,6 +110,19 @@ const companionChatSmokeSseChunks = [
   companionChatSmokeSseStream.slice(611),
 ];
 
+const companionChatSmokeFixtures = {
+  [companionChatSmokeScenario]: {
+    assistantText: companionChatSmokeAssistantText,
+    requestPrompt: companionChatSmokeRequestPrompt,
+    responseKind: 'success',
+  },
+  [companionChatSmokeServerErrorScenario]: {
+    expectedErrorText: companionChatSmokeExpectedServerErrorText,
+    requestPrompt: companionChatSmokeRequestPrompt,
+    responseKind: 'server-error',
+  },
+};
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -118,7 +136,16 @@ async function readRequestBody(req) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export async function startCompanionChatSmokeServer() {
+export async function startCompanionChatSmokeServer(options = {}) {
+  const scenario =
+    typeof options?.scenario === 'string' && options.scenario.trim()
+      ? options.scenario.trim()
+      : companionChatSmokeScenario;
+  const fixture = companionChatSmokeFixtures[scenario];
+  if (!fixture) {
+    throw new Error(`Unknown companion chat smoke scenario: ${scenario}`);
+  }
+
   const requests = [];
   const server = createServer(async (req, res) => {
     const requestUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -144,6 +171,15 @@ export async function startCompanionChatSmokeServer() {
       path: normalizedPath,
       body,
     });
+
+    if (fixture.responseKind === 'server-error') {
+      res.writeHead(500, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      res.end('companion chat native SSE smoke fixture error');
+      return;
+    }
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -172,7 +208,7 @@ export async function startCompanionChatSmokeServer() {
   }
 
   return {
-    assistantText: companionChatSmokeAssistantText,
+    assistantText: fixture.assistantText ?? null,
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: async () => {
       await new Promise((resolve, reject) => {
@@ -185,8 +221,11 @@ export async function startCompanionChatSmokeServer() {
         });
       });
     },
+    expectedErrorText: fixture.expectedErrorText ?? null,
+    model: 'fixture-model',
+    requestPrompt: fixture.requestPrompt,
     requests,
-    scenario: companionChatSmokeScenario,
+    scenario,
     server,
   };
 }

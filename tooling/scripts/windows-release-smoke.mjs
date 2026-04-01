@@ -362,6 +362,29 @@ async function createCompanionChatOtaFixture() {
   };
 }
 
+async function createCompanionChatCurrentWindowState(options = {}) {
+  const chatSmoke = await startCompanionChatSmokeServer(options);
+  try {
+    if (otaRemoteArg) {
+      return {
+        chatSmoke,
+      };
+    }
+
+    return {
+      ...(await createCompanionChatOtaFixture()),
+      chatSmoke,
+    };
+  } catch (error) {
+    try {
+      await chatSmoke.close?.();
+    } catch {
+      // Best-effort cleanup for a fixture that never made it into scenario state.
+    }
+    throw error;
+  }
+}
+
 function assertLogDoesNotContain(logContents, marker, reason) {
   if (normalizeLogContents(logContents).includes(marker)) {
     throw new Error(`Windows release smoke failed: ${reason}`);
@@ -381,6 +404,111 @@ function extractLoggedPath(logContents, regex, reason) {
   }
 
   return match[1].trim();
+}
+
+function buildCompanionChatCurrentWindowLaunchConfig(state) {
+  return {
+    initialOpen: {
+      surface: companionChatSurfaceId,
+      bundle: companionChatBundleId,
+      policy: 'main',
+      presentation: 'current-window',
+    },
+    initialOpenProps: {
+      'dev-smoke-scenario': state?.chatSmoke?.scenario ?? 'llm-chat-native-sse',
+      'dev-smoke-base-url': state?.chatSmoke?.baseUrl ?? '',
+    },
+  };
+}
+
+async function cleanupCompanionChatCurrentWindowState(state) {
+  await state?.chatSmoke?.close?.();
+
+  if (state?.server) {
+    await closeRegistryServer(state.server);
+  }
+
+  if (state?.registryRoot) {
+    await removeIfPresent(state.registryRoot);
+  }
+}
+
+function assertCompanionChatCurrentWindowStayedOnChildBundle(
+  logContents,
+  failureLabel,
+) {
+  const normalized = normalizeLogContents(logContents);
+
+  if (!normalized.includes(companionChatBundleRootMarker)) {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} did not point the host at the staged chat child bundle root.`,
+    );
+  }
+
+  assertLogDoesNotContain(
+    logContents,
+    `[frontend-companion] surface-fallback bundle=opapp.companion.main requested=${companionChatSurfaceId} rendered=companion.main`,
+    `${failureLabel} still fell back through the main companion surface.`,
+  );
+}
+
+function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {
+  if (!state?.chatSmoke || state.chatSmoke.requests.length !== 1) {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} expected exactly 1 SSE request, received ${state?.chatSmoke?.requests.length ?? 0}.`,
+    );
+  }
+
+  const request = state.chatSmoke.requests[0];
+  if (request?.method !== 'POST') {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} did not send a POST request to the local SSE server.`,
+    );
+  }
+
+  if (request?.body?.model !== state.chatSmoke.model) {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} did not send the fixture model to the local SSE server.`,
+    );
+  }
+
+  if (request?.body?.stream !== true) {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} did not request stream=true from the local SSE server.`,
+    );
+  }
+
+  const lastMessage = request?.body?.messages?.at?.(-1);
+  if (
+    !lastMessage ||
+    lastMessage.role !== 'user' ||
+    lastMessage.content !== state.chatSmoke.requestPrompt
+  ) {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} did not send the expected user prompt to the local SSE server.`,
+    );
+  }
+}
+
+function verifyCompanionChatPersistedSession(sessionFile, failureLabel) {
+  if (!sessionFile.includes('[session]') || !sessionFile.includes('window.main=')) {
+    throw new Error(
+      `Windows release smoke failed: main window session was not persisted during ${failureLabel}.`,
+    );
+  }
+
+  assertPersistedSessionHasSurfaceId(
+    sessionFile,
+    'window.main',
+    companionChatSurfaceId,
+    `${failureLabel} did not persist the chat surface in the main window session.`,
+  );
+  assertPersistedSessionContains(
+    sessionFile,
+    'window.main',
+    companionChatBundleId,
+    `${failureLabel} did not persist the chat bundle id in the main window session.`,
+  );
 }
 
 function extractRuntimeBundleRoot(logContents) {
@@ -1950,32 +2078,9 @@ const publicSmokeScenarios = {
     description: 'auto-open companion chat in the current window and switch into the child chat bundle',
     preferences: defaultPreferences,
     usesLocalOtaRemoteFixture: true,
-    buildLaunchConfig(state) {
-      return {
-        initialOpen: {
-          surface: companionChatSurfaceId,
-          bundle: companionChatBundleId,
-          policy: 'main',
-          presentation: 'current-window',
-        },
-        initialOpenProps: {
-          'dev-smoke-scenario': state?.chatSmoke?.scenario ?? 'llm-chat-native-sse',
-          'dev-smoke-base-url': state?.chatSmoke?.baseUrl ?? '',
-        },
-      };
-    },
+    buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
     async prepareState() {
-      const chatSmoke = await startCompanionChatSmokeServer();
-      if (otaRemoteArg) {
-        return {
-          chatSmoke,
-        };
-      }
-
-      return {
-        ...(await createCompanionChatOtaFixture()),
-        chatSmoke,
-      };
+      return await createCompanionChatCurrentWindowState();
     },
     successMarkers: [
       ...commonSuccessMarkers,
@@ -1989,86 +2094,78 @@ const publicSmokeScenarios = {
       '[frontend-llm-chat] dev-smoke-assistant-text text=CHAT_TEST_OK',
       '[frontend-llm-chat] dev-smoke-complete',
     ],
-    async cleanupState(state) {
-      await state?.chatSmoke?.close?.();
-
-      if (state?.server) {
-        await closeRegistryServer(state.server);
-      }
-
-      if (state?.registryRoot) {
-        await removeIfPresent(state.registryRoot);
-      }
-    },
+    cleanupState: cleanupCompanionChatCurrentWindowState,
     async verifyLog(logContents, state) {
-      const normalized = normalizeLogContents(logContents);
-
-      if (!normalized.includes(companionChatBundleRootMarker)) {
-        throw new Error(
-          'Windows release smoke failed: companion chat current-window flow did not point the host at the staged chat child bundle root.',
-        );
-      }
-
-      assertLogDoesNotContain(
+      assertCompanionChatCurrentWindowStayedOnChildBundle(
         logContents,
-        `[frontend-companion] surface-fallback bundle=opapp.companion.main requested=${companionChatSurfaceId} rendered=companion.main`,
-        'companion chat current-window flow still fell back through the main companion surface.',
+        'companion chat current-window flow',
       );
-
       assertLogDoesNotContain(
         logContents,
         '[frontend-llm-chat] dev-smoke-failed',
         'companion chat current-window flow logged a dev-smoke failure marker.',
       );
-
-      if (!state?.chatSmoke || state.chatSmoke.requests.length !== 1) {
-        throw new Error(
-          `Windows release smoke failed: companion chat current-window flow expected exactly 1 SSE request, received ${state?.chatSmoke?.requests.length ?? 0}.`,
-        );
-      }
-
-      const request = state.chatSmoke.requests[0];
-      if (request?.body?.model !== 'fixture-model') {
-        throw new Error(
-          'Windows release smoke failed: companion chat current-window flow did not send the fixture model to the local SSE server.',
-        );
-      }
-
-      if (request?.body?.stream !== true) {
-        throw new Error(
-          'Windows release smoke failed: companion chat current-window flow did not request stream=true from the local SSE server.',
-        );
-      }
-
-      const lastMessage = request?.body?.messages?.at?.(-1);
-      if (
-        !lastMessage ||
-        lastMessage.role !== 'user' ||
-        lastMessage.content !== 'Reply with exactly CHAT_TEST_OK and nothing else.'
-      ) {
-        throw new Error(
-          'Windows release smoke failed: companion chat current-window flow did not send the expected user prompt to the local SSE server.',
-        );
-      }
-
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat current-window flow',
+      );
       await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
     },
     verifyPersistedSession(sessionFile) {
-      if (!sessionFile.includes('[session]') || !sessionFile.includes('window.main=')) {
-        throw new Error('Windows release smoke failed: main window session was not persisted during companion chat smoke.');
-      }
-
-      assertPersistedSessionHasSurfaceId(
+      verifyCompanionChatPersistedSession(
         sessionFile,
-        'window.main',
-        companionChatSurfaceId,
-        'companion chat current-window flow did not persist the chat surface in the main window session.',
+        'companion chat current-window flow',
       );
-      assertPersistedSessionContains(
+    },
+  },
+  'companion-chat-current-window-server-error': {
+    description:
+      'auto-open companion chat in the current window and surface an expected native SSE HTTP error from the child chat bundle',
+    preferences: defaultPreferences,
+    usesLocalOtaRemoteFixture: true,
+    buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
+    async prepareState() {
+      return await createCompanionChatCurrentWindowState({
+        scenario: 'llm-chat-native-sse-server-error',
+      });
+    },
+    successMarkers: [
+      ...commonSuccessMarkers,
+      `InitialOpenSurface surface=${companionChatSurfaceId} policy=main presentation=current-window`,
+      `BundleSwitchPrepared window=window.main bundle=${companionChatBundleId} surface=${companionChatSurfaceId} policy=main`,
+      `BundleSwitchReloadRequested window=window.main bundle=${companionChatBundleId}`,
+      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      '[frontend-llm-chat] dev-smoke-start',
+      '[frontend-llm-chat] dev-smoke-error message=EventSource requires HTTP 200, received 500.',
+      '[frontend-llm-chat] dev-smoke-complete',
+    ],
+    cleanupState: cleanupCompanionChatCurrentWindowState,
+    async verifyLog(logContents, state) {
+      assertCompanionChatCurrentWindowStayedOnChildBundle(
+        logContents,
+        'companion chat current-window server-error flow',
+      );
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-failed',
+        'companion chat current-window server-error flow logged an unexpected dev-smoke failure marker.',
+      );
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-open',
+        'companion chat current-window server-error flow unexpectedly accepted an HTTP error response as an open SSE stream.',
+      );
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat current-window server-error flow',
+      );
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      verifyCompanionChatPersistedSession(
         sessionFile,
-        'window.main',
-        companionChatBundleId,
-        'companion chat current-window flow did not persist the chat bundle id in the main window session.',
+        'companion chat current-window server-error flow',
       );
     },
   },
