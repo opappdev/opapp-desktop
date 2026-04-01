@@ -2350,14 +2350,21 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
             " source=" + ToUtf8(otaBundleTarget.Source) +
             " hostBundleDir=" + ToUtf8(hostBundleDir));
 #endif
-        SpawnOtaUpdateProcess(
-            std::wstring(appDirectory),
-            *otaRemoteUrl,
-            otaBundleTarget.BundleId,
-            hostBundleDir,
-            currentBundleVersion,
-            GetOtaChannel(),
-            GetOtaForceUpdate());
+        if (!otaBundleTarget.BundleId.empty() &&
+            otaBundleTarget.BundleId != L"opapp.companion.main") {
+          AppendLog(
+              "OTA.SpawnUpdateProcess.Skipped reason=non-main-bundle-startup-target bundleId=" +
+              ToUtf8(otaBundleTarget.BundleId));
+        } else {
+          SpawnOtaUpdateProcess(
+              std::wstring(appDirectory),
+              *otaRemoteUrl,
+              otaBundleTarget.BundleId,
+              hostBundleDir,
+              currentBundleVersion,
+              GetOtaChannel(),
+              GetOtaForceUpdate());
+        }
       }
     }
 

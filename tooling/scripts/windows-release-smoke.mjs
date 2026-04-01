@@ -3074,11 +3074,13 @@ async function verifyOtaSideEffects(logContents) {
   const normalizedLog = normalizeLogContents(logContents);
   const runtimeBundleRoot = extractRuntimeBundleRoot(logContents);
 
-  await waitForMarkers(['OTA.SpawnUpdateProcess.OK'], {
-    timeoutMs: scenarioTimeoutMs,
-    phaseLabel: 'ota spawn marker',
-    timeoutFlag: '--scenario-ms',
-  });
+  if (!normalizedLog.includes('OTA.EnsureBundle.Start bundleId=')) {
+    await waitForMarkers(['OTA.SpawnUpdateProcess.OK'], {
+      timeoutMs: scenarioTimeoutMs,
+      phaseLabel: 'ota spawn marker',
+      timeoutFlag: '--scenario-ms',
+    });
+  }
 
   const otaLastRun = await waitForOtaLastRun({
     timeoutMs: scenarioTimeoutMs,

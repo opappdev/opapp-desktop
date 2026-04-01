@@ -62,6 +62,9 @@
     <ClCompile Include="WindowCaptureModule.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="OpappSseModule.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="FilesystemModule.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
