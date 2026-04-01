@@ -5,12 +5,16 @@ const companionChatSmokeScenario = 'llm-chat-native-sse';
 const companionChatSmokeServerErrorScenario = 'llm-chat-native-sse-server-error';
 const companionChatSmokeMalformedChunkScenario =
   'llm-chat-native-sse-malformed-chunk';
+const companionChatSmokeStreamAbortScenario =
+  'llm-chat-native-sse-stream-abort';
 const companionChatSmokeRequestPrompt =
   'Reply with exactly CHAT_TEST_OK and nothing else.';
 const companionChatSmokeExpectedServerErrorText =
   'EventSource requires HTTP 200, received 500.';
 const companionChatSmokeExpectedMalformedChunkErrorText =
   '服务端返回了无法解析的流式 JSON 数据。';
+const companionChatSmokeExpectedStreamAbortErrorText =
+  '服务端在完成流式响应前中断了连接。';
 
 function createSseDataBlock(payload) {
   return `data: ${payload}\n\n`;
@@ -112,6 +116,10 @@ const companionChatSmokeMalformedChunkSseStream = [
   createSseDataBlock(companionChatSmokePayloads[0]),
   createSseDataBlock('{"choices":[}'),
 ].join('');
+const companionChatSmokeStreamAbortSseStream = companionChatSmokePayloads
+  .slice(0, 4)
+  .map(createSseDataBlock)
+  .join('');
 
 function splitSmokeSseChunks(stream) {
   const firstSplit = Math.max(1, Math.floor(stream.length / 3));
@@ -126,6 +134,9 @@ function splitSmokeSseChunks(stream) {
 const companionChatSmokeSseChunks = splitSmokeSseChunks(companionChatSmokeSseStream);
 const companionChatSmokeMalformedChunkSseChunks = splitSmokeSseChunks(
   companionChatSmokeMalformedChunkSseStream,
+);
+const companionChatSmokeStreamAbortSseChunks = splitSmokeSseChunks(
+  companionChatSmokeStreamAbortSseStream,
 );
 
 const companionChatSmokeFixtures = {
@@ -145,6 +156,12 @@ const companionChatSmokeFixtures = {
     requestPrompt: companionChatSmokeRequestPrompt,
     responseKind: 'malformed-chunk',
     responseChunks: companionChatSmokeMalformedChunkSseChunks,
+  },
+  [companionChatSmokeStreamAbortScenario]: {
+    expectedErrorText: companionChatSmokeExpectedStreamAbortErrorText,
+    requestPrompt: companionChatSmokeRequestPrompt,
+    responseKind: 'stream-abort',
+    responseChunks: companionChatSmokeStreamAbortSseChunks,
   },
 };
 

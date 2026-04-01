@@ -288,6 +288,7 @@ const optionalScenarios = [
       `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
       '[frontend-llm-chat] dev-smoke-start',
       '[frontend-llm-chat] dev-smoke-error message=EventSource requires HTTP 200, received 500.',
+      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=EventSource requires HTTP 200, received 500.',
       '[frontend-llm-chat] dev-smoke-complete',
     ],
     async prepareState() {
@@ -327,6 +328,10 @@ const optionalScenarios = [
         'companion chat server-error dev smoke unexpectedly accepted an HTTP error response as an open SSE stream.',
       );
       assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat server-error dev smoke',
+      );
+      await assertCompanionChatSmokeErrorUiState(
         state,
         'companion chat server-error dev smoke',
       );
@@ -392,6 +397,64 @@ const optionalScenarios = [
     },
     successSummary:
       'Metro-backed Windows host completed direct chat child-bundle malformed-chunk smoke.',
+  },
+  {
+    name: 'companion-chat-current-window-stream-abort',
+    description:
+      'Metro-backed Windows host surfaces an interrupted native SSE stream error from the chat child bundle in the main window and records the rendered error state',
+    smokeMarkers: [
+      'Runtime=Metro entryFile=index.chat',
+      `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
+      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      '[frontend-llm-chat] dev-smoke-start',
+      '[frontend-llm-chat] dev-smoke-open',
+      '[frontend-llm-chat] dev-smoke-error message=服务端在完成流式响应前中断了连接。',
+      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=服务端在完成流式响应前中断了连接。',
+      '[frontend-llm-chat] dev-smoke-complete',
+    ],
+    async prepareState() {
+      return await prepareCompanionChatSmokeState({
+        scenario: 'llm-chat-native-sse-stream-abort',
+      });
+    },
+    buildLaunchConfig(state) {
+      return {
+        main: {
+          surface: companionChatSurfaceId,
+          policy: 'main',
+          'entry-file': 'index.chat',
+        },
+        mainProps: {
+          'dev-smoke-scenario': state?.scenario ?? 'llm-chat-native-sse-stream-abort',
+          'dev-smoke-base-url': state?.baseUrl ?? '',
+        },
+      };
+    },
+    async cleanupState(state) {
+      await cleanupCompanionChatSmokeState(state);
+    },
+    async verifyLog(logContents, state) {
+      assertCompanionChatCurrentWindowStayedOnChildBundle(
+        logContents,
+        'companion chat stream-abort dev smoke',
+      );
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-failed',
+        'companion chat stream-abort dev smoke logged an unexpected failure marker.',
+      );
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat stream-abort dev smoke',
+      );
+      await assertCompanionChatSmokeErrorUiState(
+        state,
+        'companion chat stream-abort dev smoke',
+      );
+    },
+    successSummary:
+      'Metro-backed Windows host completed direct chat child-bundle stream-abort smoke.',
   },
 ];
 

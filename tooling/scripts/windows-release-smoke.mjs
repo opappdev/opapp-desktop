@@ -2172,6 +2172,7 @@ const publicSmokeScenarios = {
     description: 'auto-open companion chat in the current window and switch into the child chat bundle',
     preferences: defaultPreferences,
     usesLocalOtaRemoteFixture: true,
+    skipNativeOtaVerification: true,
     buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
     async prepareState() {
       return await createCompanionChatCurrentWindowState();
@@ -2217,6 +2218,7 @@ const publicSmokeScenarios = {
       'auto-open companion chat in the current window and surface an expected native SSE HTTP error from the child chat bundle',
     preferences: defaultPreferences,
     usesLocalOtaRemoteFixture: true,
+    skipNativeOtaVerification: true,
     buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
     async prepareState() {
       return await createCompanionChatCurrentWindowState({
@@ -2232,6 +2234,7 @@ const publicSmokeScenarios = {
       `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
       '[frontend-llm-chat] dev-smoke-start',
       '[frontend-llm-chat] dev-smoke-error message=EventSource requires HTTP 200, received 500.',
+      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=EventSource requires HTTP 200, received 500.',
       '[frontend-llm-chat] dev-smoke-complete',
     ],
     cleanupState: cleanupCompanionChatCurrentWindowState,
@@ -2254,6 +2257,10 @@ const publicSmokeScenarios = {
         state,
         'companion chat current-window server-error flow',
       );
+      await assertCompanionChatSmokeErrorUiState(
+        state,
+        'companion chat current-window server-error flow',
+      );
       await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
     },
     verifyPersistedSession(sessionFile) {
@@ -2268,6 +2275,7 @@ const publicSmokeScenarios = {
       'auto-open companion chat in the current window and surface an expected malformed SSE chunk error from the child chat bundle',
     preferences: defaultPreferences,
     usesLocalOtaRemoteFixture: true,
+    skipNativeOtaVerification: true,
     buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
     async prepareState() {
       return await createCompanionChatCurrentWindowState({
@@ -2312,6 +2320,59 @@ const publicSmokeScenarios = {
       verifyCompanionChatPersistedSession(
         sessionFile,
         'companion chat current-window malformed-chunk flow',
+      );
+    },
+  },
+  'companion-chat-current-window-stream-abort': {
+    description:
+      'auto-open companion chat in the current window and surface an expected interrupted SSE stream error from the child chat bundle',
+    preferences: defaultPreferences,
+    usesLocalOtaRemoteFixture: true,
+    skipNativeOtaVerification: true,
+    buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
+    async prepareState() {
+      return await createCompanionChatCurrentWindowState({
+        scenario: 'llm-chat-native-sse-stream-abort',
+      });
+    },
+    successMarkers: [
+      ...commonSuccessMarkers,
+      `InitialOpenSurface surface=${companionChatSurfaceId} policy=main presentation=current-window`,
+      `BundleSwitchPrepared window=window.main bundle=${companionChatBundleId} surface=${companionChatSurfaceId} policy=main`,
+      `BundleSwitchReloadRequested window=window.main bundle=${companionChatBundleId}`,
+      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      '[frontend-llm-chat] dev-smoke-start',
+      '[frontend-llm-chat] dev-smoke-open',
+      '[frontend-llm-chat] dev-smoke-error message=服务端在完成流式响应前中断了连接。',
+      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=服务端在完成流式响应前中断了连接。',
+      '[frontend-llm-chat] dev-smoke-complete',
+    ],
+    cleanupState: cleanupCompanionChatCurrentWindowState,
+    async verifyLog(logContents, state) {
+      assertCompanionChatCurrentWindowStayedOnChildBundle(
+        logContents,
+        'companion chat current-window stream-abort flow',
+      );
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-failed',
+        'companion chat current-window stream-abort flow logged an unexpected dev-smoke failure marker.',
+      );
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat current-window stream-abort flow',
+      );
+      await assertCompanionChatSmokeErrorUiState(
+        state,
+        'companion chat current-window stream-abort flow',
+      );
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      verifyCompanionChatPersistedSession(
+        sessionFile,
+        'companion chat current-window stream-abort flow',
       );
     },
   },

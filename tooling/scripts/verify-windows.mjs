@@ -121,6 +121,15 @@ const publicOptionalScenarios = [
     ],
   },
   {
+    name: 'companion-chat-current-window-stream-abort',
+    description:
+      'packaged auto-open companion chat surfaces an expected interrupted native SSE stream error in the current window',
+    args: [
+      '--scenario=companion-chat-current-window-stream-abort',
+      '--skip-prepare',
+    ],
+  },
+  {
     name: 'launcher-provenance',
     description:
       'launcher renders public remote-catalog diagnostics for staged provenance, local-only residue, and version drift',

@@ -75,6 +75,14 @@ test('verify-windows validate-only accepts companion chat malformed-chunk scenar
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts companion chat stream-abort scenario filter', () => {
+  const result = runVerifyValidateOnly([
+    '--scenario=companion-chat-current-window-stream-abort',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only accepts startup-target launcher scenario filter', () => {
   const result = runVerifyValidateOnly(['--scenario=startup-target-main-launcher']);
 
