@@ -93,6 +93,11 @@ const publicScenarios = [
     args: ['--scenario=window-capture-current-window', '--skip-prepare'],
   },
   {
+    name: 'companion-chat-current-window',
+    description: 'packaged auto-open companion chat switches the current window into the child chat bundle',
+    args: ['--scenario=companion-chat-current-window', '--skip-prepare'],
+  },
+  {
     name: 'secondary-window',
     description: 'startup detached settings window surface-model check',
     args: ['--scenario=secondary-window'],

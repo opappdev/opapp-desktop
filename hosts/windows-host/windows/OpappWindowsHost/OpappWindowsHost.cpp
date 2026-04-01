@@ -2295,9 +2295,10 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
         std::string("Runtime=Bundle root=") + ToUtf8(settings.BundleRootPath()) + " file=" +
         ToUtf8(settings.JavaScriptBundleFile()));
 #else
-    settings.JavaScriptBundleFile(L"index");
+    auto jsBundleFile = GetMainJavaScriptEntryFile().value_or(L"index");
+    settings.JavaScriptBundleFile(jsBundleFile.c_str());
     settings.UseFastRefresh(true);
-    AppendLog("Runtime=Metro");
+    AppendLog("Runtime=Metro entryFile=" + ToUtf8(jsBundleFile));
 #endif
 #if _DEBUG
     settings.UseDirectDebugger(true);

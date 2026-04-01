@@ -35,9 +35,15 @@ test('verify-windows-dev validate-only accepts explicit view-shot scenario filte
   assert.equal(result.status, 0);
 });
 
+test('verify-windows-dev validate-only accepts explicit companion chat scenario filters', () => {
+  const result = runVerifyDevValidateOnly(['--scenario=companion-chat-current-window']);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows-dev validate-only accepts comma-separated scenario filters', () => {
   const result = runVerifyDevValidateOnly([
-    '--scenario=view-shot-current-window,window-capture-current-window',
+    '--scenario=view-shot-current-window,companion-chat-current-window',
   ]);
 
   assert.equal(result.status, 0);

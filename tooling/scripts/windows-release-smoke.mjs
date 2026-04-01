@@ -1,10 +1,11 @@
 import {spawnSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
+import {createServer} from 'node:http';
 import {cp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {SiblingArtifactSource} from './artifact-source.mjs';
+import {publishToLocalRegistry, SiblingArtifactSource} from './artifact-source.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {
   classifyRunWindowsFailure,
@@ -46,6 +47,8 @@ const otaExpectedStatusToken = process.argv.find(argument => argument.startsWith
 const otaExpectedStatusArg = otaExpectedStatusToken?.split('=').slice(1).join('=');
 const supportedOtaExpectedStatuses = new Set(['success', 'updated', 'up-to-date', 'failed']);
 const otaExpectedStatus = otaExpectedStatusArg ?? 'success';
+let activeOtaRemoteArg = otaRemoteArg ?? null;
+let activeOtaChannelArg = otaChannelArg ?? null;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
@@ -118,6 +121,10 @@ const launcherProvenanceFixture = {
     sourceKind: 'local-build',
   },
 };
+const companionChatBundleId = 'opapp.companion.chat';
+const companionChatSurfaceId = 'companion.chat.main';
+const companionChatBundleRootMarker = `Bundle\\bundles\\${companionChatBundleId}`;
+const frontendChatBundleRoot = path.join(frontendBundleRoot, 'bundles', companionChatBundleId);
 const launchMode = resolveLaunchModeOrThrow();
 const timeoutDefaults = loadTimeoutDefaultsForLaunch({
   argv: process.argv,
@@ -237,6 +244,120 @@ function clamp(value, min, max) {
 
 function normalizeLogContents(logContents) {
   return logContents.replace(/\r/g, '');
+}
+
+async function startRegistryServer(registryRoot) {
+  return await new Promise((resolve, reject) => {
+    const server = createServer(async (req, res) => {
+      try {
+        const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+        const requestPath = decodeURIComponent(url.pathname);
+        const filePath = path.join(registryRoot, ...requestPath.split('/').filter(Boolean));
+        const normalizedRoot = path.resolve(registryRoot);
+        const normalizedFilePath = path.resolve(filePath);
+        if (
+          normalizedFilePath !== normalizedRoot &&
+          !normalizedFilePath.startsWith(`${normalizedRoot}${path.sep}`)
+        ) {
+          res.writeHead(403);
+          res.end('forbidden');
+          return;
+        }
+
+        const body = await readFile(normalizedFilePath);
+        const contentType = normalizedFilePath.endsWith('.json')
+          ? 'application/json'
+          : 'application/octet-stream';
+        res.writeHead(200, {'Content-Type': contentType});
+        res.end(body);
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          res.writeHead(404);
+          res.end('not found');
+          return;
+        }
+
+        res.writeHead(500);
+        res.end(error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close();
+        reject(new Error('Registry server did not expose a numeric port.'));
+        return;
+      }
+
+      resolve({
+        server,
+        baseUrl: `http://127.0.0.1:${address.port}`,
+      });
+    });
+    server.on('error', reject);
+  });
+}
+
+async function closeRegistryServer(server) {
+  if (!server) {
+    return;
+  }
+
+  await new Promise((resolve, reject) => {
+    server.close(error => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(undefined);
+    });
+  });
+}
+
+async function createCompanionChatOtaFixture() {
+  const registryRoot = path.join(tempRoot, `opapp-companion-chat-ota-${Date.now()}`);
+  await mkdir(registryRoot, {recursive: true});
+  await publishToLocalRegistry(frontendChatBundleRoot, registryRoot);
+
+  const chatManifest = JSON.parse(
+    await readFile(path.join(frontendChatBundleRoot, 'bundle-manifest.json'), 'utf8'),
+  );
+  const version = chatManifest?.version;
+  if (typeof version !== 'string' || !version) {
+    throw new Error('Windows release smoke failed: companion chat bundle manifest is missing version.');
+  }
+
+  await writeFile(
+    path.join(registryRoot, 'index.json'),
+    JSON.stringify(
+      {
+        bundles: {
+          [companionChatBundleId]: {
+            latestVersion: version,
+            versions: [version],
+            channels: {
+              nightly: version,
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+
+  const serverHandle = await startRegistryServer(registryRoot);
+  log(`companion chat ota fixture registryRoot=${registryRoot}`);
+  log(`companion chat ota fixture remote=${serverHandle.baseUrl}`);
+  return {
+    registryRoot,
+    server: serverHandle.server,
+    otaRemoteBaseUrl: serverHandle.baseUrl,
+    otaChannel: 'nightly',
+  };
 }
 
 function assertLogDoesNotContain(logContents, marker, reason) {
@@ -1823,6 +1944,77 @@ const publicSmokeScenarios = {
       );
     },
   },
+  'companion-chat-current-window': {
+    description: 'auto-open companion chat in the current window and switch into the child chat bundle',
+    preferences: defaultPreferences,
+    usesLocalOtaRemoteFixture: true,
+    launchConfig: {
+      initialOpen: {
+        surface: companionChatSurfaceId,
+        bundle: companionChatBundleId,
+        policy: 'main',
+        presentation: 'current-window',
+      },
+    },
+    async prepareState() {
+      if (otaRemoteArg) {
+        return null;
+      }
+
+      return await createCompanionChatOtaFixture();
+    },
+    successMarkers: [
+      ...commonSuccessMarkers,
+      `InitialOpenSurface surface=${companionChatSurfaceId} policy=main presentation=current-window`,
+      `BundleSwitchPrepared window=window.main bundle=${companionChatBundleId} surface=${companionChatSurfaceId} policy=main`,
+      `BundleSwitchReloadRequested window=window.main bundle=${companionChatBundleId}`,
+      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+    ],
+    async cleanupState(state) {
+      if (!state) {
+        return;
+      }
+
+      await closeRegistryServer(state.server);
+      await removeIfPresent(state.registryRoot);
+    },
+    async verifyLog(logContents) {
+      const normalized = normalizeLogContents(logContents);
+
+      if (!normalized.includes(companionChatBundleRootMarker)) {
+        throw new Error(
+          'Windows release smoke failed: companion chat current-window flow did not point the host at the staged chat child bundle root.',
+        );
+      }
+
+      assertLogDoesNotContain(
+        logContents,
+        `[frontend-companion] surface-fallback bundle=opapp.companion.main requested=${companionChatSurfaceId} rendered=companion.main`,
+        'companion chat current-window flow still fell back through the main companion surface.',
+      );
+
+      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
+    },
+    verifyPersistedSession(sessionFile) {
+      if (!sessionFile.includes('[session]') || !sessionFile.includes('window.main=')) {
+        throw new Error('Windows release smoke failed: main window session was not persisted during companion chat smoke.');
+      }
+
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        companionChatSurfaceId,
+        'companion chat current-window flow did not persist the chat surface in the main window session.',
+      );
+      assertPersistedSessionContains(
+        sessionFile,
+        'window.main',
+        companionChatBundleId,
+        'companion chat current-window flow did not persist the chat bundle id in the main window session.',
+      );
+    },
+  },
   'secondary-window': {
     description: 'startup main window plus detached settings window',
     preferences: defaultPreferences,
@@ -2491,13 +2683,13 @@ function buildLaunchConfig() {
     content += `\n[secondary]\nsurface=${scenario.launchConfig.secondary.surface}\npolicy=${scenario.launchConfig.secondary.policy}\n`;
   }
 
-  if (otaRemoteArg || scenario.launchConfig.disableNativeOtaUpdate) {
+  if (activeOtaRemoteArg || scenario.launchConfig.disableNativeOtaUpdate) {
     content += '\n[ota]\n';
-    if (otaRemoteArg) {
-      content += `remote=${otaRemoteArg}\n`;
+    if (activeOtaRemoteArg) {
+      content += `remote=${activeOtaRemoteArg}\n`;
     }
-    if (otaChannelArg) {
-      content += `channel=${otaChannelArg}\n`;
+    if (activeOtaChannelArg) {
+      content += `channel=${activeOtaChannelArg}\n`;
     }
     if (otaForceFlag) {
       content += 'force=true\n';
@@ -3067,7 +3259,7 @@ export function validateOtaLastRunRecord({
 }
 
 async function verifyOtaSideEffects(logContents) {
-  if (!otaRemoteArg || scenario.skipNativeOtaVerification) {
+  if (!activeOtaRemoteArg || scenario.skipNativeOtaVerification) {
     return;
   }
 
@@ -3100,14 +3292,14 @@ async function verifyOtaSideEffects(logContents) {
       'Windows release smoke failed: failed ota last-run dropped bundleId even though native OTA already resolved bundle metadata.',
     );
   }
-  if (otaChannelArg) {
+  if (activeOtaChannelArg) {
     const otaChannel = await waitForOtaChannel({
       timeoutMs: scenarioTimeoutMs,
       timeoutFlag: '--scenario-ms',
     });
-    if (otaChannel?.channel !== otaChannelArg) {
+    if (otaChannel?.channel !== activeOtaChannelArg) {
       throw new Error(
-        `Windows release smoke failed: ota channel persisted as '${otaChannel?.channel ?? 'unknown'}', expected '${otaChannelArg}'.`,
+        `Windows release smoke failed: ota channel persisted as '${otaChannel?.channel ?? 'unknown'}', expected '${activeOtaChannelArg}'.`,
       );
     }
   }
@@ -3144,7 +3336,7 @@ async function verifyOtaSideEffects(logContents) {
   }
   const otaLastRunValidation = validateOtaLastRunRecord({
     otaLastRun,
-    otaRemoteBase: otaRemoteArg,
+    otaRemoteBase: activeOtaRemoteArg,
     loggedCurrentVersion,
     expectedChannels,
     expectedLatestVersion,
@@ -3259,14 +3451,14 @@ async function main() {
   log(`preflightOnly=${preflightOnly}`);
   log(`skipPrepare=${skipPrepare}`);
   log(`resetSessions=${resetSessions}`);
-  if (otaRemoteArg) {
-    log(`otaRemote=${otaRemoteArg}`);
+  if (activeOtaRemoteArg) {
+    log(`otaRemote=${activeOtaRemoteArg}`);
   }
-  if (otaChannelArg) {
-    log(`otaChannel=${otaChannelArg}`);
+  if (activeOtaChannelArg) {
+    log(`otaChannel=${activeOtaChannelArg}`);
   }
   log(`otaForce=${otaForceFlag}`);
-  if (otaRemoteArg || otaExpectedStatusArg !== undefined) {
+  if (activeOtaRemoteArg || otaExpectedStatusArg !== undefined) {
     log(`otaExpectedStatus=${otaExpectedStatus}`);
   }
   if (validateOnly && preflightOnly) {
@@ -3289,11 +3481,11 @@ async function main() {
   await removeIfPresent(logPath);
   await removeIfPresent(launchConfigPath);
   await removeIfPresent(preferencesPath);
-  if (otaRemoteArg) {
+  if (otaRemoteArg || scenario.usesLocalOtaRemoteFixture) {
     await removeIfPresent(otaIndexPath);
     await removeIfPresent(otaLastRunPath);
     await removeIfPresent(otaStatePath);
-    if (otaChannelArg) {
+    if (otaChannelArg || scenario.usesLocalOtaRemoteFixture) {
       await removeIfPresent(otaChannelPath);
     }
   }
@@ -3302,6 +3494,8 @@ async function main() {
   }
 
   try {
+    activeOtaRemoteArg = otaRemoteArg ?? null;
+    activeOtaChannelArg = otaChannelArg ?? null;
     await mkdir(tempRoot, {recursive: true});
     await writeFile(preferencesPath, buildPreferencesFile(), 'utf8');
 
@@ -3311,20 +3505,29 @@ async function main() {
       await preparePackagedApp();
     }
 
-      log('writing launch config for release smoke');
-      await writeFile(launchConfigPath, buildLaunchConfig(), 'utf8');
-      startupTargetSnapshot = await snapshotOptionalTextFile(
-        companionStartupTargetPath,
-      );
-      await rm(companionStartupTargetPath, {force: true});
+    startupTargetSnapshot = await snapshotOptionalTextFile(
+      companionStartupTargetPath,
+    );
+    await rm(companionStartupTargetPath, {force: true});
 
-      if (scenario.prepareState) {
-        scenarioState = await scenario.prepareState();
-      }
+    if (scenario.prepareState) {
+      scenarioState = await scenario.prepareState();
+    }
+    activeOtaRemoteArg = scenarioState?.otaRemoteBaseUrl ?? otaRemoteArg ?? null;
+    activeOtaChannelArg = scenarioState?.otaChannel ?? otaChannelArg ?? null;
+    if (activeOtaRemoteArg) {
+      log(`resolved otaRemote=${activeOtaRemoteArg}`);
+    }
+    if (activeOtaChannelArg) {
+      log(`resolved otaChannel=${activeOtaChannelArg}`);
+    }
 
-      if (launchMode === 'portable') {
-        if (!(await fileExists(portableExePath))) {
-          throw new Error(`Windows release smoke failed: portable exe not found at ${portableExePath}.`);
+    log('writing launch config for release smoke');
+    await writeFile(launchConfigPath, buildLaunchConfig(), 'utf8');
+
+    if (launchMode === 'portable') {
+      if (!(await fileExists(portableExePath))) {
+        throw new Error(`Windows release smoke failed: portable exe not found at ${portableExePath}.`);
       }
 
       launchPortableApp();

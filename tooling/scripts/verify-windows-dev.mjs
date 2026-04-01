@@ -33,6 +33,8 @@ import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
+const companionChatBundleId = 'opapp.companion.chat';
+const companionChatSurfaceId = 'companion.chat.main';
 
 const readinessMarkers = [
   'Runtime=Metro',
@@ -219,6 +221,42 @@ const defaultScenarios = [
     successSummary:
       'Metro-backed Windows host completed window-capture dev smoke.',
   },
+  {
+    name: 'companion-chat-current-window',
+    description:
+      'Metro-backed Windows host launches the chat child bundle directly into the main window',
+    smokeMarkers: [
+      'Runtime=Metro entryFile=index.chat',
+      `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
+      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+    ],
+    launchConfig: {
+      main: {
+        surface: companionChatSurfaceId,
+        policy: 'main',
+        'entry-file': 'index.chat',
+      },
+    },
+    async verifyLog(logContents) {
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-companion\] session bundle=opapp\.companion\.chat window=window\.main tabs=1 active=tab:companion\.chat\.main:1 entries=tab:companion\.chat\.main:1:companion\.chat\.main/i,
+        'companion chat dev smoke did not persist the chat child bundle session in the main window.',
+      );
+      if (
+        normalizeLogContents(logContents).includes(
+          '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
+        )
+      ) {
+        throw new Error(
+          'Windows dev verify failed: companion chat dev smoke still rendered the main companion bundle instead of launching the chat child bundle directly.',
+        );
+      }
+    },
+    successSummary:
+      'Metro-backed Windows host completed direct chat child-bundle startup smoke.',
+  },
 ];
 
 const scenarioByName = new Map(defaultScenarios.map(scenario => [scenario.name, scenario]));
@@ -373,6 +411,7 @@ function appendConfigSection(content, name, values) {
 
 function buildLaunchConfigForScenario(scenario) {
   let content = `[sessions]\npath=${devSessionsPath}\n`;
+  content = appendConfigSection(content, 'main', scenario.launchConfig.main);
   content = appendConfigSection(content, 'main-props', scenario.launchConfig.mainProps);
   content = appendConfigSection(content, 'initial-open', scenario.launchConfig.initialOpen);
   content = appendConfigSection(

@@ -53,6 +53,12 @@ test('verify-windows validate-only accepts supported single-scenario filters', (
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts companion chat scenario filter', () => {
+  const result = runVerifyValidateOnly(['--scenario=companion-chat-current-window']);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only accepts startup-target launcher scenario filter', () => {
   const result = runVerifyValidateOnly(['--scenario=startup-target-main-launcher']);
 
@@ -78,7 +84,7 @@ test('verify-windows validate-only accepts startup-target settings scenario filt
 });
 
 test('verify-windows validate-only accepts comma-separated scenario filters', () => {
-  const result = runVerifyValidateOnly(['--scenario=tab-session,view-shot-current-window']);
+  const result = runVerifyValidateOnly(['--scenario=tab-session,companion-chat-current-window']);
 
   assert.equal(result.status, 0);
 });
