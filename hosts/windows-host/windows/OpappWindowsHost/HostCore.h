@@ -54,6 +54,7 @@ struct AutoOpenSurfaceConfig {
   std::wstring Presentation{L"current-window"};
   std::optional<std::wstring> BundleId;
   std::optional<std::wstring> DevSmokeScenario;
+  std::optional<std::wstring> DevSmokeBaseUrl;
   std::optional<std::wstring> SmokeSaveMainWindowMode;
   std::optional<std::wstring> SmokeSaveSettingsWindowMode;
   std::optional<std::wstring> SmokeSaveSettingsPresentation;
@@ -152,6 +153,7 @@ std::optional<LaunchSurfaceConfig> GetSecondaryStartupSurface() noexcept;
 std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept;
 std::optional<std::wstring> GetMainJavaScriptEntryFile() noexcept;
 std::optional<std::wstring> GetMainDevSmokeScenario() noexcept;
+std::optional<std::wstring> GetMainDevSmokeBaseUrl() noexcept;
 std::optional<std::wstring> GetOtaRemoteUrl() noexcept;
 std::optional<std::wstring> GetOtaChannel() noexcept;
 bool GetOtaForceUpdate() noexcept;

@@ -27,6 +27,7 @@ import {
   waitForHostLogMarkers,
   writeHostLaunchConfig,
 } from './windows-dev-common.mjs';
+import {startCompanionChatSmokeServer} from './companion-chat-sse-smoke.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 
@@ -230,15 +231,31 @@ const defaultScenarios = [
       `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
       `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
       `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      '[frontend-llm-chat] dev-smoke-start',
+      '[frontend-llm-chat] dev-smoke-open',
+      '[frontend-llm-chat] dev-smoke-assistant-text text=CHAT_TEST_OK',
+      '[frontend-llm-chat] dev-smoke-complete',
     ],
-    launchConfig: {
-      main: {
-        surface: companionChatSurfaceId,
-        policy: 'main',
-        'entry-file': 'index.chat',
-      },
+    async prepareState() {
+      return await startCompanionChatSmokeServer();
     },
-    async verifyLog(logContents) {
+    buildLaunchConfig(state) {
+      return {
+        main: {
+          surface: companionChatSurfaceId,
+          policy: 'main',
+          'entry-file': 'index.chat',
+        },
+        mainProps: {
+          'dev-smoke-scenario': state?.scenario ?? 'llm-chat-native-sse',
+          'dev-smoke-base-url': state?.baseUrl ?? '',
+        },
+      };
+    },
+    async cleanupState(state) {
+      await state?.close?.();
+    },
+    async verifyLog(logContents, state) {
       assertLogContainsRegex(
         logContents,
         /\[frontend-companion\] session bundle=opapp\.companion\.chat window=window\.main tabs=1 active=tab:companion\.chat\.main:1 entries=tab:companion\.chat\.main:1:companion\.chat\.main/i,
@@ -251,6 +268,42 @@ const defaultScenarios = [
       ) {
         throw new Error(
           'Windows dev verify failed: companion chat dev smoke still rendered the main companion bundle instead of launching the chat child bundle directly.',
+        );
+      }
+
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-failed',
+        'companion chat dev smoke logged a dev-smoke failure marker.',
+      );
+
+      if (!state || state.requests.length !== 1) {
+        throw new Error(
+          `Windows dev verify failed: companion chat dev smoke expected exactly 1 SSE request, received ${state?.requests.length ?? 0}.`,
+        );
+      }
+
+      const request = state.requests[0];
+      if (request?.body?.model !== 'fixture-model') {
+        throw new Error(
+          'Windows dev verify failed: companion chat dev smoke did not send the fixture model to the local SSE server.',
+        );
+      }
+
+      if (request?.body?.stream !== true) {
+        throw new Error(
+          'Windows dev verify failed: companion chat dev smoke did not request stream=true from the local SSE server.',
+        );
+      }
+
+      const lastMessage = request?.body?.messages?.at?.(-1);
+      if (
+        !lastMessage ||
+        lastMessage.role !== 'user' ||
+        lastMessage.content !== 'Reply with exactly CHAT_TEST_OK and nothing else.'
+      ) {
+        throw new Error(
+          'Windows dev verify failed: companion chat dev smoke did not send the expected user prompt to the local SSE server.',
         );
       }
     },
@@ -267,6 +320,12 @@ function normalizeLogContents(logContents) {
 
 function assertLogContainsRegex(logContents, regex, reason) {
   if (!regex.test(normalizeLogContents(logContents))) {
+    throw new Error(`Windows dev verify failed: ${reason}`);
+  }
+}
+
+function assertLogDoesNotContain(logContents, marker, reason) {
+  if (normalizeLogContents(logContents).includes(marker)) {
     throw new Error(`Windows dev verify failed: ${reason}`);
   }
 }
@@ -409,17 +468,25 @@ function appendConfigSection(content, name, values) {
   return nextContent;
 }
 
-function buildLaunchConfigForScenario(scenario) {
+function buildLaunchConfigForScenario(launchConfig) {
   let content = `[sessions]\npath=${devSessionsPath}\n`;
-  content = appendConfigSection(content, 'main', scenario.launchConfig.main);
-  content = appendConfigSection(content, 'main-props', scenario.launchConfig.mainProps);
-  content = appendConfigSection(content, 'initial-open', scenario.launchConfig.initialOpen);
+  content = appendConfigSection(content, 'main', launchConfig.main);
+  content = appendConfigSection(content, 'main-props', launchConfig.mainProps);
+  content = appendConfigSection(content, 'initial-open', launchConfig.initialOpen);
   content = appendConfigSection(
     content,
     'initial-open-props',
-    scenario.launchConfig.initialOpenProps,
+    launchConfig.initialOpenProps,
   );
   return content;
+}
+
+function resolveScenarioLaunchConfig(scenario, scenarioState) {
+  if (typeof scenario.buildLaunchConfig === 'function') {
+    return scenario.buildLaunchConfig(scenarioState);
+  }
+
+  return scenario.launchConfig;
 }
 
 function describeHostWaitFailure(result, phase, hostChild, timeoutMs = defaultReadinessTimeoutMs) {
@@ -473,23 +540,32 @@ async function buildHostWaitFailureMessage(
   return detail;
 }
 
-async function prepareScenarioRun(scenario) {
+async function prepareScenarioRun(scenario, scenarioState) {
   log('verify-dev', `preparing scenario '${scenario.name}'`);
   stopHostProcesses();
   clearDevSessions();
   clearHostLaunchConfig();
   clearHostLog();
   await clearOptionalFile(hostCommandOutputPath);
-  await writeHostLaunchConfig(buildLaunchConfigForScenario(scenario));
+  await writeHostLaunchConfig(
+    buildLaunchConfigForScenario(
+      resolveScenarioLaunchConfig(scenario, scenarioState),
+    ),
+  );
 }
 
 async function runDevScenario(scenario) {
-  await prepareScenarioRun(scenario);
-
+  let scenarioState = null;
   let hostChild = null;
   const scenarioStartMs = Date.now();
 
   try {
+    if (scenario.prepareState) {
+      scenarioState = await scenario.prepareState();
+    }
+
+    await prepareScenarioRun(scenario, scenarioState);
+
     log(
       'verify-dev',
       `launching Windows host against Metro-backed bundle for scenario '${scenario.name}'`,
@@ -563,7 +639,7 @@ async function runDevScenario(scenario) {
 
     const durationMs = Date.now() - scenarioStartMs;
     const logContents = await readFile(hostLogPath, 'utf8');
-    await scenario.verifyLog?.(logContents);
+    await scenario.verifyLog?.(logContents, scenarioState);
     log(
       'verify-dev',
       `Scenario '${scenario.name}' completed successfully in ${durationMs}ms.`,
@@ -587,6 +663,7 @@ async function runDevScenario(scenario) {
     if (hostChild?.pid) {
       killProcessTree(hostChild.pid);
     }
+    await scenario.cleanupState?.(scenarioState);
   }
 }
 

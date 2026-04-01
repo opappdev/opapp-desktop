@@ -6,6 +6,7 @@ import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {publishToLocalRegistry, SiblingArtifactSource} from './artifact-source.mjs';
+import {startCompanionChatSmokeServer} from './companion-chat-sse-smoke.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {
   classifyRunWindowsFailure,
@@ -49,6 +50,7 @@ const supportedOtaExpectedStatuses = new Set(['success', 'updated', 'up-to-date'
 const otaExpectedStatus = otaExpectedStatusArg ?? 'success';
 let activeOtaRemoteArg = otaRemoteArg ?? null;
 let activeOtaChannelArg = otaChannelArg ?? null;
+let activeLaunchConfig = null;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
@@ -1948,20 +1950,32 @@ const publicSmokeScenarios = {
     description: 'auto-open companion chat in the current window and switch into the child chat bundle',
     preferences: defaultPreferences,
     usesLocalOtaRemoteFixture: true,
-    launchConfig: {
-      initialOpen: {
-        surface: companionChatSurfaceId,
-        bundle: companionChatBundleId,
-        policy: 'main',
-        presentation: 'current-window',
-      },
+    buildLaunchConfig(state) {
+      return {
+        initialOpen: {
+          surface: companionChatSurfaceId,
+          bundle: companionChatBundleId,
+          policy: 'main',
+          presentation: 'current-window',
+        },
+        initialOpenProps: {
+          'dev-smoke-scenario': state?.chatSmoke?.scenario ?? 'llm-chat-native-sse',
+          'dev-smoke-base-url': state?.chatSmoke?.baseUrl ?? '',
+        },
+      };
     },
     async prepareState() {
+      const chatSmoke = await startCompanionChatSmokeServer();
       if (otaRemoteArg) {
-        return null;
+        return {
+          chatSmoke,
+        };
       }
 
-      return await createCompanionChatOtaFixture();
+      return {
+        ...(await createCompanionChatOtaFixture()),
+        chatSmoke,
+      };
     },
     successMarkers: [
       ...commonSuccessMarkers,
@@ -1970,16 +1984,23 @@ const publicSmokeScenarios = {
       `BundleSwitchReloadRequested window=window.main bundle=${companionChatBundleId}`,
       `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
       `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      '[frontend-llm-chat] dev-smoke-start',
+      '[frontend-llm-chat] dev-smoke-open',
+      '[frontend-llm-chat] dev-smoke-assistant-text text=CHAT_TEST_OK',
+      '[frontend-llm-chat] dev-smoke-complete',
     ],
     async cleanupState(state) {
-      if (!state) {
-        return;
+      await state?.chatSmoke?.close?.();
+
+      if (state?.server) {
+        await closeRegistryServer(state.server);
       }
 
-      await closeRegistryServer(state.server);
-      await removeIfPresent(state.registryRoot);
+      if (state?.registryRoot) {
+        await removeIfPresent(state.registryRoot);
+      }
     },
-    async verifyLog(logContents) {
+    async verifyLog(logContents, state) {
       const normalized = normalizeLogContents(logContents);
 
       if (!normalized.includes(companionChatBundleRootMarker)) {
@@ -1993,6 +2014,42 @@ const publicSmokeScenarios = {
         `[frontend-companion] surface-fallback bundle=opapp.companion.main requested=${companionChatSurfaceId} rendered=companion.main`,
         'companion chat current-window flow still fell back through the main companion surface.',
       );
+
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-failed',
+        'companion chat current-window flow logged a dev-smoke failure marker.',
+      );
+
+      if (!state?.chatSmoke || state.chatSmoke.requests.length !== 1) {
+        throw new Error(
+          `Windows release smoke failed: companion chat current-window flow expected exactly 1 SSE request, received ${state?.chatSmoke?.requests.length ?? 0}.`,
+        );
+      }
+
+      const request = state.chatSmoke.requests[0];
+      if (request?.body?.model !== 'fixture-model') {
+        throw new Error(
+          'Windows release smoke failed: companion chat current-window flow did not send the fixture model to the local SSE server.',
+        );
+      }
+
+      if (request?.body?.stream !== true) {
+        throw new Error(
+          'Windows release smoke failed: companion chat current-window flow did not request stream=true from the local SSE server.',
+        );
+      }
+
+      const lastMessage = request?.body?.messages?.at?.(-1);
+      if (
+        !lastMessage ||
+        lastMessage.role !== 'user' ||
+        lastMessage.content !== 'Reply with exactly CHAT_TEST_OK and nothing else.'
+      ) {
+        throw new Error(
+          'Windows release smoke failed: companion chat current-window flow did not send the expected user prompt to the local SSE server.',
+        );
+      }
 
       await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
     },
@@ -2656,34 +2713,34 @@ async function preparePackagedApp() {
 function buildLaunchConfig() {
   let content = `[preferences]\npath=${preferencesPath}\n\n[sessions]\npath=${sessionsPath}\n`;
 
-  if (scenario.launchConfig.initialOpen) {
-    content += `\n[initial-open]\nsurface=${scenario.launchConfig.initialOpen.surface}\npolicy=${scenario.launchConfig.initialOpen.policy}\npresentation=${scenario.launchConfig.initialOpen.presentation}\n`;
-    if (scenario.launchConfig.initialOpen.bundle) {
-      content += `bundle=${scenario.launchConfig.initialOpen.bundle}\n`;
+  if (activeLaunchConfig.initialOpen) {
+    content += `\n[initial-open]\nsurface=${activeLaunchConfig.initialOpen.surface}\npolicy=${activeLaunchConfig.initialOpen.policy}\npresentation=${activeLaunchConfig.initialOpen.presentation}\n`;
+    if (activeLaunchConfig.initialOpen.bundle) {
+      content += `bundle=${activeLaunchConfig.initialOpen.bundle}\n`;
     }
   }
 
-  if (scenario.launchConfig.initialOpenProps) {
+  if (activeLaunchConfig.initialOpenProps) {
     content += '\n[initial-open-props]\n';
 
-    for (const [key, value] of Object.entries(scenario.launchConfig.initialOpenProps)) {
+    for (const [key, value] of Object.entries(activeLaunchConfig.initialOpenProps)) {
       content += `${key}=${value}\n`;
     }
   }
 
-  if (scenario.launchConfig.mainProps) {
+  if (activeLaunchConfig.mainProps) {
     content += '\n[main-props]\n';
 
-    for (const [key, value] of Object.entries(scenario.launchConfig.mainProps)) {
+    for (const [key, value] of Object.entries(activeLaunchConfig.mainProps)) {
       content += `${key}=${value}\n`;
     }
   }
 
-  if (scenario.launchConfig.secondary) {
-    content += `\n[secondary]\nsurface=${scenario.launchConfig.secondary.surface}\npolicy=${scenario.launchConfig.secondary.policy}\n`;
+  if (activeLaunchConfig.secondary) {
+    content += `\n[secondary]\nsurface=${activeLaunchConfig.secondary.surface}\npolicy=${activeLaunchConfig.secondary.policy}\n`;
   }
 
-  if (activeOtaRemoteArg || scenario.launchConfig.disableNativeOtaUpdate) {
+  if (activeOtaRemoteArg || activeLaunchConfig.disableNativeOtaUpdate) {
     content += '\n[ota]\n';
     if (activeOtaRemoteArg) {
       content += `remote=${activeOtaRemoteArg}\n`;
@@ -2694,7 +2751,7 @@ function buildLaunchConfig() {
     if (otaForceFlag) {
       content += 'force=true\n';
     }
-    if (scenario.launchConfig.disableNativeOtaUpdate) {
+    if (activeLaunchConfig.disableNativeOtaUpdate) {
       content += 'disable-native-update=true\n';
     }
   }
@@ -3513,6 +3570,10 @@ async function main() {
     if (scenario.prepareState) {
       scenarioState = await scenario.prepareState();
     }
+    activeLaunchConfig =
+      typeof scenario.buildLaunchConfig === 'function'
+        ? scenario.buildLaunchConfig(scenarioState)
+        : scenario.launchConfig;
     activeOtaRemoteArg = scenarioState?.otaRemoteBaseUrl ?? otaRemoteArg ?? null;
     activeOtaChannelArg = scenarioState?.otaChannel ?? otaChannelArg ?? null;
     if (activeOtaRemoteArg) {
@@ -3574,7 +3635,7 @@ async function main() {
     }));
 
     await assertBundledPolicyRegistry(logContents);
-    await scenario.verifyLog?.(logContents);
+    await scenario.verifyLog?.(logContents, scenarioState);
     const tail = logContents.split(/\r?\n/).slice(-120).join('\n');
     console.log('[smoke] success log tail:');
     console.log(tail);
@@ -3584,6 +3645,7 @@ async function main() {
   } catch (error) {
     runError = error;
   } finally {
+    activeLaunchConfig = null;
     await stopHostProcess();
     await new Promise(resolve => setTimeout(resolve, 250));
 

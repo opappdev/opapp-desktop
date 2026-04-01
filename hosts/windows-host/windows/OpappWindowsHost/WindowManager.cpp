@@ -611,11 +611,14 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
     std::optional<AutoOpenSurfaceConfig> const &autoOpenSurface) noexcept {
   auto mainDevSmokeScenario =
       launchSurface.WindowId == L"window.main" ? GetMainDevSmokeScenario() : std::nullopt;
+  auto mainDevSmokeBaseUrl =
+      launchSurface.WindowId == L"window.main" ? GetMainDevSmokeBaseUrl() : std::nullopt;
 
   return [windowId = launchSurface.WindowId,
           surfaceId = launchSurface.SurfaceId,
           policy = launchSurface.Policy,
           autoOpenSurface,
+          mainDevSmokeBaseUrl,
           mainDevSmokeScenario](winrt::Microsoft::ReactNative::IJSValueWriter const &writer) {
     writer.WriteObjectBegin();
     writer.WritePropertyName(L"windowId");
@@ -630,13 +633,18 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
       writer.WriteString(*storedSession);
     }
 
-    if (mainDevSmokeScenario || autoOpenSurface) {
+    if (mainDevSmokeScenario || mainDevSmokeBaseUrl || autoOpenSurface) {
       writer.WritePropertyName(L"initialProps");
       writer.WriteObjectBegin();
 
       if (mainDevSmokeScenario) {
         writer.WritePropertyName(L"devSmokeScenario");
         writer.WriteString(*mainDevSmokeScenario);
+      }
+
+      if (mainDevSmokeBaseUrl) {
+        writer.WritePropertyName(L"devSmokeBaseUrl");
+        writer.WriteString(*mainDevSmokeBaseUrl);
       }
 
       if (autoOpenSurface) {
@@ -653,6 +661,7 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
 
         if (
             autoOpenSurface->DevSmokeScenario ||
+            autoOpenSurface->DevSmokeBaseUrl ||
             autoOpenSurface->SmokeSaveMainWindowMode ||
             autoOpenSurface->SmokeSaveSettingsWindowMode ||
             autoOpenSurface->SmokeSaveSettingsPresentation) {
@@ -662,6 +671,11 @@ winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
           if (autoOpenSurface->DevSmokeScenario) {
             writer.WritePropertyName(L"devSmokeScenario");
             writer.WriteString(*autoOpenSurface->DevSmokeScenario);
+          }
+
+          if (autoOpenSurface->DevSmokeBaseUrl) {
+            writer.WritePropertyName(L"devSmokeBaseUrl");
+            writer.WriteString(*autoOpenSurface->DevSmokeBaseUrl);
           }
 
           if (autoOpenSurface->SmokeSaveMainWindowMode) {

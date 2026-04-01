@@ -144,6 +144,13 @@ std::optional<std::wstring> GetMainDevSmokeScenario() noexcept {
   return GetStartupOverride(L"main-props", L"dev-smoke-scenario", L"OPAPP_MAIN_DEV_SMOKE_SCENARIO");
 }
 
+std::optional<std::wstring> GetMainDevSmokeBaseUrl() noexcept {
+  return GetStartupOverride(
+      L"main-props",
+      L"dev-smoke-base-url",
+      L"OPAPP_MAIN_DEV_SMOKE_BASE_URL");
+}
+
 std::optional<std::wstring> GetMainJavaScriptEntryFile() noexcept {
   return GetStartupOverride(L"main", L"entry-file", L"OPAPP_MAIN_JS_ENTRY_FILE");
 }
@@ -176,6 +183,11 @@ std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept {
   if (auto devSmokeScenario =
           ReadLaunchConfigValue(L"initial-open-props", L"dev-smoke-scenario")) {
     config.DevSmokeScenario = *devSmokeScenario;
+  }
+
+  if (auto devSmokeBaseUrl =
+          ReadLaunchConfigValue(L"initial-open-props", L"dev-smoke-base-url")) {
+    config.DevSmokeBaseUrl = *devSmokeBaseUrl;
   }
 
   if (auto smokeSaveMainWindowMode =
