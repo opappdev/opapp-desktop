@@ -1,5 +1,5 @@
 import {existsSync} from 'node:fs';
-import {readFile, unlink} from 'node:fs/promises';
+import {readFile, readdir, unlink} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -36,6 +36,10 @@ const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
 const companionChatBundleId = 'opapp.companion.chat';
 const companionChatSurfaceId = 'companion.chat.main';
+const llmChatDevSmokeUiStateRelativePath = path.join(
+  'llm-chat',
+  'dev-smoke-ui-state.json',
+);
 
 const readinessMarkers = [
   'Runtime=Metro',
@@ -237,7 +241,7 @@ const defaultScenarios = [
       '[frontend-llm-chat] dev-smoke-complete',
     ],
     async prepareState() {
-      return await startCompanionChatSmokeServer();
+      return await prepareCompanionChatSmokeState();
     },
     buildLaunchConfig(state) {
       return {
@@ -253,7 +257,7 @@ const defaultScenarios = [
       };
     },
     async cleanupState(state) {
-      await state?.close?.();
+      await cleanupCompanionChatSmokeState(state);
     },
     async verifyLog(logContents, state) {
       assertCompanionChatCurrentWindowStayedOnChildBundle(
@@ -287,7 +291,7 @@ const optionalScenarios = [
       '[frontend-llm-chat] dev-smoke-complete',
     ],
     async prepareState() {
-      return await startCompanionChatSmokeServer({
+      return await prepareCompanionChatSmokeState({
         scenario: 'llm-chat-native-sse-server-error',
       });
     },
@@ -305,7 +309,7 @@ const optionalScenarios = [
       };
     },
     async cleanupState(state) {
-      await state?.close?.();
+      await cleanupCompanionChatSmokeState(state);
     },
     async verifyLog(logContents, state) {
       assertCompanionChatCurrentWindowStayedOnChildBundle(
@@ -329,6 +333,65 @@ const optionalScenarios = [
     },
     successSummary:
       'Metro-backed Windows host completed direct chat child-bundle server-error smoke.',
+  },
+  {
+    name: 'companion-chat-current-window-malformed-chunk',
+    description:
+      'Metro-backed Windows host surfaces a malformed native SSE chunk error from the chat child bundle in the main window and records the rendered error state',
+    smokeMarkers: [
+      'Runtime=Metro entryFile=index.chat',
+      `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
+      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
+      '[frontend-llm-chat] dev-smoke-start',
+      '[frontend-llm-chat] dev-smoke-open',
+      '[frontend-llm-chat] dev-smoke-error message=服务端返回了无法解析的流式 JSON 数据。',
+      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=服务端返回了无法解析的流式 JSON 数据。',
+      '[frontend-llm-chat] dev-smoke-complete',
+    ],
+    async prepareState() {
+      return await prepareCompanionChatSmokeState({
+        scenario: 'llm-chat-native-sse-malformed-chunk',
+      });
+    },
+    buildLaunchConfig(state) {
+      return {
+        main: {
+          surface: companionChatSurfaceId,
+          policy: 'main',
+          'entry-file': 'index.chat',
+        },
+        mainProps: {
+          'dev-smoke-scenario':
+            state?.scenario ?? 'llm-chat-native-sse-malformed-chunk',
+          'dev-smoke-base-url': state?.baseUrl ?? '',
+        },
+      };
+    },
+    async cleanupState(state) {
+      await cleanupCompanionChatSmokeState(state);
+    },
+    async verifyLog(logContents, state) {
+      assertCompanionChatCurrentWindowStayedOnChildBundle(
+        logContents,
+        'companion chat malformed-chunk dev smoke',
+      );
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-llm-chat] dev-smoke-failed',
+        'companion chat malformed-chunk dev smoke logged an unexpected failure marker.',
+      );
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat malformed-chunk dev smoke',
+      );
+      await assertCompanionChatSmokeErrorUiState(
+        state,
+        'companion chat malformed-chunk dev smoke',
+      );
+    },
+    successSummary:
+      'Metro-backed Windows host completed direct chat child-bundle malformed-chunk smoke.',
   },
 ];
 
@@ -415,6 +478,103 @@ function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {
     throw new Error(
       `Windows dev verify failed: ${failureLabel} did not send the expected user prompt to the local SSE server.`,
     );
+  }
+}
+
+async function prepareCompanionChatSmokeState(options = {}) {
+  await clearCompanionChatSmokeUiArtifacts();
+  return await startCompanionChatSmokeServer(options);
+}
+
+async function cleanupCompanionChatSmokeState(state) {
+  await state?.close?.();
+  await clearCompanionChatSmokeUiArtifacts();
+}
+
+async function assertCompanionChatSmokeErrorUiState(state, failureLabel) {
+  const uiStatePaths = await resolveCompanionChatSmokeUiStatePaths();
+  let fileContent = null;
+  let resolvedPath = null;
+  for (const candidatePath of uiStatePaths) {
+    try {
+      fileContent = await readFile(candidatePath, 'utf8');
+      resolvedPath = candidatePath;
+      break;
+    } catch {
+      // Try the next known user-data root.
+    }
+  }
+
+  if (!fileContent || !resolvedPath) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not persist the rendered error UI state to any known OPApp user-data root.`,
+    );
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(fileContent);
+  } catch {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} persisted an unreadable error UI state artifact at ${resolvedPath}.`,
+    );
+  }
+
+  if (parsed?.scenario !== state?.scenario) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} persisted an error UI state for '${parsed?.scenario ?? '<unknown>'}' instead of '${state?.scenario ?? '<unknown>'}'.`,
+    );
+  }
+
+  if (parsed?.state !== 'error') {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} persisted UI state '${parsed?.state ?? '<unknown>'}' instead of 'error'.`,
+    );
+  }
+
+  if (parsed?.errorMessage !== state?.expectedErrorText) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} persisted error UI text '${parsed?.errorMessage ?? '<missing>'}' instead of '${state?.expectedErrorText ?? '<missing>'}' at ${resolvedPath}.`,
+    );
+  }
+}
+
+async function resolveCompanionChatSmokeUiStatePaths() {
+  const localAppDataRoot = process.env.LOCALAPPDATA || tempRoot;
+  const candidates = [
+    path.join(localAppDataRoot, 'OPApp', llmChatDevSmokeUiStateRelativePath),
+  ];
+  const packagesRoot = path.join(localAppDataRoot, 'Packages');
+
+  try {
+    const entries = await readdir(packagesRoot, {withFileTypes: true});
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('OpappWindowsHost_')) {
+        continue;
+      }
+
+      candidates.unshift(
+        path.join(
+          packagesRoot,
+          entry.name,
+          'LocalCache',
+          'Local',
+          'OPApp',
+          llmChatDevSmokeUiStateRelativePath,
+        ),
+      );
+    }
+  } catch {
+    // Fall back to the non-packaged local app-data root only.
+  }
+
+  return [...new Set(candidates)];
+}
+
+async function clearCompanionChatSmokeUiArtifacts() {
+  const uiStatePaths = await resolveCompanionChatSmokeUiStatePaths();
+  for (const candidatePath of uiStatePaths) {
+    await clearOptionalFile(candidatePath);
   }
 }
 

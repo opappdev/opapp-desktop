@@ -112,6 +112,15 @@ const publicOptionalScenarios = [
     args: ['--scenario=companion-chat-current-window-server-error', '--skip-prepare'],
   },
   {
+    name: 'companion-chat-current-window-malformed-chunk',
+    description:
+      'packaged auto-open companion chat surfaces an expected malformed native SSE chunk error in the current window',
+    args: [
+      '--scenario=companion-chat-current-window-malformed-chunk',
+      '--skip-prepare',
+    ],
+  },
+  {
     name: 'launcher-provenance',
     description:
       'launcher renders public remote-catalog diagnostics for staged provenance, local-only residue, and version drift',

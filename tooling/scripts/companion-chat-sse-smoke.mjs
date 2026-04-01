@@ -3,10 +3,14 @@ import {createServer} from 'node:http';
 const companionChatSmokeAssistantText = 'CHAT_TEST_OK';
 const companionChatSmokeScenario = 'llm-chat-native-sse';
 const companionChatSmokeServerErrorScenario = 'llm-chat-native-sse-server-error';
+const companionChatSmokeMalformedChunkScenario =
+  'llm-chat-native-sse-malformed-chunk';
 const companionChatSmokeRequestPrompt =
   'Reply with exactly CHAT_TEST_OK and nothing else.';
 const companionChatSmokeExpectedServerErrorText =
   'EventSource requires HTTP 200, received 500.';
+const companionChatSmokeExpectedMalformedChunkErrorText =
+  '服务端返回了无法解析的流式 JSON 数据。';
 
 function createSseDataBlock(payload) {
   return `data: ${payload}\n\n`;
@@ -104,22 +108,43 @@ const companionChatSmokeSseStream = companionChatSmokePayloads
   .map(createSseDataBlock)
   .join('');
 
-const companionChatSmokeSseChunks = [
-  companionChatSmokeSseStream.slice(0, 197),
-  companionChatSmokeSseStream.slice(197, 611),
-  companionChatSmokeSseStream.slice(611),
-];
+const companionChatSmokeMalformedChunkSseStream = [
+  createSseDataBlock(companionChatSmokePayloads[0]),
+  createSseDataBlock('{"choices":[}'),
+].join('');
+
+function splitSmokeSseChunks(stream) {
+  const firstSplit = Math.max(1, Math.floor(stream.length / 3));
+  const secondSplit = Math.max(firstSplit + 1, Math.floor((stream.length * 2) / 3));
+  return [
+    stream.slice(0, firstSplit),
+    stream.slice(firstSplit, secondSplit),
+    stream.slice(secondSplit),
+  ].filter(Boolean);
+}
+
+const companionChatSmokeSseChunks = splitSmokeSseChunks(companionChatSmokeSseStream);
+const companionChatSmokeMalformedChunkSseChunks = splitSmokeSseChunks(
+  companionChatSmokeMalformedChunkSseStream,
+);
 
 const companionChatSmokeFixtures = {
   [companionChatSmokeScenario]: {
     assistantText: companionChatSmokeAssistantText,
     requestPrompt: companionChatSmokeRequestPrompt,
     responseKind: 'success',
+    responseChunks: companionChatSmokeSseChunks,
   },
   [companionChatSmokeServerErrorScenario]: {
     expectedErrorText: companionChatSmokeExpectedServerErrorText,
     requestPrompt: companionChatSmokeRequestPrompt,
     responseKind: 'server-error',
+  },
+  [companionChatSmokeMalformedChunkScenario]: {
+    expectedErrorText: companionChatSmokeExpectedMalformedChunkErrorText,
+    requestPrompt: companionChatSmokeRequestPrompt,
+    responseKind: 'malformed-chunk',
+    responseChunks: companionChatSmokeMalformedChunkSseChunks,
   },
 };
 
@@ -187,7 +212,7 @@ export async function startCompanionChatSmokeServer(options = {}) {
       Connection: 'keep-alive',
     });
 
-    for (const chunk of companionChatSmokeSseChunks) {
+    for (const chunk of fixture.responseChunks ?? []) {
       res.write(chunk);
       await sleep(40);
     }

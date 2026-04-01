@@ -49,6 +49,14 @@ test('verify-windows-dev validate-only accepts explicit companion chat server-er
   assert.equal(result.status, 0);
 });
 
+test('verify-windows-dev validate-only accepts explicit companion chat malformed-chunk scenario filters', () => {
+  const result = runVerifyDevValidateOnly([
+    '--scenario=companion-chat-current-window-malformed-chunk',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows-dev validate-only accepts comma-separated scenario filters', () => {
   const result = runVerifyDevValidateOnly([
     '--scenario=view-shot-current-window,companion-chat-current-window',
