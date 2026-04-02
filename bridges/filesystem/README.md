@@ -14,6 +14,13 @@ All `relativePath` arguments are resolved relative to the app's writable user
 data directory (e.g., `%LOCALAPPDATA%\OPApp\`). The module must reject any path
 that escapes this root (path traversal prevention).
 
+The bridge now also manages one persisted trusted workspace root under:
+
+- `%LOCALAPPDATA%\OPApp\agent-runtime\workspace-target.json`
+
+Workspace-scoped methods resolve their `relativePath` arguments against that
+trusted workspace root and reject any path that escapes it.
+
 ## Methods
 
 ### `getUserDataPath() → Promise<string>`
@@ -88,9 +95,63 @@ void FileExists(
 
 ---
 
+## Trusted Workspace Methods
+
+### `getTrustedWorkspaceTarget() → Promise<string | null>`
+
+Returns the persisted trusted workspace payload as JSON:
+
+```json
+{"rootPath":"D:/code/opappdev","displayName":"opappdev","trusted":true}
+```
+
+Returns `null` if no trusted workspace root is configured.
+
+### `setTrustedWorkspaceRoot(rootPath: string) → Promise<string>`
+
+Validates that `rootPath` is an existing directory, normalizes it, persists it
+under `agent-runtime/workspace-target.json`, and returns the same JSON payload
+shape as `getTrustedWorkspaceTarget()`.
+
+### `clearTrustedWorkspaceRoot() → Promise<void>`
+
+Removes the persisted trusted workspace root.
+
+### `readWorkspaceFile(relativePath: string) → Promise<string | null>`
+
+Reads a UTF-8 text file from the trusted workspace. Returns `null` when the
+target file does not exist.
+
+### `listWorkspaceDirectory(relativePath: string) → Promise<string>`
+
+Lists one directory level from the trusted workspace and returns a JSON array of
+entries:
+
+```json
+[{"name":"src","relativePath":"src","kind":"directory","sizeBytes":null}]
+```
+
+### `statWorkspacePath(relativePath: string) → Promise<string | null>`
+
+Returns one JSON entry for the requested workspace path, or `null` if the path
+does not exist.
+
+### `searchWorkspacePaths(query: string, relativePath: string, limit: number) → Promise<string>`
+
+Recursively searches names and relative paths under the trusted workspace and
+returns the same JSON entry shape as `listWorkspaceDirectory(...)`.
+The current native implementation skips heavy directories such as `.git` and
+`node_modules` during recursive search.
+
+---
+
 ## Security Notes
 
 - All paths must be validated to stay within `<dataDir>` (no `..` traversal).
+- Trusted workspace operations must validate and normalize the configured root
+  before persisting it.
+- Trusted workspace search must avoid unbounded traversal of heavy dependency or
+  VCS directories by default.
 - All I/O operations must be dispatched off the UI thread using
   `reactContext.DefaultDispatcher()` or a background thread pool.
 - `writeFile` must use atomic rename to prevent partial writes.
