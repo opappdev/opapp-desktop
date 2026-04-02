@@ -1,0 +1,8 @@
+{
+  "name": "@opapp/bridge-terminal-windows",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows native module contract for the OpappAgentTerminal bridge",
+  "files": [],
+  "license": "MPL-2.0"
+}

@@ -118,6 +118,7 @@
     <ClCompile Include="WindowCaptureModule.cpp" />
     <ClCompile Include="OpappSseModule.cpp" />
     <ClCompile Include="FilesystemModule.cpp" />
+    <ClCompile Include="TerminalModule.cpp" />
     <ClCompile Include="ViewShotModule.cpp" />
     <ClCompile Include="AutolinkedNativeModules.g.cpp" />
     <ClCompile Include="pch.cpp">
