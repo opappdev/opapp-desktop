@@ -1,5 +1,5 @@
 import {existsSync} from 'node:fs';
-import {readFile, readdir, unlink} from 'node:fs/promises';
+import {mkdir, readFile, readdir, unlink, writeFile} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -25,6 +25,7 @@ import {
   stopHostProcesses,
   tempRoot,
   waitForHostLogMarkers,
+  workspaceRoot,
   writeHostLaunchConfig,
 } from './windows-dev-common.mjs';
 import {startCompanionChatSmokeServer} from './companion-chat-sse-smoke.mjs';
@@ -34,11 +35,31 @@ import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
+const companionMainBundleId = 'opapp.companion.main';
 const companionChatBundleId = 'opapp.companion.chat';
+const companionAgentWorkbenchSurfaceId = 'companion.agent-workbench';
 const companionChatSurfaceId = 'companion.chat.main';
 const llmChatDevSmokeUiStateRelativePath = path.join(
   'llm-chat',
   'dev-smoke-ui-state.json',
+);
+const verifyDevPreferencesPath = path.join(
+  tempRoot,
+  'opapp-windows-host.verify-dev.preferences.ini',
+);
+const opappUserDataRoot = path.join(
+  process.env.LOCALAPPDATA || tempRoot,
+  'OPApp',
+);
+const workspaceTargetPath = path.join(
+  opappUserDataRoot,
+  'agent-runtime',
+  'workspace-target.json',
+);
+const companionStartupTargetPath = path.join(
+  opappUserDataRoot,
+  'startup',
+  'companion-startup-target.json',
 );
 
 const readinessMarkers = [
@@ -225,6 +246,62 @@ const defaultScenarios = [
     },
     successSummary:
       'Metro-backed Windows host completed window-capture dev smoke.',
+  },
+  {
+    name: 'companion-agent-workbench-current-window',
+    description:
+      'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the workspace/diff smoke path',
+    smokeMarkers: [
+      `LaunchSurface surface=${companionAgentWorkbenchSurfaceId} policy=main mode=`,
+      `[frontend-companion] render bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
+      `[frontend-companion] session bundle=${companionMainBundleId} window=window.main tabs=1 active=tab:${companionAgentWorkbenchSurfaceId}:1 entries=tab:${companionAgentWorkbenchSurfaceId}:1:${companionAgentWorkbenchSurfaceId}`,
+      '[frontend-agent-workbench] dev-smoke-start',
+      '[frontend-agent-workbench] dev-smoke-workspace cwd=opapp-frontend entries=',
+      '[frontend-agent-workbench] dev-smoke-diff-ready path=opapp-frontend/',
+      '[frontend-agent-workbench] dev-smoke-complete',
+    ],
+    async prepareState() {
+      return await prepareAgentWorkbenchSmokeState();
+    },
+    launchConfig: {
+      preferences: {
+        path: verifyDevPreferencesPath,
+      },
+      main: {
+        surface: companionAgentWorkbenchSurfaceId,
+        policy: 'main',
+      },
+      mainProps: {
+        'dev-smoke-scenario': 'agent-workbench-basics',
+      },
+    },
+    async cleanupState(state) {
+      await cleanupAgentWorkbenchSmokeState(state);
+    },
+    async verifyLog(logContents) {
+      assertCompanionAgentWorkbenchCurrentWindowStayedOnSurface(
+        logContents,
+        'agent workbench dev smoke',
+      );
+      assertLogDoesNotContain(
+        logContents,
+        '[frontend-agent-workbench] dev-smoke-failed',
+        'agent workbench dev smoke logged a dev-smoke failure marker.',
+      );
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-agent-workbench\] dev-smoke-workspace cwd=opapp-frontend entries=\d+ trusted=true/i,
+        'agent workbench dev smoke did not confirm the trusted opapp-frontend workspace listing.',
+      );
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-agent-workbench\] dev-smoke-diff-ready path=opapp-frontend\/[^\r\n]+ cwd=opapp-frontend/i,
+        'agent workbench dev smoke did not confirm a repo-root git diff candidate.',
+      );
+    },
+    successSummary:
+      'Metro-backed Windows host completed direct agent-workbench startup smoke.',
   },
   {
     name: 'companion-chat-current-window',
@@ -506,6 +583,75 @@ function assertCompanionChatCurrentWindowStayedOnChildBundle(
   }
 }
 
+function assertCompanionAgentWorkbenchCurrentWindowStayedOnSurface(
+  logContents,
+  failureLabel,
+) {
+  assertLogContainsRegex(
+    logContents,
+    /\[frontend-companion\] session bundle=opapp\.companion\.main window=window\.main tabs=1 active=tab:companion\.agent-workbench:1 entries=tab:companion\.agent-workbench:1:companion\.agent-workbench/i,
+    `${failureLabel} did not keep the agent workbench session active in the main window.`,
+  );
+  if (
+    normalizeLogContents(logContents).includes(
+      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
+    )
+  ) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} still rendered the launcher surface instead of launching the agent workbench directly.`,
+    );
+  }
+}
+
+async function prepareAgentWorkbenchSmokeState() {
+  const legacyStartupTargetContent = await readOptionalFile(
+    companionStartupTargetPath,
+  );
+  const workspaceTargetContent = await readOptionalFile(workspaceTargetPath);
+
+  await mkdir(path.dirname(workspaceTargetPath), {recursive: true});
+  await writeFile(
+    workspaceTargetPath,
+    JSON.stringify({
+      rootPath: workspaceRoot,
+      displayName: path.basename(workspaceRoot),
+      trusted: true,
+    }),
+    'utf8',
+  );
+  await clearOptionalFile(companionStartupTargetPath);
+
+  return {
+    legacyStartupTargetContent,
+    workspaceTargetContent,
+  };
+}
+
+async function cleanupAgentWorkbenchSmokeState(state) {
+  if (typeof state?.workspaceTargetContent === 'string') {
+    await mkdir(path.dirname(workspaceTargetPath), {recursive: true});
+    await writeFile(
+      workspaceTargetPath,
+      state.workspaceTargetContent,
+      'utf8',
+    );
+  } else {
+    await clearOptionalFile(workspaceTargetPath);
+  }
+
+  if (typeof state?.legacyStartupTargetContent === 'string') {
+    await mkdir(path.dirname(companionStartupTargetPath), {recursive: true});
+    await writeFile(
+      companionStartupTargetPath,
+      state.legacyStartupTargetContent,
+      'utf8',
+    );
+    return;
+  }
+
+  await clearOptionalFile(companionStartupTargetPath);
+}
+
 function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {
   if (!state || state.requests.length !== 1) {
     throw new Error(
@@ -772,6 +918,7 @@ function appendConfigSection(content, name, values) {
 
 function buildLaunchConfigForScenario(launchConfig) {
   let content = `[sessions]\npath=${devSessionsPath}\n`;
+  content = appendConfigSection(content, 'preferences', launchConfig.preferences);
   content = appendConfigSection(content, 'main', launchConfig.main);
   content = appendConfigSection(content, 'main-props', launchConfig.mainProps);
   content = appendConfigSection(content, 'initial-open', launchConfig.initialOpen);
@@ -824,6 +971,14 @@ async function clearOptionalFile(targetPath) {
   }
 }
 
+async function readOptionalFile(targetPath) {
+  try {
+    return await readFile(targetPath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 async function buildHostWaitFailureMessage(
   result,
   phase,
@@ -849,6 +1004,7 @@ async function prepareScenarioRun(scenario, scenarioState) {
   clearHostLaunchConfig();
   clearHostLog();
   await clearOptionalFile(hostCommandOutputPath);
+  await clearOptionalFile(verifyDevPreferencesPath);
   await writeHostLaunchConfig(
     buildLaunchConfigForScenario(
       resolveScenarioLaunchConfig(scenario, scenarioState),
@@ -977,6 +1133,7 @@ async function main() {
   clearHostLaunchConfig();
   clearHostLog();
   await clearOptionalFile(hostCommandOutputPath);
+  await clearOptionalFile(verifyDevPreferencesPath);
   stopHostProcesses();
 
   log('verify-dev', `hostRoot=${hostRoot}`);
