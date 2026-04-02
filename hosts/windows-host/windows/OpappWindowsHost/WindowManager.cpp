@@ -409,6 +409,8 @@ struct WindowManagerState {
   winrt::Microsoft::ReactNative::ReactNativeHost ReactNativeHost{nullptr};
   winrt::Microsoft::UI::Windowing::AppWindow MainAppWindow{nullptr};
   std::optional<LaunchSurfaceConfig> MainLaunchSurface;
+  HWND MainWindowHandle{nullptr};
+  WNDPROC MainWindowProc{nullptr};
   std::map<HWND, std::shared_ptr<HostedSurfaceWindow>> HostedWindows;
   std::set<std::wstring> PendingSessionCleanupWindowIds;
   std::wstring AppDirectory;
@@ -419,6 +421,76 @@ struct WindowManagerState {
 WindowManagerState &GetWindowManagerState() noexcept {
   static WindowManagerState state{};
   return state;
+}
+
+std::string DescribeMainWindowHandle(HWND hwnd) noexcept {
+  return std::to_string(reinterpret_cast<uintptr_t>(hwnd));
+}
+
+void AppendMainWindowLifecycleLog(
+    char const *type,
+    HWND hwnd,
+    WPARAM wparam,
+    LPARAM lparam) noexcept {
+  auto &state = GetWindowManagerState();
+  auto logLine =
+      std::string("MainWindowMessage type=") + type + " hwnd=" + DescribeMainWindowHandle(hwnd);
+
+  if (state.MainLaunchSurface) {
+    logLine +=
+        " window=" + ToUtf8(state.MainLaunchSurface->WindowId) +
+        " surface=" + ToUtf8(state.MainLaunchSurface->SurfaceId);
+  }
+
+  logLine +=
+      " wparam=" + std::to_string(static_cast<uintptr_t>(wparam)) +
+      " lparam=" + std::to_string(static_cast<intptr_t>(lparam));
+  AppendLog(logLine);
+}
+
+LRESULT CALLBACK MainWindowDiagnosticWndProc(
+    HWND hwnd,
+    UINT message,
+    WPARAM wparam,
+    LPARAM lparam) noexcept {
+  switch (message) {
+    case WM_SYSCOMMAND:
+      if ((wparam & 0xFFF0u) == SC_CLOSE) {
+        AppendMainWindowLifecycleLog("WM_SYSCOMMAND/SC_CLOSE", hwnd, wparam, lparam);
+      }
+      break;
+    case WM_QUERYENDSESSION:
+      AppendMainWindowLifecycleLog("WM_QUERYENDSESSION", hwnd, wparam, lparam);
+      break;
+    case WM_ENDSESSION:
+      AppendMainWindowLifecycleLog("WM_ENDSESSION", hwnd, wparam, lparam);
+      break;
+    case WM_CLOSE:
+      AppendMainWindowLifecycleLog("WM_CLOSE", hwnd, wparam, lparam);
+      break;
+    case WM_DESTROY:
+      AppendMainWindowLifecycleLog("WM_DESTROY", hwnd, wparam, lparam);
+      break;
+    case WM_NCDESTROY:
+      AppendMainWindowLifecycleLog("WM_NCDESTROY", hwnd, wparam, lparam);
+      break;
+    default:
+      break;
+  }
+
+  auto &state = GetWindowManagerState();
+  auto originalProc = state.MainWindowProc;
+  auto result =
+      originalProc ? CallWindowProcW(originalProc, hwnd, message, wparam, lparam)
+                   : DefWindowProcW(hwnd, message, wparam, lparam);
+
+  if (message == WM_NCDESTROY && state.MainWindowHandle == hwnd) {
+    state.MainWindowHandle = nullptr;
+    state.MainWindowProc = nullptr;
+    AppendLog("MainWindowHookDetached hwnd=" + DescribeMainWindowHandle(hwnd));
+  }
+
+  return result;
 }
 
 std::optional<std::wstring> ResolveBundleRootPath(
@@ -460,6 +532,34 @@ std::optional<HWND> TryGetMainWindowHandle() noexcept {
   }
 
   return std::nullopt;
+}
+
+void EnsureMainWindowDiagnosticsHook() noexcept {
+  auto &state = GetWindowManagerState();
+  auto hwnd = TryGetMainWindowHandle();
+  if (!hwnd) {
+    AppendLog("MainWindowHookInstallFailed reason=missing-hwnd");
+    return;
+  }
+
+  if (state.MainWindowHandle == *hwnd && state.MainWindowProc != nullptr) {
+    return;
+  }
+
+  SetLastError(0);
+  auto previousProc = reinterpret_cast<WNDPROC>(
+      SetWindowLongPtrW(*hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&MainWindowDiagnosticWndProc)));
+  auto installError = GetLastError();
+  if (!previousProc && installError != 0) {
+    AppendLog(
+        "MainWindowHookInstallFailed hwnd=" + DescribeMainWindowHandle(*hwnd) +
+        " error=" + std::to_string(installError));
+    return;
+  }
+
+  state.MainWindowHandle = *hwnd;
+  state.MainWindowProc = previousProc;
+  AppendLog("MainWindowHookInstalled hwnd=" + DescribeMainWindowHandle(*hwnd));
 }
 
 std::shared_ptr<HostedSurfaceWindow> FindHostedWindowById(std::wstring const &windowId) noexcept {
@@ -1351,6 +1451,7 @@ void ConfigureInitialWindow(
   auto &state = GetWindowManagerState();
   state.MainAppWindow = appWindow;
   state.MainLaunchSurface = launchSurface;
+  EnsureMainWindowDiagnosticsHook();
 
   ApplyAppWindowPlacement(appWindow, launchSurface, "WindowRect");
 }
