@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import {createServer} from 'node:http';
@@ -1004,54 +1005,50 @@ function formatExpectedValue(value) {
   return value === null ? 'null' : JSON.stringify(value);
 }
 
-export function assertLauncherRemoteCatalogDiagnostics(
+export function assertBundleLibraryLoadDiagnostics(
   logContents,
   {
-    summary: expectedSummary,
-    entries: expectedEntries,
+    start: expectedStart = {},
+    finished: expectedFinished = {},
   },
 ) {
-  const summaryPayloads = extractFrontendDiagnosticEvents(
+  const loadStartPayloads = extractFrontendDiagnosticEvents(
     logContents,
-    'bundle-launcher.remote-catalog.summary',
+    'bundle-library.load-start',
   );
-  if (summaryPayloads.length === 0) {
+  if (loadStartPayloads.length === 0) {
     throw new Error(
-      'Windows release smoke failed: launcher remote catalog summary diagnostics were not logged.',
+      'Windows release smoke failed: bundle-library load-start diagnostics were not logged.',
     );
   }
 
-  const actualSummary = summaryPayloads.at(-1);
-  for (const [field, expectedValue] of Object.entries(expectedSummary)) {
-    if (actualSummary[field] !== expectedValue) {
+  const actualLoadStart = loadStartPayloads.at(-1);
+  for (const [field, expectedValue] of Object.entries(expectedStart)) {
+    if (actualLoadStart[field] !== expectedValue) {
       throw new Error(
-        `Windows release smoke failed: launcher remote catalog summary field '${field}' ` +
-          `was ${formatExpectedValue(actualSummary[field] ?? null)}, expected ${formatExpectedValue(expectedValue)}.`,
+        `Windows release smoke failed: bundle-library load-start field '${field}' ` +
+          `was ${formatExpectedValue(actualLoadStart[field] ?? null)}, expected ${formatExpectedValue(expectedValue)}.`,
       );
     }
   }
 
-  const entryPayloads = extractFrontendDiagnosticEvents(
+  const loadFinishedPayloads = extractFrontendDiagnosticEvents(
     logContents,
-    'bundle-launcher.remote-catalog.entry',
+    'bundle-library.load-finished',
   );
-  for (const expectedEntry of expectedEntries) {
-    const actualEntry = entryPayloads.find(
-      payload => payload.bundleId === expectedEntry.bundleId,
+  if (loadFinishedPayloads.length === 0) {
+    throw new Error(
+      'Windows release smoke failed: bundle-library load-finished diagnostics were not logged.',
     );
-    if (!actualEntry) {
-      throw new Error(
-        `Windows release smoke failed: launcher diagnostics are missing entry '${expectedEntry.bundleId}'.`,
-      );
-    }
+  }
 
-    for (const [field, expectedValue] of Object.entries(expectedEntry)) {
-      if (actualEntry[field] !== expectedValue) {
-        throw new Error(
-          `Windows release smoke failed: launcher diagnostics entry '${expectedEntry.bundleId}' field '${field}' ` +
-            `was ${formatExpectedValue(actualEntry[field] ?? null)}, expected ${formatExpectedValue(expectedValue)}.`,
-        );
-      }
+  const actualLoadFinished = loadFinishedPayloads.at(-1);
+  for (const [field, expectedValue] of Object.entries(expectedFinished)) {
+    if (actualLoadFinished[field] !== expectedValue) {
+      throw new Error(
+        `Windows release smoke failed: bundle-library load-finished field '${field}' ` +
+          `was ${formatExpectedValue(actualLoadFinished[field] ?? null)}, expected ${formatExpectedValue(expectedValue)}.`,
+      );
     }
   }
 }
@@ -1415,7 +1412,7 @@ const publicSmokeScenarios = {
       ...commonSuccessMarkers,
       '[frontend-companion] startup-target-auto-open bundle=opapp.companion.main window=window.main surface=companion.main presentation=current-window targetBundle=opapp.companion.main',
       '[frontend-companion] session window=window.main tabs=1 active=',
-      'bundle-launcher.remote-catalog.summary',
+      'bundle-library.load-finished',
       '"bundleId":"opapp.hbr.workspace"',
     ],
     async prepareState() {
@@ -1506,61 +1503,15 @@ const publicSmokeScenarios = {
           );
         }
 
-        assertLauncherRemoteCatalogDiagnostics(logContents, {
-          summary: {
-            status: 'ready',
-            source: 'network',
-            remoteUrl: otaRemoteArg.replace(/\/+$/, ''),
-            remoteEntryCount: 3,
-            entryCount: 4,
-            stagedBundleCount: 2,
-            stagedBundlesLoaded: true,
-            startupTargetLoaded: true,
+        assertBundleLibraryLoadDiagnostics(logContents, {
+          start: {
+            supportsBundleUpdates: true,
           },
-          entries: [
-            {
-              bundleId: 'opapp.companion.main',
-              discoverySource: 'remote-catalog',
-              localState: 'bundled',
-              localVersion: null,
-              localProvenanceKind: null,
-              versionMismatch: false,
-            },
-            {
-              bundleId: launcherProvenanceFixture.nativeApplied.bundleId,
-              discoverySource: 'remote-catalog',
-              localState: 'remote-only',
-              latestVersion: launcherProvenanceFixture.nativeApplied.latestVersion,
-              localVersion: null,
-              localSourceKind: null,
-              localProvenanceKind: null,
-              localProvenanceStatus: null,
-              hasPublicLaunchTarget: true,
-              versionMismatch: false,
-            },
-            {
-              bundleId: launcherProvenanceFixture.versionDrift.bundleId,
-              discoverySource: 'remote-catalog',
-              localState: 'staged',
-              latestVersion: launcherProvenanceFixture.versionDrift.latestVersion,
-              localVersion: launcherProvenanceFixture.versionDrift.localVersion,
-              localSourceKind: launcherProvenanceFixture.versionDrift.sourceKind,
-              localProvenanceKind: 'host-staged-only',
-              localProvenanceStatus: null,
-              versionMismatch: true,
-            },
-            {
-              bundleId: launcherProvenanceFixture.localOnly.bundleId,
-              discoverySource: 'local-only',
-              localState: 'staged',
-              latestVersion: null,
-              localVersion: launcherProvenanceFixture.localOnly.localVersion,
-              localSourceKind: launcherProvenanceFixture.localOnly.sourceKind,
-              localProvenanceKind: 'host-staged-only',
-              localProvenanceStatus: null,
-              versionMismatch: false,
-            },
-          ],
+          finished: {
+            remoteStatus: 'ready',
+            remoteEntryCount: 3,
+            stagedBundleCount: 2,
+          },
         });
       }
 
@@ -2554,6 +2505,30 @@ function applyUiScenarioOverrides(targetScenarios) {
   });
   assignUiScenario('launcher-provenance', {
     buildUiSpec: async () => createBundleLauncherRootSpec({mode: 'wide'}),
+    async verifyUiResult(uiResult) {
+      const serviceDetail = assertUiSavedPath(
+        uiResult?.savedValues?.serviceDetail,
+        'bundle-launcher service detail',
+      );
+      const selectedBundleTitle = assertUiSavedPath(
+        uiResult?.savedValues?.selectedBundleTitle,
+        'bundle-launcher selected bundle title',
+      );
+
+      if (otaRemoteArg) {
+        assert.match(
+          serviceDetail,
+          /^http:\/\/127\.0\.0\.1:\d+$/,
+          'Windows release smoke failed: launcher service detail did not render the synthetic OTA remote URL.',
+        );
+      }
+
+      if (selectedBundleTitle.length < 2) {
+        throw new Error(
+          'Windows release smoke failed: launcher detail pane did not resolve a selected bundle title.',
+        );
+      }
+    },
   });
   assignUiScenario('startup-target-main-launcher', {
     buildUiSpec: async () => createBundleLauncherRootSpec({mode: 'wide'}),

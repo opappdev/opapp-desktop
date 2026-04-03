@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  assertLauncherRemoteCatalogDiagnostics,
+  assertBundleLibraryLoadDiagnostics,
   extractOtaSpawnHostBundleDir,
   extractFrontendDiagnosticEvents,
   resolveExpectedOtaLatestVersion,
@@ -107,11 +107,8 @@ function createRestorePrivateSessionScenario() {
 
 function createLauncherDiagnosticLog() {
   return [
-    '[2026-03-30 08:00:00.000] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.000Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.summary","platform":"windows","status":"ready","source":"network","remoteUrl":"http://127.0.0.1:4100","remoteEntryCount":3,"entryCount":4,"stagedBundleCount":2,"stagedBundlesLoaded":true,"startupTargetLoaded":true}',
-    '[2026-03-30 08:00:00.001] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.001Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.companion.main","discoverySource":"remote-catalog","localState":"bundled","localVersion":null,"localProvenanceKind":null,"versionMismatch":false}',
-    '[2026-03-30 08:00:00.002] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.002Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.hbr.workspace","discoverySource":"remote-catalog","localState":"remote-only","latestVersion":"0.9.2","localVersion":null,"localSourceKind":null,"localProvenanceKind":null,"localProvenanceStatus":null,"hasPublicLaunchTarget":true,"versionMismatch":false}',
-    '[2026-03-30 08:00:00.003] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.003Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.hbr.archive","discoverySource":"remote-catalog","localState":"staged","latestVersion":"0.9.0","localVersion":"0.8.0","localSourceKind":"local-build","localProvenanceKind":"host-staged-only","localProvenanceStatus":null,"versionMismatch":true}',
-    '[2026-03-30 08:00:00.004] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.004Z","level":"info","category":"interaction","event":"bundle-launcher.remote-catalog.entry","platform":"windows","bundleId":"opapp.private.shadow","discoverySource":"local-only","localState":"staged","latestVersion":null,"localVersion":"0.1.0","localSourceKind":"local-build","localProvenanceKind":"host-staged-only","localProvenanceStatus":null,"versionMismatch":false}',
+    '[2026-03-30 08:00:00.000] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.000Z","level":"info","category":"interaction","event":"bundle-library.load-start","platform":"windows","supportsBundleUpdates":true}',
+    '[2026-03-30 08:00:00.001] NativeLogger[1] [frontend-diagnostics] {"ts":"2026-03-30T00:00:00.001Z","level":"info","category":"interaction","event":"bundle-library.load-finished","platform":"windows","remoteStatus":"ready","remoteEntryCount":3,"stagedBundleCount":2,"updateStatusCount":3}',
   ].join('\n');
 }
 
@@ -274,14 +271,14 @@ test('resolveExpectedOtaLatestVersion prefers channel pins, then stable fallback
   );
 });
 
-test('extractFrontendDiagnosticEvents collects launcher remote catalog diagnostics', () => {
+test('extractFrontendDiagnosticEvents collects bundle-library load diagnostics', () => {
   const events = extractFrontendDiagnosticEvents(
     createLauncherDiagnosticLog(),
-    'bundle-launcher.remote-catalog.entry',
+    'bundle-library.load-finished',
   );
 
-  assert.equal(events.length, 4);
-  assert.equal(events[1]?.bundleId, 'opapp.hbr.workspace');
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.remoteEntryCount, 3);
 });
 
 test('extractOtaSpawnHostBundleDir stops before trailing OTA fields', () => {
@@ -326,65 +323,30 @@ test('extractOtaSpawnHostBundleDir falls back to OTA.EnsureBundle.Start for priv
   );
 });
 
-test('assertLauncherRemoteCatalogDiagnostics accepts matching launcher provenance snapshots', () => {
+test('assertBundleLibraryLoadDiagnostics accepts matching launcher provenance snapshots', () => {
   assert.doesNotThrow(() =>
-    assertLauncherRemoteCatalogDiagnostics(createLauncherDiagnosticLog(), {
-      summary: {
-        status: 'ready',
-        remoteUrl: 'http://127.0.0.1:4100',
-        remoteEntryCount: 3,
-        entryCount: 4,
-        stagedBundleCount: 2,
-        stagedBundlesLoaded: true,
-        startupTargetLoaded: true,
+    assertBundleLibraryLoadDiagnostics(createLauncherDiagnosticLog(), {
+      start: {
+        supportsBundleUpdates: true,
       },
-      entries: [
-        {
-          bundleId: 'opapp.hbr.workspace',
-          discoverySource: 'remote-catalog',
-          localState: 'remote-only',
-          latestVersion: '0.9.2',
-          localVersion: null,
-          localProvenanceKind: null,
-          localProvenanceStatus: null,
-          hasPublicLaunchTarget: true,
-          versionMismatch: false,
-        },
-        {
-          bundleId: 'opapp.private.shadow',
-          discoverySource: 'local-only',
-          localState: 'staged',
-          latestVersion: null,
-          localVersion: '0.1.0',
-          localProvenanceKind: 'host-staged-only',
-          localProvenanceStatus: null,
-          versionMismatch: false,
-        },
-      ],
+      finished: {
+        remoteStatus: 'ready',
+        remoteEntryCount: 3,
+        stagedBundleCount: 2,
+      },
     }),
   );
 });
 
-test('assertLauncherRemoteCatalogDiagnostics rejects missing launcher entries', () => {
+test('assertBundleLibraryLoadDiagnostics rejects mismatched launcher summary counts', () => {
   assert.throws(
     () =>
-      assertLauncherRemoteCatalogDiagnostics(createLauncherDiagnosticLog(), {
-        summary: {
-          status: 'ready',
-          remoteUrl: 'http://127.0.0.1:4100',
-          remoteEntryCount: 3,
-          entryCount: 4,
-          stagedBundleCount: 2,
-          stagedBundlesLoaded: true,
-          startupTargetLoaded: true,
+      assertBundleLibraryLoadDiagnostics(createLauncherDiagnosticLog(), {
+        finished: {
+          remoteEntryCount: 99,
         },
-        entries: [
-          {
-            bundleId: 'opapp.unknown.bundle',
-          },
-        ],
       }),
-    /missing entry 'opapp\.unknown\.bundle'/,
+    /field 'remoteEntryCount'/,
   );
 });
 

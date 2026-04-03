@@ -1,2 +1,2 @@
 # Pinned public opapp-frontend commit for opapp-desktop public CI and nightly release.
-3f557845c971a1fcded36a2b70b9128e99e3d38f
+1a055375ee19eb8d9ebf0e9e1913e895aed4e017

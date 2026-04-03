@@ -39,19 +39,15 @@ function byAutomationId(automationId, extra = {}) {
   };
 }
 
-function byName(name, extra = {}) {
-  return {
-    name,
-    ...extra,
-  };
-}
-
 const bundleLauncherReadyLocator = byAutomationId(
   'bundle-launcher.action.check-updates',
 );
-const bundleLauncherLegacyReadyLocator = byName('打开', {
-  controlType: 'Button',
-});
+const bundleLauncherServiceDetailLocator = byAutomationId(
+  'bundle-launcher.service.detail',
+);
+const bundleLauncherDetailTitleLocator = byAutomationId(
+  'bundle-launcher.detail.title',
+);
 const bundleLauncherReadyTimeoutMs = 35_000;
 
 function waitForLocator(window, locator, timeoutMs = defaultLocatorTimeoutMs) {
@@ -66,27 +62,6 @@ function waitForLocator(window, locator, timeoutMs = defaultLocatorTimeoutMs) {
       type: 'waitElement',
       window,
       locator,
-      timeoutMs,
-    },
-  ];
-}
-
-function waitForAnyLocator(
-  window,
-  locators,
-  timeoutMs = defaultLocatorTimeoutMs,
-) {
-  return [
-    {
-      type: 'waitWindow',
-      window,
-      focus: true,
-      timeoutMs,
-    },
-    {
-      type: 'waitAnyElement',
-      window,
-      locators,
       timeoutMs,
     },
   ];
@@ -171,11 +146,31 @@ export async function createBundleLauncherRootSpec({
     name: 'bundle-launcher-root',
     defaultTimeoutMs: defaultStepTimeoutMs,
     steps: [
-      ...waitForAnyLocator(
+      ...waitForLocator(
         window,
-        [bundleLauncherReadyLocator, bundleLauncherLegacyReadyLocator],
+        bundleLauncherReadyLocator,
         bundleLauncherReadyTimeoutMs,
       ),
+      {
+        type: 'waitText',
+        window,
+        locator: bundleLauncherServiceDetailLocator,
+        matcher: {
+          minLength: 4,
+        },
+        timeoutMs: defaultLocatorTimeoutMs,
+        saveAs: 'serviceDetail',
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: bundleLauncherDetailTitleLocator,
+        matcher: {
+          minLength: 2,
+        },
+        timeoutMs: defaultLocatorTimeoutMs,
+        saveAs: 'selectedBundleTitle',
+      },
       await createWindowRectPolicyStep({window, policyId, mode}),
     ],
   };
@@ -204,11 +199,7 @@ export async function createMainAndDetachedSettingsSpec({
     name: 'main-and-detached-settings',
     defaultTimeoutMs: defaultStepTimeoutMs,
     steps: [
-      ...waitForAnyLocator(
-        windows.main,
-        [bundleLauncherReadyLocator, bundleLauncherLegacyReadyLocator],
-        bundleLauncherReadyTimeoutMs,
-      ),
+      ...waitForLocator(windows.main, bundleLauncherReadyLocator, bundleLauncherReadyTimeoutMs),
       await createWindowRectPolicyStep({
         window: windows.main,
         policyId: 'main',
