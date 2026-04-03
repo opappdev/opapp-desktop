@@ -259,6 +259,9 @@ const defaultScenarios = [
       '[frontend-agent-workbench] dev-smoke-start',
       '[frontend-agent-workbench] dev-smoke-workspace cwd=opapp-frontend entries=',
       '[frontend-agent-workbench] dev-smoke-diff-ready path=opapp-frontend/',
+      '[frontend-agent-workbench] dev-smoke-window-list count=',
+      '[frontend-agent-workbench] dev-smoke-ui-ready',
+      '[frontend-agent-workbench] dev-smoke-capture-client backend=wgc crop=',
       '[frontend-agent-workbench] dev-smoke-complete',
     ],
     async prepareState() {
@@ -299,6 +302,38 @@ const defaultScenarios = [
         /\[frontend-agent-workbench\] dev-smoke-diff-ready path=opapp-frontend\/[^\r\n]+ cwd=opapp-frontend/i,
         'agent workbench dev smoke did not confirm a repo-root git diff candidate.',
       );
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-agent-workbench\] dev-smoke-ui-ready/i,
+        'agent workbench dev smoke did not confirm that the UI exited the initial loading shell.',
+      );
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-agent-workbench\] dev-smoke-window-list count=\d+ handle=0x[0-9a-f]+ process=/i,
+        'agent workbench dev smoke did not confirm the foreground window-capture target.',
+      );
+      assertLogContainsRegex(
+        logContents,
+        /\[frontend-agent-workbench\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=.*OPApp[\\/]+window-capture[\\/]+/i,
+        'agent workbench dev smoke did not produce a WGC client capture under the managed host directory.',
+      );
+      const screenCapturePath = extractLoggedPath(
+        logContents,
+        /\[frontend-agent-workbench\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=([^\r\n]+)/i,
+        'agent workbench dev smoke did not emit the client capture path.',
+      );
+      try {
+        const inspectionStats = assertPngCaptureLooksOpaque(
+          screenCapturePath,
+          'Windows dev verify agent-workbench client capture',
+        );
+        log(
+          'verify-dev',
+          `agent-workbench client capture OK: path=${screenCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
+        );
+      } finally {
+        await clearOptionalFile(screenCapturePath);
+      }
     },
     successSummary:
       'Metro-backed Windows host completed direct agent-workbench startup smoke.',
