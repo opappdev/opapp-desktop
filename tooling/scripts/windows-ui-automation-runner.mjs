@@ -64,9 +64,10 @@ export async function runWindowsUiAutomation(
     failFastMessage = 'Windows UI automation aborted early.',
   } = {},
 ) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'opapp-ui-automation-'));
+  const tempRoot = process.env.RUNNER_TEMP || os.tmpdir();
+  const tempDir = await mkdtemp(path.join(tempRoot, 'opapp-ui-automation-'));
   const artifactDir = await mkdtemp(
-    path.join(os.tmpdir(), 'opapp-ui-automation-artifacts-'),
+    path.join(tempRoot, 'opapp-ui-automation-artifacts-'),
   );
   const specPath = path.join(tempDir, 'spec.json');
   const outputPath = path.join(tempDir, 'result.json');

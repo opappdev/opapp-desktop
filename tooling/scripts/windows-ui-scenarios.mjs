@@ -39,9 +39,19 @@ function byAutomationId(automationId, extra = {}) {
   };
 }
 
+function byName(name, extra = {}) {
+  return {
+    name,
+    ...extra,
+  };
+}
+
 const bundleLauncherReadyLocator = byAutomationId(
   'bundle-launcher.action.check-updates',
 );
+const bundleLauncherLegacyReadyLocator = byName('打开', {
+  controlType: 'Button',
+});
 const bundleLauncherReadyTimeoutMs = 35_000;
 
 function waitForLocator(window, locator, timeoutMs = defaultLocatorTimeoutMs) {
@@ -56,6 +66,27 @@ function waitForLocator(window, locator, timeoutMs = defaultLocatorTimeoutMs) {
       type: 'waitElement',
       window,
       locator,
+      timeoutMs,
+    },
+  ];
+}
+
+function waitForAnyLocator(
+  window,
+  locators,
+  timeoutMs = defaultLocatorTimeoutMs,
+) {
+  return [
+    {
+      type: 'waitWindow',
+      window,
+      focus: true,
+      timeoutMs,
+    },
+    {
+      type: 'waitAnyElement',
+      window,
+      locators,
       timeoutMs,
     },
   ];
@@ -140,9 +171,9 @@ export async function createBundleLauncherRootSpec({
     name: 'bundle-launcher-root',
     defaultTimeoutMs: defaultStepTimeoutMs,
     steps: [
-      ...waitForLocator(
+      ...waitForAnyLocator(
         window,
-        bundleLauncherReadyLocator,
+        [bundleLauncherReadyLocator, bundleLauncherLegacyReadyLocator],
         bundleLauncherReadyTimeoutMs,
       ),
       await createWindowRectPolicyStep({window, policyId, mode}),
@@ -173,9 +204,9 @@ export async function createMainAndDetachedSettingsSpec({
     name: 'main-and-detached-settings',
     defaultTimeoutMs: defaultStepTimeoutMs,
     steps: [
-      ...waitForLocator(
+      ...waitForAnyLocator(
         windows.main,
-        bundleLauncherReadyLocator,
+        [bundleLauncherReadyLocator, bundleLauncherLegacyReadyLocator],
         bundleLauncherReadyTimeoutMs,
       ),
       await createWindowRectPolicyStep({

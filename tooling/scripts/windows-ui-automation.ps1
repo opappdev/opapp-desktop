@@ -669,6 +669,38 @@ function Resolve-Element {
   return Get-IndexedItem -Items $matches -Index $Step.locator.index
 }
 
+function Resolve-AnyElement {
+  param($Step)
+
+  $locators = @($Step.locators)
+  if ($locators.Count -eq 0) {
+    throw 'Missing locators on step.'
+  }
+
+  $windowSpec = Get-WindowSpec $Step
+  $containers = if ($null -ne $windowSpec) {
+    Get-Windows $windowSpec
+  } else {
+    @([System.Windows.Automation.AutomationElement]::RootElement)
+  }
+
+  if (@($containers).Count -eq 0) {
+    return $null
+  }
+
+  foreach ($container in $containers) {
+    foreach ($locator in $locators) {
+      $matches = Get-MatchingElements -Container $container -Locator $locator
+      $element = Get-IndexedItem -Items $matches -Index $locator.index
+      if ($null -ne $element) {
+        return $element
+      }
+    }
+  }
+
+  return $null
+}
+
 function Read-ElementText {
   param([System.Windows.Automation.AutomationElement]$Element)
 
@@ -1213,6 +1245,28 @@ try {
         $locatorDescription = Get-LocatorDescription $step.locator
         $stepOutput = Wait-ForMatch -TimeoutMs $timeoutMs -PollMs $pollMs -FailureMessage "Timed out waiting for element: $locatorDescription." -Probe {
           $element = Resolve-Element -Step $step
+          if ($null -eq $element) {
+            return $null
+          }
+
+          return @{
+            text = Read-ElementText -Element $element
+          }
+        }
+      }
+      'waitAnyElement' {
+        $locators = @($step.locators)
+        if ($locators.Count -eq 0) {
+          throw 'waitAnyElement requires one or more locators.'
+        }
+
+        $locatorDescription = @(
+          $locators | ForEach-Object {
+            Get-LocatorDescription $_
+          }
+        ) -join '; '
+        $stepOutput = Wait-ForMatch -TimeoutMs $timeoutMs -PollMs $pollMs -FailureMessage "Timed out waiting for any element: $locatorDescription." -Probe {
+          $element = Resolve-AnyElement -Step $step
           if ($null -eq $element) {
             return $null
           }
