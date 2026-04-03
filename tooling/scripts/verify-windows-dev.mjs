@@ -1,5 +1,5 @@
 import {existsSync} from 'node:fs';
-import {mkdir, readFile, readdir, unlink, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, readdir, rm, unlink, writeFile} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -34,6 +34,7 @@ import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
 import {
+  createAgentWorkbenchApprovalSpec,
   createAgentWorkbenchSpec,
   createLlmChatSpec,
   createViewShotCaptureRefSpec,
@@ -62,9 +63,17 @@ const opappUserDataRoot = path.join(
   process.env.LOCALAPPDATA || tempRoot,
   'OPApp',
 );
+const agentRuntimeRoot = path.join(opappUserDataRoot, 'agent-runtime');
+const agentRunDocumentsRoot = path.join(agentRuntimeRoot, 'runs');
+const agentThreadIndexPath = path.join(agentRuntimeRoot, 'thread-index.json');
+const agentWorkbenchApprovalSmokePath = path.join(
+  workspaceRoot,
+  '.tmp',
+  'agent-workbench',
+  'approval-write-smoke.txt',
+);
 const workspaceTargetPath = path.join(
-  opappUserDataRoot,
-  'agent-runtime',
+  agentRuntimeRoot,
   'workspace-target.json',
 );
 const companionStartupTargetPath = path.join(
@@ -81,6 +90,9 @@ const readinessMarkers = [
 const hostCommandOutputPath = path.join(tempRoot, 'opapp-windows-host.verify-dev.command.log');
 const defaultReadinessTimeoutMs = 60_000;
 const defaultSmokeTimeoutMs = 60_000;
+const defaultStateVerificationTimeoutMs = 10_000;
+const defaultStateVerificationPollMs = 200;
+const agentRunDocumentFileNamePattern = /^run-[^\\/]+\.json$/i;
 const readinessTimeoutMs = parsePositiveIntegerArg(
   process.argv,
   '--readiness-ms',
@@ -348,6 +360,7 @@ const defaultScenarios = [
       main: {
         surface: companionAgentWorkbenchSurfaceId,
         policy: 'main',
+        mode: 'wide',
       },
     },
     async cleanupState(state) {
@@ -358,6 +371,84 @@ const defaultScenarios = [
     },
     successSummary:
       'Metro-backed Windows host completed direct agent-workbench startup smoke.',
+  },
+  {
+    name: 'companion-agent-workbench-approval-approve-current-window',
+    description:
+      'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the approval request/approve flow',
+    smokeMarkers: [
+      `LaunchSurface surface=${companionAgentWorkbenchSurfaceId} policy=main mode=`,
+      `[frontend-companion] render bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
+      `[frontend-companion] session bundle=${companionMainBundleId} window=window.main tabs=1 active=tab:${companionAgentWorkbenchSurfaceId}:1 entries=tab:${companionAgentWorkbenchSurfaceId}:1:${companionAgentWorkbenchSurfaceId}`,
+    ],
+    async prepareState() {
+      return await prepareAgentWorkbenchSmokeState();
+    },
+    launchConfig: {
+      preferences: {
+        path: verifyDevPreferencesPath,
+      },
+      main: {
+        surface: companionAgentWorkbenchSurfaceId,
+        policy: 'main',
+        mode: 'wide',
+      },
+    },
+    async cleanupState(state) {
+      await cleanupAgentWorkbenchSmokeState(state);
+    },
+    async buildUiSpec() {
+      return await createAgentWorkbenchApprovalSpec({
+        decision: 'approve',
+      });
+    },
+    async verifyUiResult() {
+      await assertAgentWorkbenchApprovalState({
+        decision: 'approve',
+      });
+    },
+    successSummary:
+      'Metro-backed Windows host completed direct agent-workbench approval approve smoke.',
+  },
+  {
+    name: 'companion-agent-workbench-approval-reject-current-window',
+    description:
+      'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the approval request/reject flow',
+    smokeMarkers: [
+      `LaunchSurface surface=${companionAgentWorkbenchSurfaceId} policy=main mode=`,
+      `[frontend-companion] render bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
+      `[frontend-companion] mounted bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
+      `[frontend-companion] session bundle=${companionMainBundleId} window=window.main tabs=1 active=tab:${companionAgentWorkbenchSurfaceId}:1 entries=tab:${companionAgentWorkbenchSurfaceId}:1:${companionAgentWorkbenchSurfaceId}`,
+    ],
+    async prepareState() {
+      return await prepareAgentWorkbenchSmokeState();
+    },
+    launchConfig: {
+      preferences: {
+        path: verifyDevPreferencesPath,
+      },
+      main: {
+        surface: companionAgentWorkbenchSurfaceId,
+        policy: 'main',
+        mode: 'wide',
+      },
+    },
+    async cleanupState(state) {
+      await cleanupAgentWorkbenchSmokeState(state);
+    },
+    async buildUiSpec() {
+      return await createAgentWorkbenchApprovalSpec({
+        decision: 'reject',
+      });
+    },
+    async verifyUiResult() {
+      await assertAgentWorkbenchApprovalState({
+        decision: 'reject',
+      });
+    },
+    successSummary:
+      'Metro-backed Windows host completed direct agent-workbench approval reject smoke.',
   },
   {
     name: 'companion-chat-current-window',
@@ -631,8 +722,13 @@ async function prepareAgentWorkbenchSmokeState() {
   const legacyStartupTargetContent = await readOptionalFile(
     companionStartupTargetPath,
   );
-  const workspaceTargetContent = await readOptionalFile(workspaceTargetPath);
+  const agentRuntimeSnapshot = await snapshotTextTree(agentRuntimeRoot);
+  const approvalSmokeContent = await readOptionalFile(
+    agentWorkbenchApprovalSmokePath,
+  );
 
+  await rm(agentRuntimeRoot, {recursive: true, force: true});
+  await clearOptionalFile(agentWorkbenchApprovalSmokePath);
   await mkdir(path.dirname(workspaceTargetPath), {recursive: true});
   await writeFile(
     workspaceTargetPath,
@@ -646,21 +742,24 @@ async function prepareAgentWorkbenchSmokeState() {
   await clearOptionalFile(companionStartupTargetPath);
 
   return {
+    agentRuntimeSnapshot,
+    approvalSmokeContent,
     legacyStartupTargetContent,
-    workspaceTargetContent,
   };
 }
 
 async function cleanupAgentWorkbenchSmokeState(state) {
-  if (typeof state?.workspaceTargetContent === 'string') {
-    await mkdir(path.dirname(workspaceTargetPath), {recursive: true});
+  await restoreTextTree(agentRuntimeRoot, state?.agentRuntimeSnapshot);
+
+  if (typeof state?.approvalSmokeContent === 'string') {
+    await mkdir(path.dirname(agentWorkbenchApprovalSmokePath), {recursive: true});
     await writeFile(
-      workspaceTargetPath,
-      state.workspaceTargetContent,
+      agentWorkbenchApprovalSmokePath,
+      state.approvalSmokeContent,
       'utf8',
     );
   } else {
-    await clearOptionalFile(workspaceTargetPath);
+    await clearOptionalFile(agentWorkbenchApprovalSmokePath);
   }
 
   if (typeof state?.legacyStartupTargetContent === 'string') {
@@ -674,6 +773,282 @@ async function cleanupAgentWorkbenchSmokeState(state) {
   }
 
   await clearOptionalFile(companionStartupTargetPath);
+}
+
+async function snapshotTextTree(rootPath) {
+  if (!existsSync(rootPath)) {
+    return null;
+  }
+
+  const files = [];
+  async function walkDirectory(currentPath) {
+    const entries = await readdir(currentPath, {withFileTypes: true});
+    for (const entry of entries) {
+      const absolutePath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        await walkDirectory(absolutePath);
+        continue;
+      }
+
+      files.push({
+        relativePath: path.relative(rootPath, absolutePath),
+        content: await readFile(absolutePath, 'utf8'),
+      });
+    }
+  }
+
+  await walkDirectory(rootPath);
+  return files;
+}
+
+async function restoreTextTree(rootPath, snapshot) {
+  await rm(rootPath, {recursive: true, force: true});
+  if (!snapshot?.length) {
+    return;
+  }
+
+  for (const entry of snapshot) {
+    const absolutePath = path.join(rootPath, entry.relativePath);
+    await mkdir(path.dirname(absolutePath), {recursive: true});
+    await writeFile(absolutePath, entry.content, 'utf8');
+  }
+}
+
+async function readJsonFileOrThrow(targetPath, failureLabel) {
+  try {
+    return JSON.parse(await readFile(targetPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `Windows dev verify failed: could not read ${failureLabel} at ${targetPath}. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function sleep(ms) {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForAsyncCondition(
+  probe,
+  {
+    timeoutMs = defaultStateVerificationTimeoutMs,
+    pollMs = defaultStateVerificationPollMs,
+    failureMessage,
+  },
+) {
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastError = null;
+
+  while (Date.now() < deadlineMs) {
+    try {
+      const result = await probe();
+      if (result !== null) {
+        return result;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    await sleep(pollMs);
+  }
+
+  if (lastError) {
+    throw new Error(
+      `${failureMessage} Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    );
+  }
+
+  throw new Error(failureMessage);
+}
+
+async function loadAgentRunDocuments(targetDir) {
+  if (!existsSync(targetDir)) {
+    return [];
+  }
+
+  const entries = await readdir(targetDir, {withFileTypes: true});
+  const documents = [];
+  for (const entry of entries) {
+    if (
+      !entry.isFile() ||
+      !entry.name.endsWith('.json') ||
+      !agentRunDocumentFileNamePattern.test(entry.name)
+    ) {
+      continue;
+    }
+
+    const documentPath = path.join(targetDir, entry.name);
+    const document = await readJsonFileOrThrow(
+      documentPath,
+      `agent runtime document '${entry.name}'`,
+    );
+    if (
+      !document?.run?.runId ||
+      !Array.isArray(document?.timeline)
+    ) {
+      continue;
+    }
+
+    documents.push(document);
+  }
+
+  return documents;
+}
+
+function getSingleApprovalEntry(runDocument) {
+  const approvalEntries = Array.isArray(runDocument?.timeline)
+    ? runDocument.timeline.filter(entry => entry?.kind === 'approval')
+    : [];
+  if (approvalEntries.length !== 1) {
+    throw new Error(
+      `Windows dev verify failed: expected exactly 1 approval entry in agent workbench run '${runDocument?.run?.runId ?? '<missing>'}', received ${approvalEntries.length}.`,
+    );
+  }
+
+  return approvalEntries[0];
+}
+
+async function assertAgentWorkbenchApprovalState({decision}) {
+  if (decision !== 'approve' && decision !== 'reject') {
+    throw new Error(
+      `Windows dev verify failed: unsupported agent workbench approval decision '${decision}'.`,
+    );
+  }
+
+  const expectedRunStatus = decision === 'approve' ? 'completed' : 'cancelled';
+  const expectedApprovalStatus =
+    decision === 'approve' ? 'approved' : 'rejected';
+  const decisionLabel = decision === 'approve' ? 'approved' : 'rejected';
+
+  await waitForAsyncCondition(
+    async () => {
+      const approvalSmokeContent = await readOptionalFile(
+        agentWorkbenchApprovalSmokePath,
+      );
+      if (decision === 'approve') {
+        if (!approvalSmokeContent) {
+          return null;
+        }
+
+        for (const marker of [
+          'approvedAt=',
+          'requestedCwd=opapp-frontend',
+          'executor=agent-workbench',
+        ]) {
+          if (!approvalSmokeContent.includes(marker)) {
+            throw new Error(
+              `Windows dev verify failed: agent workbench approval smoke file is missing '${marker}'.`,
+            );
+          }
+        }
+      } else if (approvalSmokeContent) {
+        throw new Error(
+          `Windows dev verify failed: rejected agent workbench approval smoke unexpectedly created ${agentWorkbenchApprovalSmokePath}.`,
+        );
+      }
+
+      const threadIndex = await readJsonFileOrThrow(
+        agentThreadIndexPath,
+        'agent runtime thread index',
+      );
+      if (
+        !Array.isArray(threadIndex?.threads) ||
+        threadIndex.threads.length !== 1
+      ) {
+        throw new Error(
+          `Windows dev verify failed: expected exactly 1 persisted agent thread after ${decisionLabel} approval smoke, received ${threadIndex?.threads?.length ?? 0}.`,
+        );
+      }
+      if (threadIndex.threads[0]?.lastRunStatus !== expectedRunStatus) {
+        throw new Error(
+          `Windows dev verify failed: expected the latest ${decisionLabel} approval smoke thread state to be '${expectedRunStatus}', received '${threadIndex.threads[0]?.lastRunStatus ?? '<missing>'}'.`,
+        );
+      }
+
+      const runDocuments = await loadAgentRunDocuments(agentRunDocumentsRoot);
+      if (runDocuments.length !== 1) {
+        throw new Error(
+          `Windows dev verify failed: expected 1 persisted agent run after ${decisionLabel} approval smoke, received ${runDocuments.length}.`,
+        );
+      }
+
+      const runDocument = runDocuments[0];
+      if (runDocument.run?.status !== expectedRunStatus) {
+        throw new Error(
+          `Windows dev verify failed: expected the ${decisionLabel} approval run to settle as '${expectedRunStatus}', received '${runDocument.run?.status ?? '<missing>'}'.`,
+        );
+      }
+
+      const approvalEntry = getSingleApprovalEntry(runDocument);
+      if (approvalEntry.status !== expectedApprovalStatus) {
+        throw new Error(
+          `Windows dev verify failed: expected the ${decisionLabel} approval entry status to be '${expectedApprovalStatus}', received '${approvalEntry.status ?? '<missing>'}'.`,
+        );
+      }
+
+      if (
+        threadIndex.threads[0]?.lastRunId &&
+        threadIndex.threads[0].lastRunId !== runDocument.run?.runId
+      ) {
+        throw new Error(
+          `Windows dev verify failed: expected the latest ${decisionLabel} approval thread to reference run '${runDocument.run?.runId ?? '<missing>'}', received '${threadIndex.threads[0].lastRunId}'.`,
+        );
+      }
+
+      if (
+        !runDocument.run?.request?.command?.includes('approval-write-smoke.txt')
+      ) {
+        throw new Error(
+          `Windows dev verify failed: the ${decisionLabel} agent workbench run request no longer targets approval-write-smoke.txt.`,
+        );
+      }
+
+      const terminalEvents = runDocument.timeline.filter(
+        entry => entry?.kind === 'terminal-event',
+      );
+      if (decision === 'approve') {
+        const approvedStdout = terminalEvents
+          .filter(
+            entry =>
+              entry?.event === 'stdout' && typeof entry?.text === 'string',
+          )
+          .map(entry => entry.text)
+          .join('');
+        if (!approvedStdout.includes('workspace write smoke saved to')) {
+          throw new Error(
+            'Windows dev verify failed: the approved agent workbench run did not print the approval smoke save marker.',
+          );
+        }
+        if (!approvedStdout.includes('approvedAt=')) {
+          throw new Error(
+            'Windows dev verify failed: the approved agent workbench run did not echo the approval smoke contents.',
+          );
+        }
+
+        const approvedExitEntry = terminalEvents.find(
+          entry => entry?.event === 'exit',
+        );
+        if (approvedExitEntry?.exitCode !== 0) {
+          throw new Error(
+            `Windows dev verify failed: approved agent workbench run exit code was '${approvedExitEntry?.exitCode ?? '<missing>'}' instead of 0.`,
+          );
+        }
+      } else if (terminalEvents.length > 0) {
+        throw new Error(
+          'Windows dev verify failed: rejected agent workbench approval run should not have started a terminal session.',
+        );
+      }
+
+      return {
+        approvalSmokeContent,
+        threadIndex,
+        runDocument,
+      };
+    },
+    {
+      failureMessage: `Windows dev verify failed: ${decisionLabel} agent workbench approval state did not settle in time.`,
+    },
+  );
 }
 
 function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {

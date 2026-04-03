@@ -162,3 +162,11 @@ jobs:
         with:
           name: windows-release-host-log
           path: ${{ runner.temp }}/opapp-windows-host.log
+
+      - name: Upload Windows UI automation artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-ui-automation-artifacts
+          path: ${{ runner.temp }}/opapp-ui-automation-artifacts-*
+          if-no-files-found: ignore

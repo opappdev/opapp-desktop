@@ -43,7 +43,7 @@ public static class OpappUiAutomationNative {
 }
 "@
 
-$spec = Get-Content -LiteralPath $SpecPath -Raw | ConvertFrom-Json
+$spec = Get-Content -LiteralPath $SpecPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $savedValues = @{}
 $stepResults = @()
 $artifacts = @()
@@ -263,7 +263,7 @@ function Get-StepCaptureRequested {
   }
 
   if ($null -ne $spec.debug -and $spec.debug.captureAfterActions) {
-    return @('click', 'setValue') -contains $StepType
+    return @('click', 'setValue', 'sendKeys') -contains $StepType
   }
 
   return $false
@@ -717,6 +717,118 @@ function Get-NamedPropertyValue {
   return $property.Value
 }
 
+function Get-ControlTypeName {
+  param([System.Windows.Automation.AutomationElement]$Element)
+
+  try {
+    $programmaticName = [string]$Element.Current.ControlType.ProgrammaticName
+    if ($programmaticName -match '\.([^.]+)$') {
+      return $Matches[1]
+    }
+  } catch {
+    return $null
+  }
+
+  return $null
+}
+
+function Get-ElementState {
+  param([System.Windows.Automation.AutomationElement]$Element)
+
+  $state = @{
+    automationId = [string]$Element.Current.AutomationId
+    name = [string]$Element.Current.Name
+    controlType = Get-ControlTypeName -Element $Element
+    enabled = [bool]$Element.Current.IsEnabled
+    focused = [bool]$Element.Current.HasKeyboardFocus
+    offscreen = [bool]$Element.Current.IsOffscreen
+  }
+
+  $selectionPattern = $null
+  if ($Element.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$selectionPattern)) {
+    try {
+      $state.selected = [bool]$selectionPattern.Current.IsSelected
+    } catch {
+      # Some controls expose SelectionItemPattern but do not keep Current stable.
+    }
+  }
+
+  $togglePattern = $null
+  if ($Element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$togglePattern)) {
+    try {
+      $state.toggled = [string]$togglePattern.Current.ToggleState.ToString()
+    } catch {
+      # Leave toggle state absent when the control reports inconsistently.
+    }
+  }
+
+  return $state
+}
+
+function Test-StateMatcher {
+  param(
+    $State,
+    $Matcher
+  )
+
+  if ($null -eq $Matcher) {
+    return $true
+  }
+
+  $enabled = Get-NamedPropertyValue -Object $Matcher -Name 'enabled'
+  $focused = Get-NamedPropertyValue -Object $Matcher -Name 'focused'
+  $selected = Get-NamedPropertyValue -Object $Matcher -Name 'selected'
+  $offscreen = Get-NamedPropertyValue -Object $Matcher -Name 'offscreen'
+  $controlType = Get-NamedPropertyValue -Object $Matcher -Name 'controlType'
+  $automationId = Get-NamedPropertyValue -Object $Matcher -Name 'automationId'
+  $name = Get-NamedPropertyValue -Object $Matcher -Name 'name'
+  $toggled = Get-NamedPropertyValue -Object $Matcher -Name 'toggled'
+
+  if ($null -ne $enabled -and [bool]$State.enabled -ne [bool]$enabled) {
+    return $false
+  }
+
+  if ($null -ne $focused -and [bool]$State.focused -ne [bool]$focused) {
+    return $false
+  }
+
+  if ($null -ne $offscreen -and [bool]$State.offscreen -ne [bool]$offscreen) {
+    return $false
+  }
+
+  if ($controlType -and [string]$State.controlType -ne [string]$controlType) {
+    return $false
+  }
+
+  if ($automationId -and [string]$State.automationId -ne [string]$automationId) {
+    return $false
+  }
+
+  if ($name -and [string]$State.name -ne [string]$name) {
+    return $false
+  }
+
+  if ($null -ne $selected) {
+    if (-not $State.ContainsKey('selected')) {
+      return $false
+    }
+    if ([bool]$State.selected -ne [bool]$selected) {
+      return $false
+    }
+  }
+
+  if ($null -ne $toggled) {
+    if (-not $State.ContainsKey('toggled')) {
+      return $false
+    }
+    if ([string]$State.toggled -ne [string]$toggled) {
+      return $false
+    }
+  }
+
+  return $true
+}
+
 function Test-TextMatcher {
   param(
     [string]$Text,
@@ -1067,6 +1179,36 @@ try {
           throw "$($_.Exception.Message)$(Get-WindowTimeoutDiagnostic $windowSpec)"
         }
       }
+      'sendKeys' {
+        $windowSpec = Get-WindowSpec $step
+        $keys = [string]$step.keys
+        if ([string]::IsNullOrWhiteSpace($keys)) {
+          throw 'sendKeys requires a keys payload.'
+        }
+
+        $delayMs = if ($null -ne $step.delayMs) {
+          [int]$step.delayMs
+        } else {
+          150
+        }
+
+        $stepOutput = Wait-ForMatch -TimeoutMs $timeoutMs -PollMs $pollMs -FailureMessage "Timed out waiting to send keys '$keys'." -Probe {
+          if ($null -ne $windowSpec) {
+            $window = Get-IndexedItem -Items (Get-Windows $windowSpec) -Index $step.index
+            if ($null -eq $window) {
+              return $null
+            }
+
+            Focus-Window -Window $window
+          }
+
+          [System.Windows.Forms.SendKeys]::SendWait($keys)
+          Start-Sleep -Milliseconds $delayMs
+          return @{
+            keys = $keys
+          }
+        }
+      }
       'waitElement' {
         $locatorDescription = Get-LocatorDescription $step.locator
         $stepOutput = Wait-ForMatch -TimeoutMs $timeoutMs -PollMs $pollMs -FailureMessage "Timed out waiting for element: $locatorDescription." -Probe {
@@ -1078,6 +1220,44 @@ try {
           return @{
             text = Read-ElementText -Element $element
           }
+        }
+      }
+      'readElementState' {
+        $locatorDescription = Get-LocatorDescription $step.locator
+        $stepOutput = Wait-ForMatch -TimeoutMs $timeoutMs -PollMs $pollMs -FailureMessage "Timed out waiting to read element state: $locatorDescription." -Probe {
+          $element = Resolve-Element -Step $step
+          if ($null -eq $element) {
+            return $null
+          }
+
+          return Get-ElementState -Element $element
+        }
+      }
+      'waitElementState' {
+        $locatorDescription = Get-LocatorDescription $step.locator
+        $lastObservedState = $null
+        try {
+          $stepOutput = Wait-ForMatch -TimeoutMs $timeoutMs -PollMs $pollMs -FailureMessage "Timed out waiting for matching element state: $locatorDescription." -Probe {
+            $element = Resolve-Element -Step $step
+            if ($null -eq $element) {
+              return $null
+            }
+
+            $state = Get-ElementState -Element $element
+            $lastObservedState = $state
+            if (-not (Test-StateMatcher -State $state -Matcher $step.matcher)) {
+              return $null
+            }
+
+            return $state
+          }
+        } catch {
+          $diagnostic = if ($null -ne $lastObservedState) {
+            " Last observed state: $((ConvertTo-Json $lastObservedState -Compress))."
+          } else {
+            ''
+          }
+          throw "$($_.Exception.Message)$diagnostic"
         }
       }
       'click' {
