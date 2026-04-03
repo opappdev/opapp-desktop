@@ -34,6 +34,16 @@ Window capture entrypoints:
 
 Windows verification entrypoints:
 
+- `scripts/windows-ui-automation.ps1`: PowerShell-based Windows UI Automation
+  executor. Runs declarative scenarios against real top-level windows and
+  stable React Native Windows `AutomationId`/`testID` surfaces instead of
+  relying on in-app smoke `console.log` markers for pass/fail.
+- `scripts/windows-ui-automation-runner.mjs`: Node wrapper for the PowerShell
+  executor. Handles spec temp files, structured JSON results, and fail-fast
+  integration with host crash/error detection. Failure screenshots are retained
+  automatically and their paths are included in the thrown error text.
+- `scripts/windows-ui-scenarios.mjs`: shared declarative UI scenario builders
+  for launcher/settings/view-shot/window-capture/agent-workbench/chat flows.
 - `npm run dev:windows`: Metro-backed inner loop for seeing the current local
   dev effect.
 - `npm run verify:windows:dev`: fast Metro-backed self-check after the UI or
@@ -51,6 +61,9 @@ Windows verification entrypoints:
   (launcher startup, staged-bundle bridge, cached OTA catalog visibility, and
   public diagnostics).
 - Specialized cases now stay behind flags instead of extra npm aliases:
+  - declarative UI automation now drives current public Windows smoke flows;
+    host logs remain as startup/fail-fast diagnostics and for non-UI artifact
+    verification (for example persisted sessions/preferences and OTA state).
   - packaged validate-only:
     `npm run verify:windows -- --validate-only`
   - portable validate-only:
@@ -75,6 +88,10 @@ Windows verification entrypoints:
     `npm run verify:windows -- --include-secondary-window`
   - portable surface-model verify:
     `npm run verify:windows:portable -- --include-secondary-window`
+  - save screenshots after UI actions while debugging a flaky UI step:
+    `npm run verify:windows -- --scenario=save-main-window-preferences --ui-debug-screenshots`
+  - Metro-backed debug screenshots for UI automation:
+    `npm run verify:windows:dev -- --scenario=window-capture-current-window --ui-debug-screenshots`
 - use `npm run verify:windows:raw-release` after preflight has already identified the blocker and you need the unwrapped upstream restore/build failure for the Windows host itself.
 - `scripts/resolve-public-frontend-ref.mjs`: resolves the pinned public
   `opapp-frontend` checkout ref from `tooling/config/opapp-frontend-ref.txt`

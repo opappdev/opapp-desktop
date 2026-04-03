@@ -27,6 +27,18 @@ import {
 } from './windows-smoke-timing.mjs';
 import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
+import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
+import {
+  createBundleLauncherRootSpec,
+  createLlmChatSpec,
+  createMainAndDetachedSettingsSpec,
+  createSaveMainWindowPreferencesSpec,
+  createSettingsRootSpec,
+  createViewShotCaptureRefSpec,
+  createViewShotDataUriAndScreenSpec,
+  createViewShotTmpfileReleaseSpec,
+  createWindowCaptureLabSpec,
+} from './windows-ui-scenarios.mjs';
 
 const scenarioArg = process.argv
   .find(argument => argument.startsWith('--scenario='))
@@ -37,6 +49,7 @@ const preflightOnly = process.argv.includes('--preflight-only');
 const skipPrepare = process.argv.includes('--skip-prepare');
 const preserveState = process.argv.includes('--preserve-state');
 const resetSessions = process.argv.includes('--reset-sessions');
+const uiDebugScreenshots = process.argv.includes('--ui-debug-screenshots');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
 const otaRemoteToken = process.argv.find(argument => argument.startsWith('--ota-remote='));
@@ -139,7 +152,7 @@ const timeoutDefaults = loadTimeoutDefaultsForLaunch({
 const timeoutDefaultsPath = timeoutDefaults?.defaultsPath ?? null;
 const selectedTimeoutDefaults = timeoutDefaults?.defaults ?? null;
 const suggestedVerifyTotalTimeoutMs = selectedTimeoutDefaults?.verifyTotalMs ?? null;
-const defaultReadinessTimeoutMs = selectedTimeoutDefaults?.readinessMs ?? 25_000;
+const defaultReadinessTimeoutMs = selectedTimeoutDefaults?.readinessMs ?? 12_500;
 const readinessTimeoutMs = parsePositiveIntegerArg(
   process.argv,
   '--readiness-ms',
@@ -162,6 +175,65 @@ const scenarioTimeoutMs = parsePositiveIntegerArg(
 );
 
 let windowPolicyRegistryCache = null;
+const releaseChatToken = 'opapp-release-ui-automation';
+
+function assertUiSavedPath(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Windows release smoke failed: missing ${label}.`);
+  }
+
+  return value.trim();
+}
+
+function assertUiSavedDataUri(value, label) {
+  if (
+    typeof value !== 'string' ||
+    !value.startsWith('data:image/png;base64,') ||
+    value.length <= 'data:image/png;base64,'.length
+  ) {
+    throw new Error(`Windows release smoke failed: invalid ${label}.`);
+  }
+
+  return value;
+}
+
+async function runUiScenarioWithReleaseFailFast({uiSpec}) {
+  return await runWindowsUiAutomation(uiSpec, {
+    failFastMessage: `Windows release smoke aborted while running UI scenario '${scenarioName}'.`,
+    failFastCheck: async () => {
+      if (!hostProcessExists()) {
+        return 'OpappWindowsHost.exe exited unexpectedly.';
+      }
+
+      try {
+        const logContents = await readFile(logPath, 'utf8');
+        for (const marker of failureMarkers) {
+          if (logContents.includes(marker)) {
+            return `found '${marker}' in the release host log.`;
+          }
+        }
+      } catch {
+        // Ignore transient log-read failures while the UI runner is polling.
+      }
+
+      return null;
+    },
+  });
+}
+
+function applyUiDebugOptions(uiSpec) {
+  if (!uiDebugScreenshots) {
+    return uiSpec;
+  }
+
+  return {
+    ...uiSpec,
+    debug: {
+      ...(uiSpec?.debug ?? {}),
+      captureAfterActions: true,
+    },
+  };
+}
 
 function resolveLaunchModeOrThrow() {
   if (portableFlag) {
@@ -2449,6 +2521,252 @@ const smokeScenarios = {
   ...publicSmokeScenarios,
   ...privateSmokeScenarios,
 };
+
+function applyUiScenarioOverrides(targetScenarios) {
+  const assignUiScenario = (scenarioNameToAssign, config) => {
+    const targetScenario = targetScenarios[scenarioNameToAssign];
+    if (!targetScenario) {
+      return;
+    }
+
+    if (config.buildUiSpec) {
+      targetScenario.buildUiSpec = config.buildUiSpec;
+    }
+    if (config.verifyUiResult) {
+      targetScenario.verifyUiResult = config.verifyUiResult;
+    }
+    if ('verifyLog' in config) {
+      targetScenario.verifyLog = config.verifyLog;
+    }
+  };
+
+  assignUiScenario('main-window-bootstrap-compact', {
+    buildUiSpec: async () => createBundleLauncherRootSpec({mode: 'compact'}),
+    verifyLog: undefined,
+  });
+  assignUiScenario('tab-session', {
+    buildUiSpec: async () => createSettingsRootSpec({mode: 'wide'}),
+    verifyLog: undefined,
+  });
+  assignUiScenario('restore-tab-session', {
+    buildUiSpec: async () => createSettingsRootSpec({mode: 'wide'}),
+    verifyLog: undefined,
+  });
+  assignUiScenario('launcher-provenance', {
+    buildUiSpec: async () => createBundleLauncherRootSpec({mode: 'wide'}),
+  });
+  assignUiScenario('startup-target-main-launcher', {
+    buildUiSpec: async () => createBundleLauncherRootSpec({mode: 'wide'}),
+    verifyLog: undefined,
+  });
+  assignUiScenario('legacy-startup-target-main-launcher', {
+    buildUiSpec: async () => createBundleLauncherRootSpec({mode: 'wide'}),
+    async verifyLog() {
+      if (await fileExists(companionStartupTargetPath)) {
+        throw new Error(
+          'Windows release smoke failed: legacy launcher startup target file was not deleted after migration.',
+        );
+      }
+
+      const preferencesFile = await readFile(preferencesPath, 'utf8');
+      if (!preferencesFile.includes('[startup-target]')) {
+        throw new Error(
+          'Windows release smoke failed: legacy launcher startup target migration did not persist a native startup-target section.',
+        );
+      }
+
+      if (!preferencesFile.includes('surface=companion.main')) {
+        throw new Error(
+          'Windows release smoke failed: native startup-target preference is missing the migrated launcher surface id.',
+        );
+      }
+
+      if (!preferencesFile.includes('bundle=opapp.companion.main')) {
+        throw new Error(
+          'Windows release smoke failed: native startup-target preference is missing the migrated launcher bundle id.',
+        );
+      }
+    },
+  });
+  assignUiScenario('startup-target-settings', {
+    buildUiSpec: async () => createSettingsRootSpec({mode: 'wide'}),
+    verifyLog: undefined,
+  });
+  assignUiScenario('settings-default-current-window', {
+    buildUiSpec: async () => createSettingsRootSpec({mode: 'wide'}),
+    verifyLog: undefined,
+  });
+  assignUiScenario('settings-default-new-window', {
+    buildUiSpec: async () =>
+      createMainAndDetachedSettingsSpec({mainMode: 'wide', settingsMode: 'compact'}),
+    verifyLog: undefined,
+  });
+  assignUiScenario('restore-settings-window', {
+    buildUiSpec: async () =>
+      createMainAndDetachedSettingsSpec({mainMode: 'wide', settingsMode: 'compact'}),
+    verifyLog: undefined,
+  });
+  assignUiScenario('save-main-window-preferences', {
+    buildUiSpec: async () => createSaveMainWindowPreferencesSpec(),
+    verifyLog: undefined,
+  });
+  assignUiScenario('view-shot-current-window', {
+    buildUiSpec: async () => createViewShotCaptureRefSpec({}),
+    async verifyUiResult(uiResult) {
+      const captureRefPath = assertUiSavedPath(
+        uiResult?.savedValues?.captureRefPath,
+        'view-shot capture-ref path',
+      );
+
+      const refStats = assertPngCaptureLooksOpaque(
+        captureRefPath,
+        'Windows release smoke view-shot capture-ref',
+      );
+      log(
+        `view-shot capture-ref OK: path=${captureRefPath} opaqueSamples=${refStats.opaqueSamples}/${refStats.sampleCount} distinctSamples=${refStats.distinctSampleCount} averageAlpha=${refStats.averageAlpha}`,
+      );
+
+      const followupSpec = await createViewShotDataUriAndScreenSpec({});
+      const followupResult = await runUiScenarioWithReleaseFailFast({uiSpec: followupSpec});
+      const captureScreenPath = assertUiSavedPath(
+        followupResult?.savedValues?.captureScreenPath,
+        'view-shot capture-screen path',
+      );
+      assertUiSavedDataUri(
+        followupResult?.savedValues?.componentDataUri,
+        'view-shot component data-uri',
+      );
+      const screenStats = assertPngCaptureLooksOpaque(
+        captureScreenPath,
+        'Windows release smoke view-shot capture-screen',
+      );
+      log(
+        `view-shot capture-screen OK: path=${captureScreenPath} opaqueSamples=${screenStats.opaqueSamples}/${screenStats.sampleCount} distinctSamples=${screenStats.distinctSampleCount} averageAlpha=${screenStats.averageAlpha}`,
+      );
+
+      const releaseSpec = await createViewShotTmpfileReleaseSpec({});
+      await runUiScenarioWithReleaseFailFast({uiSpec: releaseSpec});
+
+      await rm(captureRefPath, {force: true});
+      await rm(captureScreenPath, {force: true});
+    },
+    verifyLog: undefined,
+  });
+  assignUiScenario('window-capture-current-window', {
+    buildUiSpec: async () => createWindowCaptureLabSpec({}),
+    async verifyUiResult(uiResult) {
+      const captureWindowPath = assertUiSavedPath(
+        uiResult?.savedValues?.captureWindowPath,
+        'window-capture window path',
+      );
+      const captureClientPath = assertUiSavedPath(
+        uiResult?.savedValues?.captureClientPath,
+        'window-capture client path',
+      );
+
+      const windowStats = assertPngCaptureLooksOpaque(
+        captureWindowPath,
+        'Windows release smoke window-capture window capture',
+      );
+      log(
+        `window-capture window OK: path=${captureWindowPath} opaqueSamples=${windowStats.opaqueSamples}/${windowStats.sampleCount} distinctSamples=${windowStats.distinctSampleCount} averageAlpha=${windowStats.averageAlpha}`,
+      );
+      const clientStats = assertPngCaptureLooksOpaque(
+        captureClientPath,
+        'Windows release smoke window-capture client capture',
+      );
+      log(
+        `window-capture client OK: path=${captureClientPath} opaqueSamples=${clientStats.opaqueSamples}/${clientStats.sampleCount} distinctSamples=${clientStats.distinctSampleCount} averageAlpha=${clientStats.averageAlpha}`,
+      );
+
+      await rm(captureWindowPath, {force: true});
+      await rm(captureClientPath, {force: true});
+    },
+    verifyLog: undefined,
+  });
+  assignUiScenario('companion-chat-current-window', {
+    buildUiSpec: async state =>
+      createLlmChatSpec({
+        baseUrl: state?.chatSmoke?.baseUrl ?? '',
+        model: state?.chatSmoke?.model ?? 'fixture-native-sse',
+        token: releaseChatToken,
+        prompt: state?.chatSmoke?.requestPrompt ?? 'CHAT_TEST_PROMPT',
+        expectedAssistantText: 'CHAT_TEST_OK',
+      }),
+    async verifyUiResult(_uiResult, state) {
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat current-window flow',
+      );
+    },
+    verifyLog: undefined,
+  });
+  assignUiScenario('companion-chat-current-window-server-error', {
+    buildUiSpec: async state =>
+      createLlmChatSpec({
+        baseUrl: state?.chatSmoke?.baseUrl ?? '',
+        model: state?.chatSmoke?.model ?? 'fixture-native-sse',
+        token: releaseChatToken,
+        prompt: state?.chatSmoke?.requestPrompt ?? 'CHAT_TEST_PROMPT',
+        expectedErrorText:
+          state?.chatSmoke?.expectedErrorText ??
+          'EventSource requires HTTP 200, received 500.',
+      }),
+    async verifyUiResult(_uiResult, state) {
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat current-window server-error flow',
+      );
+    },
+    verifyLog: undefined,
+  });
+  assignUiScenario('companion-chat-current-window-malformed-chunk', {
+    buildUiSpec: async state =>
+      createLlmChatSpec({
+        baseUrl: state?.chatSmoke?.baseUrl ?? '',
+        model: state?.chatSmoke?.model ?? 'fixture-native-sse',
+        token: releaseChatToken,
+        prompt: state?.chatSmoke?.requestPrompt ?? 'CHAT_TEST_PROMPT',
+        expectedErrorText:
+          state?.chatSmoke?.expectedErrorText ??
+          '服务端返回了无法解析的流式 JSON 数据。',
+      }),
+    async verifyUiResult(_uiResult, state) {
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat current-window malformed-chunk flow',
+      );
+    },
+    verifyLog: undefined,
+  });
+  assignUiScenario('companion-chat-current-window-stream-abort', {
+    buildUiSpec: async state =>
+      createLlmChatSpec({
+        baseUrl: state?.chatSmoke?.baseUrl ?? '',
+        model: state?.chatSmoke?.model ?? 'fixture-native-sse',
+        token: releaseChatToken,
+        prompt: state?.chatSmoke?.requestPrompt ?? 'CHAT_TEST_PROMPT',
+        expectedErrorText:
+          state?.chatSmoke?.expectedErrorText ??
+          '服务端在完成流式响应前中断了连接。',
+      }),
+    async verifyUiResult(_uiResult, state) {
+      assertCompanionChatSmokeRequestCaptured(
+        state,
+        'companion chat current-window stream-abort flow',
+      );
+    },
+    verifyLog: undefined,
+  });
+  assignUiScenario('secondary-window', {
+    buildUiSpec: async () =>
+      createMainAndDetachedSettingsSpec({mainMode: 'wide', settingsMode: 'compact'}),
+    verifyLog: undefined,
+  });
+}
+
+applyUiScenarioOverrides(smokeScenarios);
+
 const supportedScenarioNames = Object.keys(smokeScenarios);
 const scenarioName = resolveScenarioNameOrThrow();
 
@@ -3916,11 +4234,20 @@ async function main() {
     });
 
     const scenarioPhaseStartMs = Date.now();
-    const logContents = await waitForMarkers(successMarkers, {
-      timeoutMs: scenarioTimeoutMs,
-      phaseLabel: 'scenario success markers',
-      timeoutFlag: '--scenario-ms',
-    });
+    let logContents = null;
+    let uiResult = null;
+    if (typeof scenario.buildUiSpec === 'function') {
+      const uiSpec = applyUiDebugOptions(await scenario.buildUiSpec(scenarioState));
+      uiResult = await runUiScenarioWithReleaseFailFast({uiSpec});
+      logContents = await readFile(logPath, 'utf8');
+      await scenario.verifyUiResult?.(uiResult, scenarioState);
+    } else {
+      logContents = await waitForMarkers(successMarkers, {
+        timeoutMs: scenarioTimeoutMs,
+        phaseLabel: 'scenario success markers',
+        timeoutFlag: '--scenario-ms',
+      });
+    }
     const scenarioPhaseDurationMs = Date.now() - scenarioPhaseStartMs;
     logTimingPhaseResult({
       phaseLabel: 'scenario success markers',
@@ -3939,7 +4266,7 @@ async function main() {
     }));
 
     await assertBundledPolicyRegistry(logContents);
-    await scenario.verifyLog?.(logContents, scenarioState);
+    await scenario.verifyLog?.(logContents, scenarioState, uiResult);
     const tail = logContents.split(/\r?\n/).slice(-120).join('\n');
     console.log('[smoke] success log tail:');
     console.log(tail);

@@ -653,7 +653,7 @@ function parseFrontendDiagnosticLine(line) {
   }
 }
 
-function getFatalFrontendDiagnostic(content) {
+export function getFatalFrontendDiagnostic(content) {
   const lines = content.split(/\r?\n/).filter(Boolean);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const payload = parseFrontendDiagnosticLine(lines[index]);

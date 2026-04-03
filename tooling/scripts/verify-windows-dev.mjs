@@ -14,6 +14,7 @@ import {
   ensureWorkspaceTemp,
   frontendRoot,
   formatHostCommandTailDetails,
+  getFatalFrontendDiagnostic,
   hostLogPath,
   hostRoot,
   killProcessTree,
@@ -31,10 +32,20 @@ import {
 import {startCompanionChatSmokeServer} from './companion-chat-sse-smoke.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
+import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
+import {
+  createAgentWorkbenchSpec,
+  createLlmChatSpec,
+  createViewShotCaptureRefSpec,
+  createViewShotDataUriAndScreenSpec,
+  createViewShotTmpfileReleaseSpec,
+  createWindowCaptureLabSpec,
+} from './windows-ui-scenarios.mjs';
 
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
+const uiDebugScreenshots = process.argv.includes('--ui-debug-screenshots');
 const companionMainBundleId = 'opapp.companion.main';
 const companionChatBundleId = 'opapp.companion.chat';
 const companionAgentWorkbenchSurfaceId = 'companion.agent-workbench';
@@ -65,12 +76,11 @@ const companionStartupTargetPath = path.join(
 const readinessMarkers = [
   'Runtime=Metro',
   'InstanceLoaded failed=false',
-  '[frontend-companion] mounted',
 ];
 
 const hostCommandOutputPath = path.join(tempRoot, 'opapp-windows-host.verify-dev.command.log');
-const defaultReadinessTimeoutMs = 120000;
-const defaultSmokeTimeoutMs = 120000;
+const defaultReadinessTimeoutMs = 60_000;
+const defaultSmokeTimeoutMs = 60_000;
 const readinessTimeoutMs = parsePositiveIntegerArg(
   process.argv,
   '--readiness-ms',
@@ -79,6 +89,93 @@ const readinessTimeoutMs = parsePositiveIntegerArg(
 const smokeTimeoutMs = parsePositiveIntegerArg(process.argv, '--smoke-ms', defaultSmokeTimeoutMs);
 
 const foregroundWindowTitles = ['OpappWindowsHost', 'Opapp Tool', 'Opapp Settings'];
+const devChatToken = 'opapp-dev-ui-automation';
+
+function assertUiSavedPath(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Windows dev verify failed: missing ${label}.`);
+  }
+
+  return value.trim();
+}
+
+function assertUiSavedDataUri(value, label) {
+  if (
+    typeof value !== 'string' ||
+    !value.startsWith('data:image/png;base64,') ||
+    value.length <= 'data:image/png;base64,'.length
+  ) {
+    throw new Error(`Windows dev verify failed: invalid ${label}.`);
+  }
+
+  return value;
+}
+
+function hostProcessExists() {
+  const result = spawnSync(
+    'tasklist.exe',
+    ['/FI', 'IMAGENAME eq OpappWindowsHost.exe', '/FO', 'CSV', '/NH'],
+    {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    },
+  );
+
+  return (
+    result.status === 0 &&
+    (result.stdout ?? '').toLowerCase().includes('opappwindowshost.exe')
+  );
+}
+
+async function runUiScenarioWithDevFailFast({
+  scenario,
+  uiSpec,
+  hostChild,
+}) {
+  return await runWindowsUiAutomation(uiSpec, {
+    failFastMessage: `Windows dev verify aborted while running UI scenario '${scenario.name}'.`,
+    failFastCheck: async () => {
+      const deterministicFailure =
+        await detectDeterministicCommandFailureFromHost(hostChild, {
+          fallbackOutputPath: hostCommandOutputPath,
+        });
+      if (deterministicFailure) {
+        return `${deterministicFailure.code}: ${deterministicFailure.summary}`;
+      }
+
+      if (!hostProcessExists()) {
+        return 'OpappWindowsHost.exe exited unexpectedly.';
+      }
+
+      try {
+        const logContents = await readFile(hostLogPath, 'utf8');
+        const fatalDiagnostic = getFatalFrontendDiagnostic(logContents);
+        if (fatalDiagnostic) {
+          return `${fatalDiagnostic.event}: ${fatalDiagnostic.message}`;
+        }
+      } catch {
+        // Ignore transient log-read failures while the UI runner is polling.
+      }
+
+      return null;
+    },
+  });
+}
+
+function applyUiDebugOptions(uiSpec) {
+  if (!uiDebugScreenshots) {
+    return uiSpec;
+  }
+
+  return {
+    ...uiSpec,
+    debug: {
+      ...(uiSpec?.debug ?? {}),
+      captureAfterActions: true,
+    },
+  };
+}
 
 const defaultScenarios = [
   {
@@ -106,63 +203,61 @@ const defaultScenarios = [
         policy: 'tool',
         presentation: 'current-window',
       },
-      initialOpenProps: {
-        'dev-smoke-scenario': 'view-shot-basics',
-      },
     },
-    async verifyLog(logContents) {
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-view-shot\] dev-smoke-capture-ref uri=.*OPApp[\\/]+view-shot[\\/]+/i,
-        'view-shot dev smoke did not produce a tmpfile captureRef artifact under the managed host directory.',
+    async buildUiSpec() {
+      return await createViewShotCaptureRefSpec({});
+    },
+    async verifyUiResult(uiResult, scenarioState, {hostChild} = {}) {
+      const captureRefPath = assertUiSavedPath(
+        uiResult?.savedValues?.captureRefPath,
+        'view-shot capture-ref path',
       );
-      const inspectionCapturePath = extractLoggedPath(
-        logContents,
-        /\[frontend-view-shot\] dev-smoke-inspection-ref uri=([^\r\n]+)/i,
-        'view-shot dev smoke did not produce an inspection tmpfile artifact under the managed host directory.',
+
+      const refStats = assertPngCaptureLooksOpaque(
+        captureRefPath,
+        'Windows dev verify view-shot capture-ref',
       );
-      try {
-        const inspectionStats = assertPngCaptureLooksOpaque(
-          inspectionCapturePath,
-          'Windows dev verify view-shot inspection capture',
-        );
-        log(
-          'verify-dev',
-          `view-shot inspection OK: path=${inspectionCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
-        );
-      } finally {
-        await clearOptionalFile(inspectionCapturePath);
+      log(
+        'verify-dev',
+        `view-shot capture-ref OK: path=${captureRefPath} opaqueSamples=${refStats.opaqueSamples}/${refStats.sampleCount} distinctSamples=${refStats.distinctSampleCount} averageAlpha=${refStats.averageAlpha}`,
+      );
+
+      if (!hostChild) {
+        throw new Error('Windows dev verify failed: missing host child for view-shot tmpfile release.');
       }
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-view-shot\] dev-smoke-component-data-uri prefix=data:image\/png;base64, length=\d+/i,
-        'view-shot dev smoke did not produce a PNG data-uri from ViewShot.capture.',
+
+      const followupSpec = await createViewShotDataUriAndScreenSpec({});
+      const followupResult = await runUiScenarioWithDevFailFast({
+        scenario: {name: 'view-shot-current-window-followup'},
+        uiSpec: followupSpec,
+        hostChild,
+      });
+      const captureScreenPath = assertUiSavedPath(
+        followupResult?.savedValues?.captureScreenPath,
+        'view-shot capture-screen path',
       );
-      const jpgQualityMatch = normalizeLogContents(logContents).match(
-        /\[frontend-view-shot\] dev-smoke-jpg-quality low=(\d+) high=(\d+)/i,
+      assertUiSavedDataUri(
+        followupResult?.savedValues?.componentDataUri,
+        'view-shot component data-uri',
       );
-      if (!jpgQualityMatch) {
-        throw new Error(
-          'Windows dev verify failed: view-shot dev smoke did not emit the JPG quality summary marker.',
-        );
-      }
-      const lowQualityLength = Number(jpgQualityMatch[1]);
-      const highQualityLength = Number(jpgQualityMatch[2]);
-      if (!Number.isFinite(lowQualityLength) || !Number.isFinite(highQualityLength)) {
-        throw new Error(
-          'Windows dev verify failed: view-shot dev smoke emitted an invalid JPG quality summary marker.',
-        );
-      }
-      if (highQualityLength <= lowQualityLength) {
-        throw new Error(
-          'Windows dev verify failed: high-quality JPG capture was not larger than low-quality JPG capture.',
-        );
-      }
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-view-shot\] dev-smoke-capture-screen uri=.*OPApp[\\/]+view-shot[\\/]+/i,
-        'view-shot dev smoke did not produce a tmpfile captureScreen artifact under the managed host directory.',
+      const screenStats = assertPngCaptureLooksOpaque(
+        captureScreenPath,
+        'Windows dev verify view-shot capture-screen',
       );
+      log(
+        'verify-dev',
+        `view-shot capture-screen OK: path=${captureScreenPath} opaqueSamples=${screenStats.opaqueSamples}/${screenStats.sampleCount} distinctSamples=${screenStats.distinctSampleCount} averageAlpha=${screenStats.averageAlpha}`,
+      );
+
+      const releaseSpec = await createViewShotTmpfileReleaseSpec({});
+      await runUiScenarioWithDevFailFast({
+        scenario: {name: 'view-shot-current-window-release'},
+        uiSpec: releaseSpec,
+        hostChild,
+      });
+
+      await clearOptionalFile(captureRefPath);
+      await clearOptionalFile(captureScreenPath);
     },
     successSummary:
       'Metro-backed Windows host completed view-shot dev smoke.',
@@ -189,60 +284,39 @@ const defaultScenarios = [
         policy: 'tool',
         presentation: 'current-window',
       },
-      initialOpenProps: {
-        'dev-smoke-scenario': 'window-capture-basics',
-      },
     },
-    async verifyLog(logContents) {
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-list count=\d+ handle=0x[0-9a-f]+ process=/i,
-        'window-capture dev smoke did not list a foreground window.',
+    async buildUiSpec() {
+      return await createWindowCaptureLabSpec({});
+    },
+    async verifyUiResult(uiResult) {
+      const captureWindowPath = assertUiSavedPath(
+        uiResult?.savedValues?.captureWindowPath,
+        'window-capture window path',
       );
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-capture-window backend=wgc size=\d+x\d+ path=.*OPApp[\\/]+window-capture[\\/]+/i,
-        'window-capture dev smoke did not produce a WGC window capture under the managed host directory.',
+      const captureClientPath = assertUiSavedPath(
+        uiResult?.savedValues?.captureClientPath,
+        'window-capture client path',
       );
-      const windowCapturePath = extractLoggedPath(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-capture-window backend=wgc size=\d+x\d+ path=([^\r\n]+)/i,
-        'window-capture dev smoke did not emit the window capture path.',
+
+      const windowStats = assertPngCaptureLooksOpaque(
+        captureWindowPath,
+        'Windows dev verify window-capture window capture',
       );
-      try {
-        const inspectionStats = assertPngCaptureLooksOpaque(
-          windowCapturePath,
-          'Windows dev verify window-capture window capture',
-        );
-        log(
-          'verify-dev',
-          `window-capture window OK: path=${windowCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
-        );
-      } finally {
-        await clearOptionalFile(windowCapturePath);
-      }
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=.*OPApp[\\/]+window-capture[\\/]+/i,
-        'window-capture dev smoke did not produce a WGC client capture under the managed host directory.',
+      log(
+        'verify-dev',
+        `window-capture window OK: path=${captureWindowPath} opaqueSamples=${windowStats.opaqueSamples}/${windowStats.sampleCount} distinctSamples=${windowStats.distinctSampleCount} averageAlpha=${windowStats.averageAlpha}`,
       );
-      const clientCapturePath = extractLoggedPath(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=([^\r\n]+)/i,
-        'window-capture dev smoke did not emit the client capture path.',
+      const clientStats = assertPngCaptureLooksOpaque(
+        captureClientPath,
+        'Windows dev verify window-capture client capture',
       );
-      try {
-        const inspectionStats = assertPngCaptureLooksOpaque(
-          clientCapturePath,
-          'Windows dev verify window-capture client capture',
-        );
-        log(
-          'verify-dev',
-          `window-capture client OK: path=${clientCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
-        );
-      } finally {
-        await clearOptionalFile(clientCapturePath);
-      }
+      log(
+        'verify-dev',
+        `window-capture client OK: path=${captureClientPath} opaqueSamples=${clientStats.opaqueSamples}/${clientStats.sampleCount} distinctSamples=${clientStats.distinctSampleCount} averageAlpha=${clientStats.averageAlpha}`,
+      );
+
+      await clearOptionalFile(captureWindowPath);
+      await clearOptionalFile(captureClientPath);
     },
     successSummary:
       'Metro-backed Windows host completed window-capture dev smoke.',
@@ -275,65 +349,12 @@ const defaultScenarios = [
         surface: companionAgentWorkbenchSurfaceId,
         policy: 'main',
       },
-      mainProps: {
-        'dev-smoke-scenario': 'agent-workbench-basics',
-      },
     },
     async cleanupState(state) {
       await cleanupAgentWorkbenchSmokeState(state);
     },
-    async verifyLog(logContents) {
-      assertCompanionAgentWorkbenchCurrentWindowStayedOnSurface(
-        logContents,
-        'agent workbench dev smoke',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-agent-workbench] dev-smoke-failed',
-        'agent workbench dev smoke logged a dev-smoke failure marker.',
-      );
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-agent-workbench\] dev-smoke-workspace cwd=opapp-frontend entries=\d+ trusted=true/i,
-        'agent workbench dev smoke did not confirm the trusted opapp-frontend workspace listing.',
-      );
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-agent-workbench\] dev-smoke-diff-ready path=opapp-frontend\/[^\r\n]+ cwd=opapp-frontend/i,
-        'agent workbench dev smoke did not confirm a repo-root git diff candidate.',
-      );
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-agent-workbench\] dev-smoke-ui-ready/i,
-        'agent workbench dev smoke did not confirm that the UI exited the initial loading shell.',
-      );
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-agent-workbench\] dev-smoke-window-list count=\d+ handle=0x[0-9a-f]+ process=/i,
-        'agent workbench dev smoke did not confirm the foreground window-capture target.',
-      );
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-agent-workbench\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=.*OPApp[\\/]+window-capture[\\/]+/i,
-        'agent workbench dev smoke did not produce a WGC client capture under the managed host directory.',
-      );
-      const screenCapturePath = extractLoggedPath(
-        logContents,
-        /\[frontend-agent-workbench\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=([^\r\n]+)/i,
-        'agent workbench dev smoke did not emit the client capture path.',
-      );
-      try {
-        const inspectionStats = assertPngCaptureLooksOpaque(
-          screenCapturePath,
-          'Windows dev verify agent-workbench client capture',
-        );
-        log(
-          'verify-dev',
-          `agent-workbench client capture OK: path=${screenCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
-        );
-      } finally {
-        await clearOptionalFile(screenCapturePath);
-      }
+    async buildUiSpec() {
+      return await createAgentWorkbenchSpec({});
     },
     successSummary:
       'Metro-backed Windows host completed direct agent-workbench startup smoke.',
@@ -362,25 +383,21 @@ const defaultScenarios = [
           policy: 'main',
           'entry-file': 'index.chat',
         },
-        mainProps: {
-          'dev-smoke-scenario': state?.scenario ?? 'llm-chat-native-sse',
-          'dev-smoke-base-url': state?.baseUrl ?? '',
-        },
       };
     },
     async cleanupState(state) {
       await cleanupCompanionChatSmokeState(state);
     },
-    async verifyLog(logContents, state) {
-      assertCompanionChatCurrentWindowStayedOnChildBundle(
-        logContents,
-        'companion chat dev smoke',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-failed',
-        'companion chat dev smoke logged a dev-smoke failure marker.',
-      );
+    async buildUiSpec(state) {
+      return await createLlmChatSpec({
+        baseUrl: state?.baseUrl ?? '',
+        model: state?.model ?? 'fixture-native-sse',
+        token: devChatToken,
+        prompt: state?.requestPrompt ?? 'CHAT_TEST_PROMPT',
+        expectedAssistantText: 'CHAT_TEST_OK',
+      });
+    },
+    async verifyUiResult(_uiResult, state) {
       assertCompanionChatSmokeRequestCaptured(state, 'companion chat dev smoke');
     },
     successSummary:
@@ -415,35 +432,22 @@ const optionalScenarios = [
           policy: 'main',
           'entry-file': 'index.chat',
         },
-        mainProps: {
-          'dev-smoke-scenario': state?.scenario ?? 'llm-chat-native-sse-server-error',
-          'dev-smoke-base-url': state?.baseUrl ?? '',
-        },
       };
     },
     async cleanupState(state) {
       await cleanupCompanionChatSmokeState(state);
     },
-    async verifyLog(logContents, state) {
-      assertCompanionChatCurrentWindowStayedOnChildBundle(
-        logContents,
-        'companion chat server-error dev smoke',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-failed',
-        'companion chat server-error dev smoke logged an unexpected failure marker.',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-open',
-        'companion chat server-error dev smoke unexpectedly accepted an HTTP error response as an open SSE stream.',
-      );
+    async buildUiSpec(state) {
+      return await createLlmChatSpec({
+        baseUrl: state?.baseUrl ?? '',
+        model: state?.model ?? 'fixture-native-sse',
+        token: devChatToken,
+        prompt: state?.requestPrompt ?? 'CHAT_TEST_PROMPT',
+        expectedErrorText: state?.expectedErrorText ?? 'EventSource requires HTTP 200',
+      });
+    },
+    async verifyUiResult(_uiResult, state) {
       assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat server-error dev smoke',
-      );
-      await assertCompanionChatSmokeErrorUiState(
         state,
         'companion chat server-error dev smoke',
       );
@@ -478,31 +482,23 @@ const optionalScenarios = [
           policy: 'main',
           'entry-file': 'index.chat',
         },
-        mainProps: {
-          'dev-smoke-scenario':
-            state?.scenario ?? 'llm-chat-native-sse-malformed-chunk',
-          'dev-smoke-base-url': state?.baseUrl ?? '',
-        },
       };
     },
     async cleanupState(state) {
       await cleanupCompanionChatSmokeState(state);
     },
-    async verifyLog(logContents, state) {
-      assertCompanionChatCurrentWindowStayedOnChildBundle(
-        logContents,
-        'companion chat malformed-chunk dev smoke',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-failed',
-        'companion chat malformed-chunk dev smoke logged an unexpected failure marker.',
-      );
+    async buildUiSpec(state) {
+      return await createLlmChatSpec({
+        baseUrl: state?.baseUrl ?? '',
+        model: state?.model ?? 'fixture-native-sse',
+        token: devChatToken,
+        prompt: state?.requestPrompt ?? 'CHAT_TEST_PROMPT',
+        expectedErrorText:
+          state?.expectedErrorText ?? '服务端返回了无法解析的流式 JSON 数据。',
+      });
+    },
+    async verifyUiResult(_uiResult, state) {
       assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat malformed-chunk dev smoke',
-      );
-      await assertCompanionChatSmokeErrorUiState(
         state,
         'companion chat malformed-chunk dev smoke',
       );
@@ -537,30 +533,23 @@ const optionalScenarios = [
           policy: 'main',
           'entry-file': 'index.chat',
         },
-        mainProps: {
-          'dev-smoke-scenario': state?.scenario ?? 'llm-chat-native-sse-stream-abort',
-          'dev-smoke-base-url': state?.baseUrl ?? '',
-        },
       };
     },
     async cleanupState(state) {
       await cleanupCompanionChatSmokeState(state);
     },
-    async verifyLog(logContents, state) {
-      assertCompanionChatCurrentWindowStayedOnChildBundle(
-        logContents,
-        'companion chat stream-abort dev smoke',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-failed',
-        'companion chat stream-abort dev smoke logged an unexpected failure marker.',
-      );
+    async buildUiSpec(state) {
+      return await createLlmChatSpec({
+        baseUrl: state?.baseUrl ?? '',
+        model: state?.model ?? 'fixture-native-sse',
+        token: devChatToken,
+        prompt: state?.requestPrompt ?? 'CHAT_TEST_PROMPT',
+        expectedErrorText:
+          state?.expectedErrorText ?? '服务端在完成流式响应前中断了连接。',
+      });
+    },
+    async verifyUiResult(_uiResult, state) {
       assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat stream-abort dev smoke',
-      );
-      await assertCompanionChatSmokeErrorUiState(
         state,
         'companion chat stream-abort dev smoke',
       );
@@ -1108,31 +1097,46 @@ async function runDevScenario(scenario) {
       );
     }
 
-    const smokeReady = await waitForHostLogMarkers(scenario.smokeMarkers, smokeTimeoutMs, {
-      failFastOnFatalFrontendError: true,
-      failFastCheck: () =>
-        detectDeterministicCommandFailureFromHost(hostChild, {
-          fallbackOutputPath: hostCommandOutputPath,
-        }),
-    });
-    if (smokeReady.status !== 'matched') {
-      throw new Error(
-        await buildHostWaitFailureMessage(
-          smokeReady,
-          `scenario '${scenario.name}' completion`,
-          hostChild,
-          {
-            hostTailLines: 120,
-            commandTailLines: 160,
-            timeoutMs: smokeTimeoutMs,
-          },
-        ),
+    let uiResult = null;
+    if (typeof scenario.buildUiSpec === 'function') {
+      const uiSpec = applyUiDebugOptions(await scenario.buildUiSpec(scenarioState));
+      uiResult = await runUiScenarioWithDevFailFast({
+        scenario,
+        uiSpec,
+        hostChild,
+      });
+      await scenario.verifyUiResult?.(uiResult, scenarioState, {hostChild});
+    } else {
+      const smokeReady = await waitForHostLogMarkers(
+        scenario.smokeMarkers,
+        smokeTimeoutMs,
+        {
+          failFastOnFatalFrontendError: true,
+          failFastCheck: () =>
+            detectDeterministicCommandFailureFromHost(hostChild, {
+              fallbackOutputPath: hostCommandOutputPath,
+            }),
+        },
       );
+      if (smokeReady.status !== 'matched') {
+        throw new Error(
+          await buildHostWaitFailureMessage(
+            smokeReady,
+            `scenario '${scenario.name}' completion`,
+            hostChild,
+            {
+              hostTailLines: 120,
+              commandTailLines: 160,
+              timeoutMs: smokeTimeoutMs,
+            },
+          ),
+        );
+      }
     }
 
-    const durationMs = Date.now() - scenarioStartMs;
     const logContents = await readFile(hostLogPath, 'utf8');
-    await scenario.verifyLog?.(logContents, scenarioState);
+    await scenario.verifyLog?.(logContents, scenarioState, uiResult);
+    const durationMs = Date.now() - scenarioStartMs;
     log(
       'verify-dev',
       `Scenario '${scenario.name}' completed successfully in ${durationMs}ms.`,

@@ -21,7 +21,7 @@ const otaForceFlag = process.argv.includes('--ota-force');
 const otaExpectedStatusToken = process.argv.find(argument => argument.startsWith('--ota-expected-status='));
 const otaExpectedStatusArg = otaExpectedStatusToken?.split('=').slice(1).join('=');
 const supportedOtaExpectedStatuses = new Set(['success', 'updated', 'up-to-date', 'failed']);
-const baseReadinessTimeoutMs = 25_000;
+const baseReadinessTimeoutMs = 12_500;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
 const workspaceRoot = path.resolve(repoRoot, '..');
