@@ -47,6 +47,11 @@ Windows verification entrypoints:
 - `scripts/windows-ui-scenarios/`: surface-scoped declarative UI scenario
   modules for launcher/settings/view-shot/window-capture/agent-workbench/chat
   flows, plus shared Windows UI helper utilities.
+- `scripts/windows-dev-scenarios/`: surface-scoped Metro-backed scenario
+  registration/verification modules consumed by `verify-windows-dev.mjs`.
+- `scripts/windows-release-scenarios/`: surface-scoped packaged Windows smoke
+  scenario registration/verification modules consumed by
+  `windows-release-smoke.mjs`.
 - `npm run dev:windows`: Metro-backed inner loop for seeing the current local
   dev effect.
 - `npm run verify:windows:dev`: fast Metro-backed self-check after the UI or

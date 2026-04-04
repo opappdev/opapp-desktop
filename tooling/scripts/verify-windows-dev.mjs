@@ -32,6 +32,10 @@ import {
 import {startCompanionChatSmokeServer} from './companion-chat-sse-smoke.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
+import {
+  createAgentWorkbenchDevScenarios,
+  createViewShotDevScenarios,
+} from './windows-dev-scenarios/index.mjs';
 import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
 import {
   createAgentWorkbenchApprovalSpec,
@@ -190,90 +194,17 @@ function applyUiDebugOptions(uiSpec) {
 }
 
 const defaultScenarios = [
-  {
-    name: 'view-shot-current-window',
-    description:
-      'Metro-backed auto-open view-shot lab runs captureRef/captureScreen smoke in the current window',
-    smokeMarkers: [
-      'InitialOpenSurface surface=companion.view-shot policy=tool presentation=current-window',
-      '[frontend-companion] auto-open bundle=opapp.companion.main window=window.main surface=companion.view-shot presentation=current-window targetBundle=opapp.companion.main',
-      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.view-shot policy=tool',
-      '[frontend-companion] mounted bundle=opapp.companion.main window=window.main surface=companion.view-shot policy=tool',
-      '[frontend-companion] session bundle=opapp.companion.main window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.view-shot',
-      '[frontend-view-shot] dev-smoke-start',
-      '[frontend-view-shot] dev-smoke-capture-ref uri=',
-      '[frontend-view-shot] dev-smoke-inspection-ref uri=',
-      '[frontend-view-shot] dev-smoke-component-data-uri prefix=data:image/png;base64, length=',
-      '[frontend-view-shot] dev-smoke-jpg-quality low=',
-      '[frontend-view-shot] dev-smoke-capture-screen uri=',
-      '[frontend-view-shot] dev-smoke-release-complete',
-      '[frontend-view-shot] dev-smoke-complete',
-    ],
-    launchConfig: {
-      initialOpen: {
-        surface: 'companion.view-shot',
-        policy: 'tool',
-        presentation: 'current-window',
-      },
-    },
-    async buildUiSpec() {
-      return await createViewShotCaptureRefSpec({});
-    },
-    async verifyUiResult(uiResult, scenarioState, {hostChild} = {}) {
-      const captureRefPath = assertUiSavedPath(
-        uiResult?.savedValues?.captureRefPath,
-        'view-shot capture-ref path',
-      );
-
-      const refStats = assertPngCaptureLooksOpaque(
-        captureRefPath,
-        'Windows dev verify view-shot capture-ref',
-      );
-      log(
-        'verify-dev',
-        `view-shot capture-ref OK: path=${captureRefPath} opaqueSamples=${refStats.opaqueSamples}/${refStats.sampleCount} distinctSamples=${refStats.distinctSampleCount} averageAlpha=${refStats.averageAlpha}`,
-      );
-
-      if (!hostChild) {
-        throw new Error('Windows dev verify failed: missing host child for view-shot tmpfile release.');
-      }
-
-      const followupSpec = await createViewShotDataUriAndScreenSpec({});
-      const followupResult = await runUiScenarioWithDevFailFast({
-        scenario: {name: 'view-shot-current-window-followup'},
-        uiSpec: followupSpec,
-        hostChild,
-      });
-      const captureScreenPath = assertUiSavedPath(
-        followupResult?.savedValues?.captureScreenPath,
-        'view-shot capture-screen path',
-      );
-      assertUiSavedDataUri(
-        followupResult?.savedValues?.componentDataUri,
-        'view-shot component data-uri',
-      );
-      const screenStats = assertPngCaptureLooksOpaque(
-        captureScreenPath,
-        'Windows dev verify view-shot capture-screen',
-      );
-      log(
-        'verify-dev',
-        `view-shot capture-screen OK: path=${captureScreenPath} opaqueSamples=${screenStats.opaqueSamples}/${screenStats.sampleCount} distinctSamples=${screenStats.distinctSampleCount} averageAlpha=${screenStats.averageAlpha}`,
-      );
-
-      const releaseSpec = await createViewShotTmpfileReleaseSpec({});
-      await runUiScenarioWithDevFailFast({
-        scenario: {name: 'view-shot-current-window-release'},
-        uiSpec: releaseSpec,
-        hostChild,
-      });
-
-      await clearOptionalFile(captureRefPath);
-      await clearOptionalFile(captureScreenPath);
-    },
-    successSummary:
-      'Metro-backed Windows host completed view-shot dev smoke.',
-  },
+  ...createViewShotDevScenarios({
+    assertPngCaptureLooksOpaque,
+    assertUiSavedDataUri,
+    assertUiSavedPath,
+    clearOptionalFile,
+    createViewShotCaptureRefSpec,
+    createViewShotDataUriAndScreenSpec,
+    createViewShotTmpfileReleaseSpec,
+    log,
+    runUiScenarioWithDevFailFast,
+  }),
   {
     name: 'window-capture-current-window',
     description:
@@ -333,123 +264,16 @@ const defaultScenarios = [
     successSummary:
       'Metro-backed Windows host completed window-capture dev smoke.',
   },
-  {
-    name: 'companion-agent-workbench-current-window',
-    description:
-      'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the workspace/diff smoke path',
-    smokeMarkers: [
-      `LaunchSurface surface=${companionAgentWorkbenchSurfaceId} policy=main mode=`,
-      `[frontend-companion] render bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
-      `[frontend-companion] session bundle=${companionMainBundleId} window=window.main tabs=1 active=tab:${companionAgentWorkbenchSurfaceId}:1 entries=tab:${companionAgentWorkbenchSurfaceId}:1:${companionAgentWorkbenchSurfaceId}`,
-      '[frontend-agent-workbench] dev-smoke-start',
-      '[frontend-agent-workbench] dev-smoke-workspace cwd=opapp-frontend entries=',
-      '[frontend-agent-workbench] dev-smoke-diff-ready path=opapp-frontend/',
-      '[frontend-agent-workbench] dev-smoke-window-list count=',
-      '[frontend-agent-workbench] dev-smoke-ui-ready',
-      '[frontend-agent-workbench] dev-smoke-capture-client backend=wgc crop=',
-      '[frontend-agent-workbench] dev-smoke-complete',
-    ],
-    async prepareState() {
-      return await prepareAgentWorkbenchSmokeState();
-    },
-    launchConfig: {
-      preferences: {
-        path: verifyDevPreferencesPath,
-      },
-      main: {
-        surface: companionAgentWorkbenchSurfaceId,
-        policy: 'main',
-        mode: 'wide',
-      },
-    },
-    async cleanupState(state) {
-      await cleanupAgentWorkbenchSmokeState(state);
-    },
-    async buildUiSpec() {
-      return await createAgentWorkbenchSpec({});
-    },
-    successSummary:
-      'Metro-backed Windows host completed direct agent-workbench startup smoke.',
-  },
-  {
-    name: 'companion-agent-workbench-approval-approve-current-window',
-    description:
-      'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the approval request/approve flow',
-    smokeMarkers: [
-      `LaunchSurface surface=${companionAgentWorkbenchSurfaceId} policy=main mode=`,
-      `[frontend-companion] render bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
-      `[frontend-companion] session bundle=${companionMainBundleId} window=window.main tabs=1 active=tab:${companionAgentWorkbenchSurfaceId}:1 entries=tab:${companionAgentWorkbenchSurfaceId}:1:${companionAgentWorkbenchSurfaceId}`,
-    ],
-    async prepareState() {
-      return await prepareAgentWorkbenchSmokeState();
-    },
-    launchConfig: {
-      preferences: {
-        path: verifyDevPreferencesPath,
-      },
-      main: {
-        surface: companionAgentWorkbenchSurfaceId,
-        policy: 'main',
-        mode: 'wide',
-      },
-    },
-    async cleanupState(state) {
-      await cleanupAgentWorkbenchSmokeState(state);
-    },
-    async buildUiSpec() {
-      return await createAgentWorkbenchApprovalSpec({
-        decision: 'approve',
-      });
-    },
-    async verifyUiResult() {
-      await assertAgentWorkbenchApprovalState({
-        decision: 'approve',
-      });
-    },
-    successSummary:
-      'Metro-backed Windows host completed direct agent-workbench approval approve smoke.',
-  },
-  {
-    name: 'companion-agent-workbench-approval-reject-current-window',
-    description:
-      'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the approval request/reject flow',
-    smokeMarkers: [
-      `LaunchSurface surface=${companionAgentWorkbenchSurfaceId} policy=main mode=`,
-      `[frontend-companion] render bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
-      `[frontend-companion] session bundle=${companionMainBundleId} window=window.main tabs=1 active=tab:${companionAgentWorkbenchSurfaceId}:1 entries=tab:${companionAgentWorkbenchSurfaceId}:1:${companionAgentWorkbenchSurfaceId}`,
-    ],
-    async prepareState() {
-      return await prepareAgentWorkbenchSmokeState();
-    },
-    launchConfig: {
-      preferences: {
-        path: verifyDevPreferencesPath,
-      },
-      main: {
-        surface: companionAgentWorkbenchSurfaceId,
-        policy: 'main',
-        mode: 'wide',
-      },
-    },
-    async cleanupState(state) {
-      await cleanupAgentWorkbenchSmokeState(state);
-    },
-    async buildUiSpec() {
-      return await createAgentWorkbenchApprovalSpec({
-        decision: 'reject',
-      });
-    },
-    async verifyUiResult() {
-      await assertAgentWorkbenchApprovalState({
-        decision: 'reject',
-      });
-    },
-    successSummary:
-      'Metro-backed Windows host completed direct agent-workbench approval reject smoke.',
-  },
+  ...createAgentWorkbenchDevScenarios({
+    assertAgentWorkbenchApprovalState,
+    cleanupAgentWorkbenchSmokeState,
+    companionAgentWorkbenchSurfaceId,
+    companionMainBundleId,
+    createAgentWorkbenchApprovalSpec,
+    createAgentWorkbenchSpec,
+    prepareAgentWorkbenchSmokeState,
+    verifyDevPreferencesPath,
+  }),
   {
     name: 'companion-chat-current-window',
     description:
