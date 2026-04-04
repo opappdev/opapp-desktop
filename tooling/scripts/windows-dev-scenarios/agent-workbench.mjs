@@ -12,10 +12,12 @@ function createAgentWorkbenchSmokeMarkers({
 
 export function createAgentWorkbenchDevScenarios({
   assertAgentWorkbenchApprovalState,
+  assertAgentWorkbenchRetryRestoreState,
   cleanupAgentWorkbenchSmokeState,
   companionAgentWorkbenchSurfaceId,
   companionMainBundleId,
   createAgentWorkbenchApprovalSpec,
+  createAgentWorkbenchRetryRestoreSpec,
   createAgentWorkbenchSpec,
   prepareAgentWorkbenchSmokeState,
   verifyDevPreferencesPath,
@@ -112,6 +114,29 @@ export function createAgentWorkbenchDevScenarios({
       },
       successSummary:
         'Metro-backed Windows host completed direct agent-workbench approval reject smoke.',
+    },
+    {
+      name: 'companion-agent-workbench-retry-restore-current-window',
+      description:
+        'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises retry/restore flow from thread history',
+      smokeMarkers: baseSmokeMarkers,
+      async prepareState() {
+        return await prepareAgentWorkbenchSmokeState();
+      },
+      launchConfig: baseLaunchConfig,
+      async cleanupState(state) {
+        await cleanupAgentWorkbenchSmokeState(state);
+      },
+      async buildUiSpec() {
+        return await createAgentWorkbenchRetryRestoreSpec({});
+      },
+      async verifyUiResult(uiResult) {
+        await assertAgentWorkbenchRetryRestoreState({
+          uiResult,
+        });
+      },
+      successSummary:
+        'Metro-backed Windows host completed direct agent-workbench retry/restore smoke.',
     },
   ];
 }

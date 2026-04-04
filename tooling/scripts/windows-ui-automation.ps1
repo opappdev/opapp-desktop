@@ -995,6 +995,14 @@ function Focus-Window {
 function Invoke-Element {
   param([System.Windows.Automation.AutomationElement]$Element)
 
+  if ($Element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button) {
+    $Element.SetFocus()
+    Start-Sleep -Milliseconds 120
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
+    Start-Sleep -Milliseconds 120
+    return
+  }
+
   $invokePattern = $null
   if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invokePattern)) {
     $invokePattern.Invoke()
@@ -1023,14 +1031,6 @@ function Invoke-Element {
   $togglePattern = $null
   if ($Element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$togglePattern)) {
     $togglePattern.Toggle()
-    return
-  }
-
-  if ($Element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button) {
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 120
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
-    Start-Sleep -Milliseconds 120
     return
   }
 

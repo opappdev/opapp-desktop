@@ -65,6 +65,14 @@ test('verify-windows-dev validate-only accepts explicit companion chat stream-ab
   assert.equal(result.status, 0);
 });
 
+test('verify-windows-dev validate-only accepts explicit agent-workbench retry/restore scenario filters', () => {
+  const result = runVerifyDevValidateOnly([
+    '--scenario=companion-agent-workbench-retry-restore-current-window',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows-dev validate-only accepts comma-separated scenario filters', () => {
   const result = runVerifyDevValidateOnly([
     '--scenario=view-shot-current-window,companion-chat-current-window',

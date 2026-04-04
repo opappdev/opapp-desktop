@@ -179,3 +179,216 @@ export async function createAgentWorkbenchApprovalSpec({
     ],
   };
 }
+
+export async function createAgentWorkbenchRetryRestoreSpec({
+  window = windows.main,
+}) {
+  return {
+    name: 'agent-workbench-retry-restore',
+    defaultTimeoutMs: defaultStepTimeoutMs,
+    steps: [
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.action.run-git-status'),
+      ),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.workspace.opapp-frontend'),
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.detail.selected-cwd'),
+        matcher: {
+          includes: 'opapp-frontend',
+        },
+      },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.run-git-status'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.run-git-status'),
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.run.command'),
+        matcher: {
+          includes: 'git status',
+        },
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.terminal.transcript'),
+        matcher: {
+          includes: 'git status',
+        },
+      },
+      {
+        type: 'readText',
+        window,
+        locator: byAutomationId('agent-workbench.run.run-id'),
+        saveAs: 'firstRunId',
+      },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.run-git-status'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.browse-workspace-root'),
+      },
+      {
+        type: 'assertElementMissing',
+        window,
+        locator: byAutomationId('agent-workbench.action.browse-workspace-root'),
+        timeoutMs: defaultLocatorTimeoutMs,
+      },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.run-git-status'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.run-git-status'),
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.run-history.index-1'),
+      ),
+      {
+        type: 'readText',
+        window,
+        locator: byAutomationId('agent-workbench.run.run-id'),
+        saveAs: 'secondRunId',
+      },
+      sendKeys({
+        window,
+        keys: '{PGDN}',
+        delayMs: 300,
+        label: 'scroll-to-run-history',
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.view-previous-run'),
+      },
+      {
+        type: 'assertElementMissing',
+        window,
+        locator: byAutomationId('agent-workbench.action.view-previous-run'),
+        timeoutMs: defaultLocatorTimeoutMs,
+      },
+      {
+        type: 'readText',
+        window,
+        locator: byAutomationId('agent-workbench.run.run-id'),
+        saveAs: 'selectedHistoricalRunId',
+      },
+      sendKeys({
+        window,
+        keys: '{PGDN}',
+        delayMs: 300,
+        label: 'scroll-to-retry-restore-actions',
+      }),
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.restore-run-workspace'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.restore-run-workspace'),
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.action.browse-workspace-root'),
+      ),
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.detail.selected-cwd'),
+        matcher: {
+          includes: 'opapp-frontend',
+        },
+        timeoutMs: defaultLocatorTimeoutMs,
+        saveAs: 'restoredSelectedCwd',
+      },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.retry-selected-run'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.retry-selected-run'),
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.status.message'),
+        matcher: {
+          includes: '创建新的 run',
+        },
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.run-history.index-2'),
+      ),
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.action.view-previous-run'),
+      ),
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.run.cwd'),
+        matcher: {
+          includes: 'opapp-frontend',
+        },
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.run.resumed-from'),
+        matcher: {
+          regex: '^run-',
+        },
+      },
+      {
+        type: 'readText',
+        window,
+        locator: byAutomationId('agent-workbench.run.run-id'),
+        saveAs: 'retriedRunId',
+      },
+      {
+        type: 'readText',
+        window,
+        locator: byAutomationId('agent-workbench.run.resumed-from'),
+        saveAs: 'retriedResumedFromRunId',
+      },
+    ],
+  };
+}

@@ -14,6 +14,7 @@ export {
 export {createWindowCaptureLabSpec} from './window-capture.mjs';
 export {
   createAgentWorkbenchApprovalSpec,
+  createAgentWorkbenchRetryRestoreSpec,
   createAgentWorkbenchSpec,
 } from './agent-workbench.mjs';
 export {createLlmChatSpec} from './llm-chat.mjs';

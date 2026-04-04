@@ -42,6 +42,7 @@ import {
 import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
 import {
   createAgentWorkbenchApprovalSpec,
+  createAgentWorkbenchRetryRestoreSpec,
   createAgentWorkbenchSpec,
   createLlmChatSpec,
   createViewShotCaptureRefSpec,
@@ -110,6 +111,14 @@ const foregroundWindowTitles = ['OpappWindowsHost', 'Opapp Tool', 'Opapp Setting
 const devChatToken = 'opapp-dev-ui-automation';
 
 function assertUiSavedPath(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Windows dev verify failed: missing ${label}.`);
+  }
+
+  return value.trim();
+}
+
+function assertUiSavedText(value, label) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`Windows dev verify failed: missing ${label}.`);
   }
@@ -229,10 +238,12 @@ const allScenarios = [
   }),
   ...createAgentWorkbenchDevScenarios({
     assertAgentWorkbenchApprovalState,
+    assertAgentWorkbenchRetryRestoreState,
     cleanupAgentWorkbenchSmokeState,
     companionAgentWorkbenchSurfaceId,
     companionMainBundleId,
     createAgentWorkbenchApprovalSpec,
+    createAgentWorkbenchRetryRestoreSpec,
     createAgentWorkbenchSpec,
     prepareAgentWorkbenchSmokeState,
     verifyDevPreferencesPath,
@@ -481,6 +492,213 @@ function getSingleApprovalEntry(runDocument) {
   }
 
   return approvalEntries[0];
+}
+
+async function assertAgentWorkbenchRetryRestoreState({uiResult}) {
+  const savedValues = uiResult?.savedValues ?? {};
+  const firstRunId = assertUiSavedText(
+    savedValues.firstRunId,
+    'agent workbench first run id',
+  );
+  const secondRunId = assertUiSavedText(
+    savedValues.secondRunId,
+    'agent workbench second run id',
+  );
+  const selectedHistoricalRunId = assertUiSavedText(
+    savedValues.selectedHistoricalRunId,
+    'agent workbench selected historical run id',
+  );
+  const restoredSelectedCwd = assertUiSavedText(
+    savedValues.restoredSelectedCwd,
+    'agent workbench restored selected cwd',
+  );
+  const retriedRunId = assertUiSavedText(
+    savedValues.retriedRunId,
+    'agent workbench retried run id',
+  );
+  const retriedResumedFromRunId = assertUiSavedText(
+    savedValues.retriedResumedFromRunId,
+    'agent workbench retried resumed-from run id',
+  );
+
+  if (selectedHistoricalRunId !== firstRunId) {
+    throw new Error(
+      `Windows dev verify failed: expected the selected historical run to stay on '${firstRunId}', received '${selectedHistoricalRunId}'.`,
+    );
+  }
+  if (firstRunId === secondRunId) {
+    throw new Error(
+      'Windows dev verify failed: second agent workbench run reused the first run id.',
+    );
+  }
+  if (retriedRunId === firstRunId || retriedRunId === secondRunId) {
+    throw new Error(
+      'Windows dev verify failed: retry action did not create a distinct latest run id.',
+    );
+  }
+  if (retriedResumedFromRunId !== secondRunId) {
+    throw new Error(
+      `Windows dev verify failed: expected retry resumedFromRunId '${secondRunId}', received '${retriedResumedFromRunId}'.`,
+    );
+  }
+  if (!restoredSelectedCwd.includes('opapp-frontend')) {
+    throw new Error(
+      `Windows dev verify failed: restore action did not switch selected cwd back to opapp-frontend. Received '${restoredSelectedCwd}'.`,
+    );
+  }
+
+  await waitForAsyncCondition(
+    async () => {
+      const threadIndex = await readJsonFileOrThrow(
+        agentThreadIndexPath,
+        'agent runtime thread index',
+      );
+      if (!Array.isArray(threadIndex?.threads) || threadIndex.threads.length === 0) {
+        return null;
+      }
+      if (threadIndex.threads.length !== 1) {
+        throw new Error(
+          `Windows dev verify failed: expected exactly 1 persisted agent thread after retry/restore smoke, received ${threadIndex.threads.length}.`,
+        );
+      }
+
+      const thread = threadIndex.threads[0];
+      const runDocuments = await loadAgentRunDocuments(agentRunDocumentsRoot);
+      if (runDocuments.length < 3) {
+        return null;
+      }
+      if (runDocuments.length !== 3) {
+        throw new Error(
+          `Windows dev verify failed: expected 3 persisted agent runs after retry/restore smoke, received ${runDocuments.length}.`,
+        );
+      }
+
+      const runById = new Map(
+        runDocuments.map(document => [document.run?.runId, document]),
+      );
+      const firstRun = runById.get(firstRunId);
+      const secondRun = runById.get(secondRunId);
+      const retriedRun = runById.get(retriedRunId);
+      if (!firstRun || !secondRun || !retriedRun) {
+        return null;
+      }
+
+      for (const [label, runDocument] of [
+        ['first', firstRun],
+        ['second', secondRun],
+        ['retried', retriedRun],
+      ]) {
+        if (!runDocument?.run?.threadId) {
+          throw new Error(
+            `Windows dev verify failed: missing thread id on ${label} agent workbench run.`,
+          );
+        }
+      }
+
+      if (
+        firstRun.run.threadId !== secondRun.run.threadId ||
+        firstRun.run.threadId !== retriedRun.run.threadId
+      ) {
+        throw new Error(
+          'Windows dev verify failed: retry/restore flow stopped writing runs into a single thread.',
+        );
+      }
+      if (thread.lastRunId !== retriedRunId) {
+        return null;
+      }
+      if (thread.lastRunStatus !== 'completed') {
+        if (
+          thread.lastRunStatus === 'queued' ||
+          thread.lastRunStatus === 'running'
+        ) {
+          return null;
+        }
+        throw new Error(
+          `Windows dev verify failed: expected retry/restore thread to settle as 'completed', received '${thread.lastRunStatus ?? '<missing>'}'.`,
+        );
+      }
+
+      if (firstRun.run.status !== 'completed') {
+        throw new Error(
+          `Windows dev verify failed: expected first agent workbench run to settle as 'completed', received '${firstRun.run.status ?? '<missing>'}'.`,
+        );
+      }
+      if (secondRun.run.status !== 'completed') {
+        throw new Error(
+          `Windows dev verify failed: expected second agent workbench run to settle as 'completed', received '${secondRun.run.status ?? '<missing>'}'.`,
+        );
+      }
+      if (retriedRun.run.status !== 'completed') {
+        if (
+          retriedRun.run.status === 'queued' ||
+          retriedRun.run.status === 'running'
+        ) {
+          return null;
+        }
+        throw new Error(
+          `Windows dev verify failed: expected retried agent workbench run to settle as 'completed', received '${retriedRun.run.status ?? '<missing>'}'.`,
+        );
+      }
+
+      if (firstRun.run.request?.command !== 'git status') {
+        throw new Error(
+          `Windows dev verify failed: first agent workbench run command changed to '${firstRun.run.request?.command ?? '<missing>'}'.`,
+        );
+      }
+      if (secondRun.run.request?.command !== 'git status') {
+        throw new Error(
+          `Windows dev verify failed: second agent workbench run command changed to '${secondRun.run.request?.command ?? '<missing>'}'.`,
+        );
+      }
+      if (retriedRun.run.request?.command !== 'git status') {
+        throw new Error(
+          `Windows dev verify failed: retried agent workbench run command changed to '${retriedRun.run.request?.command ?? '<missing>'}'.`,
+        );
+      }
+
+      if (firstRun.run.request?.cwd !== 'opapp-frontend') {
+        throw new Error(
+          `Windows dev verify failed: first agent workbench run cwd changed to '${firstRun.run.request?.cwd ?? '<missing>'}'.`,
+        );
+      }
+      if (secondRun.run.request?.cwd !== null) {
+        throw new Error(
+          `Windows dev verify failed: second agent workbench run should target workspace root cwd=null, received '${secondRun.run.request?.cwd ?? '<missing>'}'.`,
+        );
+      }
+      if (retriedRun.run.request?.cwd !== 'opapp-frontend') {
+        throw new Error(
+          `Windows dev verify failed: retried agent workbench run cwd changed to '${retriedRun.run.request?.cwd ?? '<missing>'}'.`,
+        );
+      }
+      if (retriedRun.run.resumedFromRunId !== secondRunId) {
+        throw new Error(
+          `Windows dev verify failed: retried agent workbench run resumedFromRunId is '${retriedRun.run.resumedFromRunId ?? '<missing>'}' instead of '${secondRunId}'.`,
+        );
+      }
+
+      const retriedExitEntry = retriedRun.timeline.find(
+        entry => entry?.kind === 'terminal-event' && entry?.event === 'exit',
+      );
+      if (!retriedExitEntry) {
+        return null;
+      }
+      if (retriedExitEntry.exitCode !== 0) {
+        throw new Error(
+          `Windows dev verify failed: retried agent workbench run exit code was '${retriedExitEntry.exitCode ?? '<missing>'}' instead of 0.`,
+        );
+      }
+
+      return {
+        thread,
+        runDocuments,
+      };
+    },
+    {
+      failureMessage:
+        'Windows dev verify failed: agent workbench retry/restore state did not settle in time.',
+    },
+  );
 }
 
 async function assertAgentWorkbenchApprovalState({decision}) {
