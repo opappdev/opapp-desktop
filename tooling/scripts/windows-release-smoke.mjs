@@ -39,6 +39,7 @@ import {
 } from './windows-release-scenarios/index.mjs';
 import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
 import {
+  createAgentWorkbenchApprovalSpec,
   createAgentWorkbenchRetryRestoreSpec,
   createBundleLauncherRootSpec,
   createLlmChatSpec,
@@ -1007,6 +1008,7 @@ const publicSmokeScenarios = {
   ...createAgentWorkbenchReleaseScenarios({
     assertPersistedSessionHasSurfaceId,
     commonSuccessMarkers,
+    createAgentWorkbenchApprovalSpec,
     createAgentWorkbenchRetryRestoreSpec,
     defaultPreferences,
     userDataRoot,

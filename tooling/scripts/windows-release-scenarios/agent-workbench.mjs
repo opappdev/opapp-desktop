@@ -152,6 +152,19 @@ async function loadAgentRunDocuments(targetDir) {
   return documents;
 }
 
+function getSingleApprovalEntry(runDocument) {
+  const approvalEntries = Array.isArray(runDocument?.timeline)
+    ? runDocument.timeline.filter(entry => entry?.kind === 'approval')
+    : [];
+  if (approvalEntries.length !== 1) {
+    throw new Error(
+      `Windows release smoke failed: expected exactly 1 approval entry in agent workbench run '${runDocument?.run?.runId ?? '<missing>'}', received ${approvalEntries.length}.`,
+    );
+  }
+
+  return approvalEntries[0];
+}
+
 function createAgentWorkbenchRuntimePaths({workspaceRoot, userDataRoot}) {
   const agentRuntimeRoot = path.join(userDataRoot, 'agent-runtime');
 
@@ -442,9 +455,153 @@ async function assertAgentWorkbenchRetryRestoreState(paths, {uiResult}) {
   );
 }
 
+async function assertAgentWorkbenchApprovalState(paths, {decision}) {
+  if (decision !== 'approve' && decision !== 'reject') {
+    throw new Error(
+      `Windows release smoke failed: unsupported agent workbench approval decision '${decision}'.`,
+    );
+  }
+
+  const expectedRunStatus = decision === 'approve' ? 'completed' : 'cancelled';
+  const expectedApprovalStatus =
+    decision === 'approve' ? 'approved' : 'rejected';
+  const decisionLabel = decision === 'approve' ? 'approved' : 'rejected';
+
+  await waitForAsyncCondition(
+    async () => {
+      const approvalSmokeContent = await readOptionalFile(
+        paths.agentWorkbenchApprovalSmokePath,
+      );
+      if (decision === 'approve') {
+        if (!approvalSmokeContent) {
+          return null;
+        }
+
+        for (const marker of [
+          'approvedAt=',
+          'requestedCwd=opapp-frontend',
+          'executor=agent-workbench',
+        ]) {
+          if (!approvalSmokeContent.includes(marker)) {
+            throw new Error(
+              `Windows release smoke failed: agent workbench approval smoke file is missing '${marker}'.`,
+            );
+          }
+        }
+      } else if (approvalSmokeContent) {
+        throw new Error(
+          `Windows release smoke failed: rejected agent workbench approval smoke unexpectedly created ${paths.agentWorkbenchApprovalSmokePath}.`,
+        );
+      }
+
+      const threadIndex = await readJsonFileOrThrow(
+        paths.agentThreadIndexPath,
+        'agent runtime thread index',
+      );
+      if (
+        !Array.isArray(threadIndex?.threads) ||
+        threadIndex.threads.length !== 1
+      ) {
+        throw new Error(
+          `Windows release smoke failed: expected exactly 1 persisted agent thread after ${decisionLabel} approval smoke, received ${threadIndex?.threads?.length ?? 0}.`,
+        );
+      }
+      if (threadIndex.threads[0]?.lastRunStatus !== expectedRunStatus) {
+        throw new Error(
+          `Windows release smoke failed: expected the latest ${decisionLabel} approval smoke thread state to be '${expectedRunStatus}', received '${threadIndex.threads[0]?.lastRunStatus ?? '<missing>'}'.`,
+        );
+      }
+
+      const runDocuments = await loadAgentRunDocuments(paths.agentRunDocumentsRoot);
+      if (runDocuments.length !== 1) {
+        throw new Error(
+          `Windows release smoke failed: expected 1 persisted agent run after ${decisionLabel} approval smoke, received ${runDocuments.length}.`,
+        );
+      }
+
+      const runDocument = runDocuments[0];
+      if (runDocument.run?.status !== expectedRunStatus) {
+        throw new Error(
+          `Windows release smoke failed: expected the ${decisionLabel} approval run to settle as '${expectedRunStatus}', received '${runDocument.run?.status ?? '<missing>'}'.`,
+        );
+      }
+
+      const approvalEntry = getSingleApprovalEntry(runDocument);
+      if (approvalEntry.status !== expectedApprovalStatus) {
+        throw new Error(
+          `Windows release smoke failed: expected the ${decisionLabel} approval entry status to be '${expectedApprovalStatus}', received '${approvalEntry.status ?? '<missing>'}'.`,
+        );
+      }
+
+      if (
+        threadIndex.threads[0]?.lastRunId &&
+        threadIndex.threads[0].lastRunId !== runDocument.run?.runId
+      ) {
+        throw new Error(
+          `Windows release smoke failed: expected the latest ${decisionLabel} approval thread to reference run '${runDocument.run?.runId ?? '<missing>'}', received '${threadIndex.threads[0].lastRunId}'.`,
+        );
+      }
+
+      if (
+        !runDocument.run?.request?.command?.includes('approval-write-smoke.txt')
+      ) {
+        throw new Error(
+          `Windows release smoke failed: the ${decisionLabel} agent workbench run request no longer targets approval-write-smoke.txt.`,
+        );
+      }
+
+      const terminalEvents = runDocument.timeline.filter(
+        entry => entry?.kind === 'terminal-event',
+      );
+      if (decision === 'approve') {
+        const approvedStdout = terminalEvents
+          .filter(
+            entry =>
+              entry?.event === 'stdout' && typeof entry?.text === 'string',
+          )
+          .map(entry => entry.text)
+          .join('');
+        if (!approvedStdout.includes('workspace write smoke saved to')) {
+          throw new Error(
+            'Windows release smoke failed: the approved agent workbench run did not print the approval smoke save marker.',
+          );
+        }
+        if (!approvedStdout.includes('approvedAt=')) {
+          throw new Error(
+            'Windows release smoke failed: the approved agent workbench run did not echo the approval smoke contents.',
+          );
+        }
+
+        const approvedExitEntry = terminalEvents.find(
+          entry => entry?.event === 'exit',
+        );
+        if (approvedExitEntry?.exitCode !== 0) {
+          throw new Error(
+            `Windows release smoke failed: approved agent workbench run exit code was '${approvedExitEntry?.exitCode ?? '<missing>'}' instead of 0.`,
+          );
+        }
+      } else if (terminalEvents.length > 0) {
+        throw new Error(
+          'Windows release smoke failed: rejected agent workbench approval run should not have started a terminal session.',
+        );
+      }
+
+      return {
+        approvalSmokeContent,
+        threadIndex,
+        runDocument,
+      };
+    },
+    {
+      failureMessage: `Windows release smoke failed: ${decisionLabel} agent workbench approval state did not settle in time.`,
+    },
+  );
+}
+
 export function createAgentWorkbenchReleaseScenarios({
   assertPersistedSessionHasSurfaceId,
   commonSuccessMarkers,
+  createAgentWorkbenchApprovalSpec,
   createAgentWorkbenchRetryRestoreSpec,
   defaultPreferences,
   userDataRoot,
@@ -454,33 +611,96 @@ export function createAgentWorkbenchReleaseScenarios({
     workspaceRoot,
     userDataRoot,
   });
+  const baseLaunchConfig = {
+    initialOpen: {
+      surface: 'companion.agent-workbench',
+      policy: 'main',
+      presentation: 'current-window',
+    },
+  };
+  const baseSuccessMarkers = [
+    ...commonSuccessMarkers,
+    'InitialOpenSurface surface=companion.agent-workbench policy=main presentation=current-window',
+    '[frontend-companion] auto-open window=window.main surface=companion.agent-workbench presentation=current-window',
+    '[frontend-companion] render window=window.main surface=companion.agent-workbench policy=main',
+    '[frontend-companion] mounted window=window.main surface=companion.agent-workbench policy=main',
+    '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.agent-workbench',
+  ];
+
+  function verifyPersistedAgentWorkbenchSession(sessionFile, flowLabel) {
+    if (!sessionFile.includes('[session]') || !sessionFile.includes('window.main=')) {
+      throw new Error(
+        `Windows release smoke failed: main window session was not persisted during ${flowLabel}.`,
+      );
+    }
+
+    assertPersistedSessionHasSurfaceId(
+      sessionFile,
+      'window.main',
+      'companion.agent-workbench',
+      `${flowLabel} did not persist the agent workbench surface in the main window session.`,
+    );
+  }
+
+  const baseScenario = {
+    preferences: defaultPreferences,
+    launchConfig: baseLaunchConfig,
+    successMarkers: baseSuccessMarkers,
+    async prepareState() {
+      return await prepareAgentWorkbenchSmokeState(runtimePaths, workspaceRoot);
+    },
+    async cleanupState(state) {
+      await cleanupAgentWorkbenchSmokeState(runtimePaths, state);
+    },
+  };
 
   return {
+    'companion-agent-workbench-approval-approve-current-window': {
+      ...baseScenario,
+      description:
+        'auto-open agent workbench in the current window and exercise packaged approval request/approve flow',
+      async buildUiSpec() {
+        return await createAgentWorkbenchApprovalSpec({
+          decision: 'approve',
+        });
+      },
+      async verifyUiResult() {
+        await assertAgentWorkbenchApprovalState(runtimePaths, {
+          decision: 'approve',
+        });
+      },
+      verifyPersistedSession(sessionFile) {
+        verifyPersistedAgentWorkbenchSession(
+          sessionFile,
+          'agent workbench approval approve smoke',
+        );
+      },
+    },
+    'companion-agent-workbench-approval-reject-current-window': {
+      ...baseScenario,
+      description:
+        'auto-open agent workbench in the current window and exercise packaged approval request/reject flow',
+      async buildUiSpec() {
+        return await createAgentWorkbenchApprovalSpec({
+          decision: 'reject',
+        });
+      },
+      async verifyUiResult() {
+        await assertAgentWorkbenchApprovalState(runtimePaths, {
+          decision: 'reject',
+        });
+      },
+      verifyPersistedSession(sessionFile) {
+        verifyPersistedAgentWorkbenchSession(
+          sessionFile,
+          'agent workbench approval reject smoke',
+        );
+      },
+    },
     'companion-agent-workbench-retry-restore-current-window': {
+      ...baseScenario,
       description:
         'auto-open agent workbench in the current window and exercise packaged retry/restore history flow',
-      preferences: defaultPreferences,
-      launchConfig: {
-        initialOpen: {
-          surface: 'companion.agent-workbench',
-          policy: 'main',
-          presentation: 'current-window',
-        },
-      },
-      successMarkers: [
-        ...commonSuccessMarkers,
-        'InitialOpenSurface surface=companion.agent-workbench policy=main presentation=current-window',
-        '[frontend-companion] auto-open window=window.main surface=companion.agent-workbench presentation=current-window',
-        '[frontend-companion] render window=window.main surface=companion.agent-workbench policy=main',
-        '[frontend-companion] mounted window=window.main surface=companion.agent-workbench policy=main',
-        '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.agent-workbench',
-      ],
-      async prepareState() {
-        return await prepareAgentWorkbenchSmokeState(runtimePaths, workspaceRoot);
-      },
-      async cleanupState(state) {
-        await cleanupAgentWorkbenchSmokeState(runtimePaths, state);
-      },
       async buildUiSpec() {
         return await createAgentWorkbenchRetryRestoreSpec({});
       },
@@ -488,17 +708,9 @@ export function createAgentWorkbenchReleaseScenarios({
         await assertAgentWorkbenchRetryRestoreState(runtimePaths, {uiResult});
       },
       verifyPersistedSession(sessionFile) {
-        if (!sessionFile.includes('[session]') || !sessionFile.includes('window.main=')) {
-          throw new Error(
-            'Windows release smoke failed: main window session was not persisted during agent workbench retry/restore smoke.',
-          );
-        }
-
-        assertPersistedSessionHasSurfaceId(
+        verifyPersistedAgentWorkbenchSession(
           sessionFile,
-          'window.main',
-          'companion.agent-workbench',
-          'agent workbench retry/restore smoke did not persist the agent workbench surface in the main window session.',
+          'agent workbench retry/restore smoke',
         );
       },
     },
