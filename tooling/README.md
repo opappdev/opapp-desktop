@@ -42,8 +42,11 @@ Windows verification entrypoints:
   executor. Handles spec temp files, structured JSON results, and fail-fast
   integration with host crash/error detection. Failure screenshots are retained
   automatically and their paths are included in the thrown error text.
-- `scripts/windows-ui-scenarios.mjs`: shared declarative UI scenario builders
-  for launcher/settings/view-shot/window-capture/agent-workbench/chat flows.
+- `scripts/windows-ui-scenarios.mjs`: compatibility aggregation layer for the
+  shared declarative UI scenario builders.
+- `scripts/windows-ui-scenarios/`: surface-scoped declarative UI scenario
+  modules for launcher/settings/view-shot/window-capture/agent-workbench/chat
+  flows, plus shared Windows UI helper utilities.
 - `npm run dev:windows`: Metro-backed inner loop for seeing the current local
   dev effect.
 - `npm run verify:windows:dev`: fast Metro-backed self-check after the UI or
