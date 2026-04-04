@@ -59,6 +59,14 @@ test('verify-windows validate-only accepts companion chat scenario filter', () =
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts agent-workbench retry/restore scenario filter', () => {
+  const result = runVerifyValidateOnly([
+    '--scenario=companion-agent-workbench-retry-restore-current-window',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only accepts companion chat server-error scenario filter', () => {
   const result = runVerifyValidateOnly([
     '--scenario=companion-chat-current-window-server-error',

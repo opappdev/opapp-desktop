@@ -31,6 +31,7 @@ import {resolveScenarioTimeoutMs} from './windows-scenario-timeouts.mjs';
 import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 import {
+  createAgentWorkbenchReleaseScenarios,
   createCompanionChatReleaseScenarios,
   createLauncherAndSettingsReleaseScenarios,
   createViewShotReleaseScenarios,
@@ -38,6 +39,7 @@ import {
 } from './windows-release-scenarios/index.mjs';
 import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
 import {
+  createAgentWorkbenchRetryRestoreSpec,
   createBundleLauncherRootSpec,
   createLlmChatSpec,
   createMainAndDetachedSettingsSpec,
@@ -1001,6 +1003,14 @@ const publicSmokeScenarios = {
     seedLauncherProvenanceCachedCatalog,
     sessionsPath,
     writeFile,
+  }),
+  ...createAgentWorkbenchReleaseScenarios({
+    assertPersistedSessionHasSurfaceId,
+    commonSuccessMarkers,
+    createAgentWorkbenchRetryRestoreSpec,
+    defaultPreferences,
+    userDataRoot,
+    workspaceRoot,
   }),
   ...createViewShotReleaseScenarios({
     assertPersistedSessionHasSurfaceId,

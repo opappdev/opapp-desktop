@@ -1,3 +1,4 @@
+export {createAgentWorkbenchReleaseScenarios} from './agent-workbench.mjs';
 export {createCompanionChatReleaseScenarios} from './chat.mjs';
 export {createLauncherAndSettingsReleaseScenarios} from './launcher-settings.mjs';
 export {createViewShotReleaseScenarios} from './view-shot.mjs';

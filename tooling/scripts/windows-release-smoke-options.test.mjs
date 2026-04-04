@@ -71,6 +71,14 @@ test('windows-release-smoke validate-only accepts explicit companion chat curren
   assert.equal(result.status, 0);
 });
 
+test('windows-release-smoke validate-only accepts explicit agent-workbench retry/restore scenario', () => {
+  const result = runSmokeValidateOnly([
+    '--scenario=companion-agent-workbench-retry-restore-current-window',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
 test('windows-release-smoke validate-only accepts explicit companion chat server-error scenario', () => {
   const result = runSmokeValidateOnly([
     '--scenario=companion-chat-current-window-server-error',
