@@ -67,6 +67,17 @@ Windows verification entrypoints:
 - `npm run smoke:windows:portable`: portable smoke only.
 - `npm run smoke:windows:portable:reuse`: portable smoke rerun that keeps
   `--skip-prepare` for already-prepared local iteration.
+- Pick the entrypoint by preparation state, not just by launch mode:
+  - use `verify:windows`, `verify:windows:portable`, `smoke:windows`, or
+    `smoke:windows:portable` for the first pass after a bundle/native rebuild,
+    after install state changed, or whenever you need the wrapper to prepare the
+    packaged or portable outputs again.
+  - use `smoke:windows:reuse` or `smoke:windows:portable:reuse` only after one
+    prepared pass has already produced the exact packaged/portable outputs you
+    want to rerun locally and you only need to relaunch host + UI automation.
+  - use `smoke:windows:dev:reuse` only after a prior Debug deploy has already
+    registered the app package locally; otherwise go back to
+    `verify:windows:dev`.
 - `npm run verify:windows:raw-release`: shortest raw `run-windows --release`
   repro from the native host root; skips verify/smoke wrappers and prints
   upstream React Native Windows / MSBuild output directly.
