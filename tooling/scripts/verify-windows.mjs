@@ -100,6 +100,12 @@ const publicScenarios = [
     args: ['--scenario=companion-chat-current-window', '--skip-prepare'],
   },
   {
+    name: 'companion-agent-workbench-current-window',
+    description:
+      'packaged auto-open agent workbench exercises workspace selection and git-status run flow in the current window',
+    args: ['--scenario=companion-agent-workbench-current-window', '--skip-prepare'],
+  },
+  {
     name: 'companion-agent-workbench-approval-approve-current-window',
     description:
       'packaged auto-open agent workbench exercises approval request/approve flow in the current window',

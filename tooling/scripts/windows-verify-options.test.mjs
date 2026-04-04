@@ -59,6 +59,14 @@ test('verify-windows validate-only accepts companion chat scenario filter', () =
   assert.equal(result.status, 0);
 });
 
+test('verify-windows validate-only accepts agent-workbench current-window scenario filter', () => {
+  const result = runVerifyValidateOnly([
+    '--scenario=companion-agent-workbench-current-window',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
 test('verify-windows validate-only accepts agent-workbench approval approve scenario filter', () => {
   const result = runVerifyValidateOnly([
     '--scenario=companion-agent-workbench-approval-approve-current-window',
@@ -86,6 +94,14 @@ test('verify-windows validate-only accepts agent-workbench retry/restore scenari
 test('verify-windows validate-only accepts comma-separated agent-workbench approval scenario filters', () => {
   const result = runVerifyValidateOnly([
     '--scenario=companion-agent-workbench-approval-approve-current-window,companion-agent-workbench-approval-reject-current-window',
+  ]);
+
+  assert.equal(result.status, 0);
+});
+
+test('verify-windows validate-only accepts comma-separated agent-workbench current-window and approval scenario filters', () => {
+  const result = runVerifyValidateOnly([
+    '--scenario=companion-agent-workbench-current-window,companion-agent-workbench-approval-approve-current-window',
   ]);
 
   assert.equal(result.status, 0);

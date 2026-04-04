@@ -41,6 +41,7 @@ import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
 import {
   createAgentWorkbenchApprovalSpec,
   createAgentWorkbenchRetryRestoreSpec,
+  createAgentWorkbenchSpec,
   createBundleLauncherRootSpec,
   createLlmChatSpec,
   createMainAndDetachedSettingsSpec,
@@ -1010,6 +1011,7 @@ const publicSmokeScenarios = {
     commonSuccessMarkers,
     createAgentWorkbenchApprovalSpec,
     createAgentWorkbenchRetryRestoreSpec,
+    createAgentWorkbenchSpec,
     defaultPreferences,
     userDataRoot,
     workspaceRoot,

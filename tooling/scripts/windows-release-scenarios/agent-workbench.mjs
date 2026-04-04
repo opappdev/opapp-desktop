@@ -165,6 +165,19 @@ function getSingleApprovalEntry(runDocument) {
   return approvalEntries[0];
 }
 
+function assertLoggedAgentWorkbenchRunStarted(logContents) {
+  const normalizedLogContents = logContents.replace(/\r/g, '');
+  if (
+    !/\[frontend-diagnostics\] .*"event":"agent-workbench\.run\.started".*"cwd":"opapp-frontend"/.test(
+      normalizedLogContents,
+    )
+  ) {
+    throw new Error(
+      'Windows release smoke failed: current-window agent workbench smoke did not log the packaged run-start interaction marker for opapp-frontend.',
+    );
+  }
+}
+
 function createAgentWorkbenchRuntimePaths({workspaceRoot, userDataRoot}) {
   const agentRuntimeRoot = path.join(userDataRoot, 'agent-runtime');
 
@@ -455,6 +468,123 @@ async function assertAgentWorkbenchRetryRestoreState(paths, {uiResult}) {
   );
 }
 
+async function assertAgentWorkbenchCurrentWindowState(paths) {
+  await waitForAsyncCondition(
+    async () => {
+      const threadIndex = await readJsonFileOrThrow(
+        paths.agentThreadIndexPath,
+        'agent runtime thread index',
+      );
+      if (!Array.isArray(threadIndex?.threads) || threadIndex.threads.length === 0) {
+        return null;
+      }
+      if (threadIndex.threads.length !== 1) {
+        throw new Error(
+          `Windows release smoke failed: expected exactly 1 persisted agent thread after current-window smoke, received ${threadIndex.threads.length}.`,
+        );
+      }
+
+      const runDocuments = await loadAgentRunDocuments(paths.agentRunDocumentsRoot);
+      if (runDocuments.length === 0) {
+        return null;
+      }
+      if (runDocuments.length !== 1) {
+        throw new Error(
+          `Windows release smoke failed: expected 1 persisted agent run after current-window smoke, received ${runDocuments.length}.`,
+        );
+      }
+
+      const thread = threadIndex.threads[0];
+      const runDocument = runDocuments[0];
+      if (!runDocument?.run?.threadId) {
+        throw new Error(
+          'Windows release smoke failed: missing thread id on current-window agent workbench run.',
+        );
+      }
+      if (thread.lastRunId !== runDocument.run.runId) {
+        return null;
+      }
+      if (thread.lastRunStatus !== 'completed') {
+        if (
+          thread.lastRunStatus === 'queued' ||
+          thread.lastRunStatus === 'running'
+        ) {
+          return null;
+        }
+        throw new Error(
+          `Windows release smoke failed: expected current-window agent workbench thread to settle as 'completed', received '${thread.lastRunStatus ?? '<missing>'}'.`,
+        );
+      }
+      if (runDocument.run?.status !== 'completed') {
+        if (
+          runDocument.run?.status === 'queued' ||
+          runDocument.run?.status === 'running'
+        ) {
+          return null;
+        }
+        throw new Error(
+          `Windows release smoke failed: expected current-window agent workbench run to settle as 'completed', received '${runDocument.run?.status ?? '<missing>'}'.`,
+        );
+      }
+      if (runDocument.run.request?.command !== 'git status') {
+        throw new Error(
+          `Windows release smoke failed: current-window agent workbench run command changed to '${runDocument.run.request?.command ?? '<missing>'}'.`,
+        );
+      }
+      if (runDocument.run.request?.cwd !== 'opapp-frontend') {
+        throw new Error(
+          `Windows release smoke failed: current-window agent workbench run cwd changed to '${runDocument.run.request?.cwd ?? '<missing>'}'.`,
+        );
+      }
+      if (runDocument.run.resumedFromRunId !== null) {
+        throw new Error(
+          `Windows release smoke failed: current-window agent workbench run unexpectedly resumed from '${runDocument.run.resumedFromRunId}'.`,
+        );
+      }
+
+      const approvalEntries = runDocument.timeline.filter(
+        entry => entry?.kind === 'approval',
+      );
+      if (approvalEntries.length > 0) {
+        throw new Error(
+          `Windows release smoke failed: current-window agent workbench run unexpectedly created ${approvalEntries.length} approval entries.`,
+        );
+      }
+
+      const terminalEvents = runDocument.timeline.filter(
+        entry => entry?.kind === 'terminal-event',
+      );
+      const startedEntry = terminalEvents.find(entry => entry?.event === 'started');
+      if (!startedEntry) {
+        return null;
+      }
+      if (startedEntry.command !== 'git status') {
+        throw new Error(
+          `Windows release smoke failed: current-window terminal start command changed to '${startedEntry.command ?? '<missing>'}'.`,
+        );
+      }
+      const exitEntry = terminalEvents.find(entry => entry?.event === 'exit');
+      if (!exitEntry) {
+        return null;
+      }
+      if (exitEntry.exitCode !== 0) {
+        throw new Error(
+          `Windows release smoke failed: current-window agent workbench run exit code was '${exitEntry.exitCode ?? '<missing>'}' instead of 0.`,
+        );
+      }
+
+      return {
+        thread,
+        runDocument,
+      };
+    },
+    {
+      failureMessage:
+        'Windows release smoke failed: agent workbench current-window state did not settle in time.',
+    },
+  );
+}
+
 async function assertAgentWorkbenchApprovalState(paths, {decision}) {
   if (decision !== 'approve' && decision !== 'reject') {
     throw new Error(
@@ -603,6 +733,7 @@ export function createAgentWorkbenchReleaseScenarios({
   commonSuccessMarkers,
   createAgentWorkbenchApprovalSpec,
   createAgentWorkbenchRetryRestoreSpec,
+  createAgentWorkbenchSpec,
   defaultPreferences,
   userDataRoot,
   workspaceRoot,
@@ -655,6 +786,26 @@ export function createAgentWorkbenchReleaseScenarios({
   };
 
   return {
+    'companion-agent-workbench-current-window': {
+      ...baseScenario,
+      description:
+        'auto-open agent workbench in the current window and exercise packaged workspace/run smoke path',
+      async buildUiSpec() {
+        return await createAgentWorkbenchSpec({});
+      },
+      verifyLog(logContents) {
+        assertLoggedAgentWorkbenchRunStarted(logContents);
+      },
+      async verifyUiResult() {
+        await assertAgentWorkbenchCurrentWindowState(runtimePaths);
+      },
+      verifyPersistedSession(sessionFile) {
+        verifyPersistedAgentWorkbenchSession(
+          sessionFile,
+          'agent workbench current-window smoke',
+        );
+      },
+    },
     'companion-agent-workbench-approval-approve-current-window': {
       ...baseScenario,
       description:
