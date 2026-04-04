@@ -14,6 +14,7 @@ import {
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {
   launchInstalledAppOrThrow,
+  resolveInstalledPackageLogPathCandidates,
 } from './windows-installed-app-common.mjs';
 import {
   classifyRunWindowsFailure,
@@ -109,7 +110,6 @@ const portableExePath = path.join(portableReleaseRoot, 'OpappWindowsHost.exe');
 const windowsSolutionRoot = path.join(hostRoot, 'windows');
 const windowsSolutionPath = path.join(windowsSolutionRoot, 'OpappWindowsHost.sln');
 const tempRoot = process.env.TEMP || process.env.TMP || path.join(workspaceRoot, '.tmp');
-const logPath = path.join(tempRoot, 'opapp-windows-host.log');
 const launchConfigPath = path.join(tempRoot, 'opapp-windows-host.launch.ini');
 const preferencesPath = path.join(tempRoot, 'opapp-windows-host.preferences.ini');
 const sessionsPath = path.join(tempRoot, 'opapp-windows-host.sessions.ini');
@@ -131,6 +131,8 @@ const companionStartupTargetPath = path.join(
 const runWindowsCliWrapperPath = path.join(repoRoot, 'tooling', 'scripts', 'run-windows-cli-wrapper.cjs');
 const packageName = 'OpappWindowsHost';
 const applicationId = 'App';
+const resolveHostLogPathCandidates = () =>
+  resolveInstalledPackageLogPathCandidates({packageName});
 const windowPolicyRegistryPath = path.join(frontendRoot, 'contracts', 'windowing', 'src', 'window-policy-registry.json');
 const missingOptionalFile = Symbol('missingOptionalFile');
 const launcherProvenanceFixture = {
@@ -227,7 +229,7 @@ async function runUiScenarioWithReleaseFailFast({uiSpec}) {
       }
 
       try {
-        const logContents = await readFile(logPath, 'utf8');
+        const logContents = await readPreferredHostLog();
         for (const marker of failureMarkers) {
           if (logContents.includes(marker)) {
             return `found '${marker}' in the release host log.`;
@@ -1440,6 +1442,34 @@ async function fileExists(targetPath) {
   }
 }
 
+async function hostLogExists() {
+  for (const candidatePath of resolveHostLogPathCandidates()) {
+    if (await fileExists(candidatePath)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function readPreferredHostLog() {
+  for (const candidatePath of resolveHostLogPathCandidates()) {
+    try {
+      return await readFile(candidatePath, 'utf8');
+    } catch {
+      // Ignore missing candidates while the packaged host is still starting.
+    }
+  }
+
+  return '';
+}
+
+async function removeHostLogs() {
+  for (const candidatePath of resolveHostLogPathCandidates()) {
+    await removeIfPresent(candidatePath);
+  }
+}
+
 function hostProcessExists() {
   const result = spawnSync('tasklist.exe', ['/FI', 'IMAGENAME eq OpappWindowsHost.exe', '/FO', 'CSV', '/NH'], {
     encoding: 'utf8',
@@ -1784,11 +1814,11 @@ async function waitForMarkers(markers, {timeoutMs, phaseLabel, timeoutFlag}) {
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    if (!(await fileExists(logPath))) {
+    if (!(await hostLogExists())) {
       continue;
     }
 
-    const logContents = await readFile(logPath, 'utf8');
+    const logContents = await readPreferredHostLog();
 
     for (const marker of failureMarkers) {
       if (logContents.includes(marker)) {
@@ -1804,8 +1834,8 @@ async function waitForMarkers(markers, {timeoutMs, phaseLabel, timeoutFlag}) {
     }
   }
 
-  if (await fileExists(logPath)) {
-    const logContents = await readFile(logPath, 'utf8');
+  if (await hostLogExists()) {
+    const logContents = await readPreferredHostLog();
     const tail = logContents.split(/\r?\n/).slice(-180).join('\n');
     console.log(`[smoke] ${phaseLabel} timeout log tail:`);
     console.log(tail);
@@ -2472,7 +2502,7 @@ async function main() {
   log(`hostBundleRoot=${hostBundleRoot}`);
   log(`portableReleaseRoot=${portableReleaseRoot}`);
   log(`portableExePath=${portableExePath}`);
-  log(`logPath=${logPath}`);
+  log(`logPaths=${resolveHostLogPathCandidates().join(', ')}`);
   log(`otaCacheRoot=${otaCacheRoot}`);
   log(`otaIndexPath=${otaIndexPath}`);
   log(`otaLastRunPath=${otaLastRunPath}`);
@@ -2533,7 +2563,7 @@ async function main() {
   let startupTargetSnapshot = missingOptionalFile;
 
   await stopHostProcess();
-  await removeIfPresent(logPath);
+  await removeHostLogs();
   await removeIfPresent(launchConfigPath);
   await removeIfPresent(preferencesPath);
   if (otaRemoteArg || scenario.usesLocalOtaRemoteFixture) {
@@ -2615,7 +2645,7 @@ async function main() {
     if (typeof scenario.buildUiSpec === 'function') {
       const uiSpec = applyUiDebugOptions(await scenario.buildUiSpec(scenarioState));
       uiResult = await runUiScenarioWithReleaseFailFast({uiSpec});
-      logContents = await readFile(logPath, 'utf8');
+      logContents = await readPreferredHostLog();
       await scenario.verifyUiResult?.(uiResult, scenarioState);
     } else {
       logContents = await waitForMarkers(successMarkers, {

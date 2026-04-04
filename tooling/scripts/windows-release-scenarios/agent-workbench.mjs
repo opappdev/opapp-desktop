@@ -172,6 +172,114 @@ function getSingleApprovalEntry(runDocument) {
   return approvalEntries[0];
 }
 
+function assertStructuredAgentTimeline(
+  runDocument,
+  {
+    failureLabel,
+    expectedToolCallStatus,
+    expectedToolResultStatus,
+    expectedExitCode,
+    commandMarker,
+    outputMarkers = [],
+  },
+) {
+  const messageEntries = Array.isArray(runDocument?.timeline)
+    ? runDocument.timeline.filter(entry => entry?.kind === 'message')
+    : [];
+  if (messageEntries.length !== 1) {
+    throw new Error(
+      `Windows release smoke failed: expected exactly 1 message entry in ${failureLabel}, received ${messageEntries.length}.`,
+    );
+  }
+  if (messageEntries[0]?.role !== 'user') {
+    throw new Error(
+      `Windows release smoke failed: expected ${failureLabel} message role to be 'user', received '${messageEntries[0]?.role ?? '<missing>'}'.`,
+    );
+  }
+  if (typeof messageEntries[0]?.content !== 'string' || !messageEntries[0].content.trim()) {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} message content is empty.`,
+    );
+  }
+
+  const planEntries = Array.isArray(runDocument?.timeline)
+    ? runDocument.timeline.filter(entry => entry?.kind === 'plan')
+    : [];
+  if (planEntries.length !== 1) {
+    throw new Error(
+      `Windows release smoke failed: expected exactly 1 plan entry in ${failureLabel}, received ${planEntries.length}.`,
+    );
+  }
+  if (!Array.isArray(planEntries[0]?.steps) || planEntries[0].steps.length !== 1) {
+    throw new Error(
+      `Windows release smoke failed: expected ${failureLabel} plan entry to contain exactly 1 step.`,
+    );
+  }
+  if (planEntries[0].steps[0]?.status !== 'completed') {
+    throw new Error(
+      `Windows release smoke failed: expected ${failureLabel} plan step to settle as 'completed', received '${planEntries[0].steps[0]?.status ?? '<missing>'}'.`,
+    );
+  }
+  if (
+    typeof planEntries[0].steps[0]?.title !== 'string' ||
+    !planEntries[0].steps[0].title.trim()
+  ) {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} plan step title is empty.`,
+    );
+  }
+
+  const toolCallEntries = Array.isArray(runDocument?.timeline)
+    ? runDocument.timeline.filter(entry => entry?.kind === 'tool-call')
+    : [];
+  if (toolCallEntries.length !== 1) {
+    throw new Error(
+      `Windows release smoke failed: expected exactly 1 tool-call entry in ${failureLabel}, received ${toolCallEntries.length}.`,
+    );
+  }
+  if (toolCallEntries[0]?.toolName !== 'shell_command') {
+    throw new Error(
+      `Windows release smoke failed: expected ${failureLabel} tool-call name to be 'shell_command', received '${toolCallEntries[0]?.toolName ?? '<missing>'}'.`,
+    );
+  }
+  if (toolCallEntries[0]?.status !== expectedToolCallStatus) {
+    throw new Error(
+      `Windows release smoke failed: expected ${failureLabel} tool-call status to be '${expectedToolCallStatus}', received '${toolCallEntries[0]?.status ?? '<missing>'}'.`,
+    );
+  }
+  if (!toolCallEntries[0]?.inputText?.includes(commandMarker)) {
+    throw new Error(
+      `Windows release smoke failed: ${failureLabel} tool-call input no longer includes '${commandMarker}'.`,
+    );
+  }
+
+  const toolResultEntries = Array.isArray(runDocument?.timeline)
+    ? runDocument.timeline.filter(entry => entry?.kind === 'tool-result')
+    : [];
+  if (toolResultEntries.length !== 1) {
+    throw new Error(
+      `Windows release smoke failed: expected exactly 1 tool-result entry in ${failureLabel}, received ${toolResultEntries.length}.`,
+    );
+  }
+  if (toolResultEntries[0]?.status !== expectedToolResultStatus) {
+    throw new Error(
+      `Windows release smoke failed: expected ${failureLabel} tool-result status to be '${expectedToolResultStatus}', received '${toolResultEntries[0]?.status ?? '<missing>'}'.`,
+    );
+  }
+  if (toolResultEntries[0]?.exitCode !== expectedExitCode) {
+    throw new Error(
+      `Windows release smoke failed: expected ${failureLabel} tool-result exit code to be '${expectedExitCode ?? '<null>'}', received '${toolResultEntries[0]?.exitCode ?? '<null>'}'.`,
+    );
+  }
+  for (const marker of outputMarkers) {
+    if (!toolResultEntries[0]?.outputText?.includes(marker)) {
+      throw new Error(
+        `Windows release smoke failed: ${failureLabel} tool-result output is missing '${marker}'.`,
+      );
+    }
+  }
+}
+
 function assertLoggedAgentWorkbenchRunStarted(logContents) {
   const normalizedLogContents = logContents.replace(/\r/g, '');
   if (
@@ -472,6 +580,31 @@ async function assertAgentWorkbenchRetryRestoreState(paths, {uiResult}) {
         );
       }
 
+      assertStructuredAgentTimeline(firstRun, {
+        failureLabel: 'the first agent workbench run',
+        expectedToolCallStatus: 'completed',
+        expectedToolResultStatus: 'success',
+        expectedExitCode: 0,
+        commandMarker: 'git status',
+        outputMarkers: ['$ git status', '[exit 0]'],
+      });
+      assertStructuredAgentTimeline(secondRun, {
+        failureLabel: 'the second agent workbench run',
+        expectedToolCallStatus: 'completed',
+        expectedToolResultStatus: 'success',
+        expectedExitCode: 0,
+        commandMarker: 'git status',
+        outputMarkers: ['$ git status', '[exit 0]'],
+      });
+      assertStructuredAgentTimeline(retriedRun, {
+        failureLabel: 'the retried agent workbench run',
+        expectedToolCallStatus: 'completed',
+        expectedToolResultStatus: 'success',
+        expectedExitCode: 0,
+        commandMarker: 'git status',
+        outputMarkers: ['$ git status', '[exit 0]'],
+      });
+
       return {
         thread,
         runDocuments,
@@ -588,6 +721,15 @@ async function assertAgentWorkbenchCurrentWindowState(paths) {
           `Windows release smoke failed: current-window agent workbench run exit code was '${exitEntry.exitCode ?? '<missing>'}' instead of 0.`,
         );
       }
+
+      assertStructuredAgentTimeline(runDocument, {
+        failureLabel: 'the current-window agent workbench run',
+        expectedToolCallStatus: 'completed',
+        expectedToolResultStatus: 'success',
+        expectedExitCode: 0,
+        commandMarker: 'git status',
+        outputMarkers: ['$ git status', '[exit 0]'],
+      });
 
       return {
         thread,
@@ -712,7 +854,38 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
       const terminalEvents = runDocument.timeline.filter(
         entry => entry?.kind === 'terminal-event',
       );
+      const artifactEntries = runDocument.timeline.filter(
+        entry => entry?.kind === 'artifact',
+      );
       if (decision === 'approve') {
+        assertStructuredAgentTimeline(runDocument, {
+          failureLabel: 'the approved agent workbench run',
+          expectedToolCallStatus: 'completed',
+          expectedToolResultStatus: 'success',
+          expectedExitCode: 0,
+          commandMarker: 'agent-workbench-approval-smoke.txt',
+          outputMarkers: ['$ Set-Content', '[exit 0]'],
+        });
+        if (artifactEntries.length !== 1) {
+          throw new Error(
+            `Windows release smoke failed: expected exactly 1 artifact entry after approved agent workbench run, received ${artifactEntries.length}.`,
+          );
+        }
+        if (artifactEntries[0]?.artifactKind !== 'diff') {
+          throw new Error(
+            `Windows release smoke failed: approved agent workbench artifact kind was '${artifactEntries[0]?.artifactKind ?? '<missing>'}' instead of 'diff'.`,
+          );
+        }
+        if (
+          !artifactEntries[0]?.path?.includes(
+            'agent-workbench-approval-smoke.txt',
+          )
+        ) {
+          throw new Error(
+            'Windows release smoke failed: approved agent workbench artifact path no longer targets agent-workbench-approval-smoke.txt.',
+          );
+        }
+
         const approvedStdout = terminalEvents
           .filter(
             entry =>
@@ -742,11 +915,24 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
             `Windows release smoke failed: approved agent workbench run exit code was '${approvedExitEntry?.exitCode ?? '<missing>'}' instead of 0.`,
           );
         }
-
-      } else if (terminalEvents.length > 0) {
-        throw new Error(
-          'Windows release smoke failed: rejected agent workbench approval run should not have started a terminal session.',
-        );
+      } else {
+        assertStructuredAgentTimeline(runDocument, {
+          failureLabel: 'the rejected agent workbench run',
+          expectedToolCallStatus: 'cancelled',
+          expectedToolResultStatus: 'cancelled',
+          expectedExitCode: null,
+          commandMarker: 'agent-workbench-approval-smoke.txt',
+        });
+        if (terminalEvents.length > 0) {
+          throw new Error(
+            'Windows release smoke failed: rejected agent workbench approval run should not have started a terminal session.',
+          );
+        }
+        if (artifactEntries.length > 0) {
+          throw new Error(
+            'Windows release smoke failed: rejected agent workbench approval run should not persist artifact entries.',
+          );
+        }
       }
 
       return {

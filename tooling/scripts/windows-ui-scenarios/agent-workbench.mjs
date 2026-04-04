@@ -9,6 +9,67 @@ import {
   windows,
 } from './shared.mjs';
 
+function createGroupedToolCardAssertionSteps({
+  window,
+  scrollLabel,
+  expectedToolName = 'shell_command',
+  expectedCallStatus,
+  expectedResultStatus,
+  expectedInputText,
+  expectedOutputTexts,
+}) {
+  const outputAssertionSteps = expectedOutputTexts.map(expectedOutputText => ({
+    type: 'waitText',
+    window,
+    locator: byAutomationId('agent-workbench.timeline.tool.0.output'),
+    matcher: {
+      includes: expectedOutputText,
+    },
+  }));
+
+  return [
+    sendKeys({
+      window,
+      keys: '{PGDN}',
+      delayMs: 300,
+      label: scrollLabel,
+    }),
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.timeline.tool.0.name'),
+      matcher: {
+        includes: expectedToolName,
+      },
+    },
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.timeline.tool.0.call-status'),
+      matcher: {
+        includes: expectedCallStatus,
+      },
+    },
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.timeline.tool.0.result-status'),
+      matcher: {
+        includes: expectedResultStatus,
+      },
+    },
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.timeline.tool.0.input'),
+      matcher: {
+        includes: expectedInputText,
+      },
+    },
+    ...outputAssertionSteps,
+  ];
+}
+
 export async function createAgentWorkbenchSpec({
   window = windows.main,
 }) {
@@ -73,6 +134,14 @@ export async function createAgentWorkbenchSpec({
           includes: 'git status',
         },
       },
+      ...createGroupedToolCardAssertionSteps({
+        window,
+        scrollLabel: 'scroll-to-tool-timeline',
+        expectedCallStatus: '已完成',
+        expectedResultStatus: '成功',
+        expectedInputText: 'git status',
+        expectedOutputTexts: ['$ git status', '[exit 0]'],
+      }),
     ],
   };
 }
@@ -196,6 +265,17 @@ export async function createAgentWorkbenchApprovalSpec({
           decision === 'approve'
             ? defaultChatResponseTimeoutMs
             : defaultLocatorTimeoutMs,
+      }),
+      ...createGroupedToolCardAssertionSteps({
+        window,
+        scrollLabel: `scroll-to-tool-timeline-${decision}`,
+        expectedCallStatus: decision === 'approve' ? '已完成' : '已取消',
+        expectedResultStatus: decision === 'approve' ? '成功' : '已取消',
+        expectedInputText: 'agent-workbench-approval-smoke.txt',
+        expectedOutputTexts:
+          decision === 'approve'
+            ? ['$ Set-Content', '[exit 0]']
+            : ['无文本内容'],
       }),
     ],
   };
@@ -410,6 +490,14 @@ export async function createAgentWorkbenchRetryRestoreSpec({
         locator: byAutomationId('agent-workbench.run.resumed-from'),
         saveAs: 'retriedResumedFromRunId',
       },
+      ...createGroupedToolCardAssertionSteps({
+        window,
+        scrollLabel: 'scroll-to-retried-tool-timeline',
+        expectedCallStatus: '已完成',
+        expectedResultStatus: '成功',
+        expectedInputText: 'git status',
+        expectedOutputTexts: ['$ git status', '[exit 0]'],
+      }),
     ],
   };
 }

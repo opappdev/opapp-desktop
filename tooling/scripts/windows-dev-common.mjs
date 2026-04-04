@@ -19,6 +19,65 @@ export const devSessionsPath = path.join(os.tmpdir(), 'opapp-windows-host.dev.se
 export const metroPort = 8081;
 const frontendDiagnosticPrefix = '[frontend-diagnostics] ';
 
+function resolveHostLogCandidates(logPathCandidates = null) {
+  const requestedCandidates = typeof logPathCandidates === 'function'
+    ? logPathCandidates()
+    : logPathCandidates;
+  const baseCandidates = Array.isArray(requestedCandidates) && requestedCandidates.length > 0
+    ? requestedCandidates
+    : [hostLogPath];
+  const candidates = [];
+  const seen = new Set();
+
+  for (const candidatePath of baseCandidates) {
+    if (typeof candidatePath !== 'string' || candidatePath.length === 0) {
+      continue;
+    }
+
+    const normalizedPath = path.normalize(candidatePath);
+    const dedupeKey = process.platform === 'win32'
+      ? normalizedPath.toLowerCase()
+      : normalizedPath;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    candidates.push(normalizedPath);
+  }
+
+  if (candidates.length === 0) {
+    candidates.push(hostLogPath);
+  }
+
+  return candidates;
+}
+
+async function readHostLogEntries(logPathCandidates = null) {
+  const entries = [];
+  for (const candidatePath of resolveHostLogCandidates(logPathCandidates)) {
+    try {
+      const content = await fsp.readFile(candidatePath, 'utf8');
+      entries.push({path: candidatePath, content});
+    } catch {
+      // Ignore missing log candidates while the host is still starting.
+    }
+  }
+
+  return entries;
+}
+
+async function readPreferredHostLogEntry(logPathCandidates = null) {
+  const entries = await readHostLogEntries(logPathCandidates);
+  return (
+    entries.find(entry => entry.content.trim().length > 0) ??
+    entries[0] ?? {
+      path: resolveHostLogCandidates(logPathCandidates)[0] ?? hostLogPath,
+      content: '',
+    }
+  );
+}
+
 export function log(scope, message) {
   console.log(`[${scope}] ${message}`);
 }
@@ -422,11 +481,13 @@ export function stopHostProcesses() {
   });
 }
 
-export function clearHostLog() {
-  try {
-    fs.unlinkSync(hostLogPath);
-  } catch {
-    // ignore
+export function clearHostLog({logPathCandidates = null} = {}) {
+  for (const candidatePath of resolveHostLogCandidates(logPathCandidates)) {
+    try {
+      fs.unlinkSync(candidatePath);
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -755,23 +816,26 @@ export function formatHostCommandTailDetails(
 export async function waitForHostLogMarkers(
   markers,
   timeoutMs = 60000,
-  {failFastOnFatalFrontendError = false, failFastCheck = null} = {},
+  {failFastOnFatalFrontendError = false, failFastCheck = null, logPathCandidates = null} = {},
 ) {
   let outcome = {status: 'timeout'};
 
   await waitFor(async () => {
     try {
-      const content = await fsp.readFile(hostLogPath, 'utf8');
-      if (markers.every(marker => content.includes(marker))) {
-        outcome = {status: 'matched'};
-        return true;
-      }
-
-      if (failFastOnFatalFrontendError) {
-        const fatalDiagnostic = getFatalFrontendDiagnostic(content);
-        if (fatalDiagnostic) {
-          outcome = {status: 'fatal-frontend-error', fatalDiagnostic};
+      const entries = await readHostLogEntries(logPathCandidates);
+      for (const entry of entries) {
+        const {content} = entry;
+        if (markers.every(marker => content.includes(marker))) {
+          outcome = {status: 'matched'};
           return true;
+        }
+
+        if (failFastOnFatalFrontendError) {
+          const fatalDiagnostic = getFatalFrontendDiagnostic(content);
+          if (fatalDiagnostic) {
+            outcome = {status: 'fatal-frontend-error', fatalDiagnostic};
+            return true;
+          }
         }
       }
     } catch {
@@ -805,8 +869,14 @@ export async function readFileTail(filePath, maxLines = 40) {
   }
 }
 
-export async function readHostLogTail(maxLines = 40) {
-  return readFileTail(hostLogPath, maxLines);
+export async function readHostLogContent({logPathCandidates = null} = {}) {
+  const {content} = await readPreferredHostLogEntry(logPathCandidates);
+  return content;
+}
+
+export async function readHostLogTail(maxLines = 40, {logPathCandidates = null} = {}) {
+  const {content} = await readPreferredHostLogEntry(logPathCandidates);
+  return content.split(/\r?\n/).filter(Boolean).slice(-maxLines).join('\n');
 }
 
 

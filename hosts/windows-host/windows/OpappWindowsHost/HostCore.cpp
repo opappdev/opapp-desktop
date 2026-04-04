@@ -1,15 +1,92 @@
 #include "pch.h"
 #include "HostCore.h"
 
+#include <appmodel.h>
+#include <winrt/Windows.Storage.h>
+
 #include <atomic>
 #include <deque>
 #include <fstream>
 #include <sstream>
 
 namespace OpappWindowsHost {
+
+std::string ToUtf8(winrt::hstring const &value);
+std::string ToUtf8(std::wstring const &value);
+
 namespace {
 
 constexpr unsigned long long kMaxLogBytes = 2ull * 1024ull * 1024ull;
+constexpr auto kHostLogFileName = "opapp-windows-host.log";
+
+bool HasPackageIdentity() noexcept {
+  UINT32 packageFullNameLength = 0;
+  auto result = GetCurrentPackageFullName(&packageFullNameLength, nullptr);
+  return result != APPMODEL_ERROR_NO_PACKAGE;
+}
+
+std::string GetDefaultHostLogPath() noexcept {
+  char tempPath[MAX_PATH] = {};
+  auto length = GetTempPathA(MAX_PATH, tempPath);
+  if (length == 0 || length > MAX_PATH) {
+    return kHostLogFileName;
+  }
+
+  return std::string(tempPath) + kHostLogFileName;
+}
+
+std::optional<std::string> GetPackageLocalCacheHostLogPath() noexcept {
+  if (!HasPackageIdentity()) {
+    return std::nullopt;
+  }
+
+  try {
+    auto localCachePath = winrt::Windows::Storage::ApplicationData::Current().LocalCacheFolder().Path();
+    if (localCachePath.empty()) {
+      return std::nullopt;
+    }
+
+    return ToUtf8(localCachePath) + "\\" + kHostLogFileName;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+bool CanOpenLogPath(std::string const &logPath) noexcept {
+  HANDLE file = CreateFileA(
+      logPath.c_str(),
+      FILE_APPEND_DATA,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr,
+      OPEN_ALWAYS,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr);
+
+  if (file == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+
+  CloseHandle(file);
+  return true;
+}
+
+std::string ResolveWritableHostLogPath() noexcept {
+  static const std::string resolvedPath = []() {
+    auto defaultPath = GetDefaultHostLogPath();
+    if (CanOpenLogPath(defaultPath)) {
+      return defaultPath;
+    }
+
+    auto packagePath = GetPackageLocalCacheHostLogPath();
+    if (packagePath && CanOpenLogPath(*packagePath)) {
+      return *packagePath;
+    }
+
+    return defaultPath;
+  }();
+
+  return resolvedPath;
+}
 
 std::string GetPreviousLogPath() {
   return GetHostLogPath() + ".previous";
@@ -46,13 +123,7 @@ std::string ToUtf8(std::wstring const &value) {
 }
 
 std::string GetHostLogPath() noexcept {
-  char tempPath[MAX_PATH] = {};
-  auto length = GetTempPathA(MAX_PATH, tempPath);
-  if (length == 0 || length > MAX_PATH) {
-    return "opapp-windows-host.log";
-  }
-
-  return std::string(tempPath) + "opapp-windows-host.log";
+  return ResolveWritableHostLogPath();
 }
 
 winrt::hstring WindowPolicyName(WindowPolicyId policy) {
