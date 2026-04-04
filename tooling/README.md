@@ -59,7 +59,11 @@ Windows verification entrypoints:
 - `npm run verify:windows`: full packaged validation.
 - `npm run verify:windows:portable`: full portable validation.
 - `npm run smoke:windows`: packaged smoke only.
+- `npm run smoke:windows:reuse`: packaged smoke rerun that keeps
+  `--skip-prepare` for already-prepared local iteration.
 - `npm run smoke:windows:portable`: portable smoke only.
+- `npm run smoke:windows:portable:reuse`: portable smoke rerun that keeps
+  `--skip-prepare` for already-prepared local iteration.
 - `npm run verify:windows:raw-release`: shortest raw `run-windows --release`
   repro from the native host root; skips verify/smoke wrappers and prints
   upstream React Native Windows / MSBuild output directly.
@@ -96,10 +100,23 @@ Windows verification entrypoints:
     `npm run verify:windows -- --include-secondary-window`
   - portable surface-model verify:
     `npm run verify:windows:portable -- --include-secondary-window`
+  - repeated packaged single-scenario rerun after one prepared pass:
+    `npm run smoke:windows:reuse -- --scenario=companion-chat-current-window-malformed-chunk`
+  - repeated portable single-scenario rerun after one prepared pass:
+    `npm run smoke:windows:portable:reuse -- --scenario=companion-chat-current-window-malformed-chunk`
+  - batch related packaged scenarios under one gate to amortize `typecheck` and first prepare:
+    `npm run verify:windows -- --scenario=companion-chat-current-window,companion-chat-current-window-server-error,companion-chat-current-window-malformed-chunk`
+  - packaged wrapper rerun without repeating frontend typecheck:
+    `npm run verify:windows -- --skip-typecheck --scenario=companion-chat-current-window-malformed-chunk`
+  - portable wrapper rerun without repeating frontend typecheck:
+    `npm run verify:windows:portable -- --skip-typecheck --scenario=companion-chat-current-window-malformed-chunk`
   - save screenshots after UI actions while debugging a flaky UI step:
     `npm run verify:windows -- --scenario=save-main-window-preferences --ui-debug-screenshots`
   - Metro-backed debug screenshots for UI automation:
     `npm run verify:windows:dev -- --scenario=window-capture-current-window --ui-debug-screenshots`
+- `verify:windows` remains the higher-level packaged gate and keeps frontend `typecheck`
+  plus first-scenario prepare by design; use the `smoke:windows:reuse` rerun
+  shortcuts only for already-prepared local iteration.
 - use `npm run verify:windows:raw-release` after preflight has already identified the blocker and you need the unwrapped upstream restore/build failure for the Windows host itself.
 - `scripts/resolve-public-frontend-ref.mjs`: resolves the pinned public
   `opapp-frontend` checkout ref from `tooling/config/opapp-frontend-ref.txt`

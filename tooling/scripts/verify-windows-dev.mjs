@@ -29,7 +29,6 @@ import {
   workspaceRoot,
   writeHostLaunchConfig,
 } from './windows-dev-common.mjs';
-import {startCompanionChatSmokeServer} from './companion-chat-sse-smoke.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 import {
@@ -57,10 +56,6 @@ const companionMainBundleId = 'opapp.companion.main';
 const companionChatBundleId = 'opapp.companion.chat';
 const companionAgentWorkbenchSurfaceId = 'companion.agent-workbench';
 const companionChatSurfaceId = 'companion.chat.main';
-const llmChatDevSmokeUiStateRelativePath = path.join(
-  'llm-chat',
-  'dev-smoke-ui-state.json',
-);
 const verifyDevPreferencesPath = path.join(
   tempRoot,
   'opapp-windows-host.verify-dev.preferences.ini',
@@ -225,13 +220,11 @@ const allScenarios = [
     verifyDevPreferencesPath,
   }),
   ...createCompanionChatDevScenarios({
-    assertCompanionChatSmokeRequestCaptured,
-    cleanupCompanionChatSmokeState,
     companionChatBundleId,
     companionChatSurfaceId,
     createLlmChatSpec,
     devChatToken,
-    prepareCompanionChatSmokeState,
+    tempRoot,
   }),
 ];
 const scenarioByName = new Map(allScenarios.map(scenario => [scenario.name, scenario]));
@@ -612,93 +605,6 @@ async function assertAgentWorkbenchApprovalState({decision}) {
       failureMessage: `Windows dev verify failed: ${decisionLabel} agent workbench approval state did not settle in time.`,
     },
   );
-}
-
-function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {
-  if (!state || state.requests.length !== 1) {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} expected exactly 1 SSE request, received ${state?.requests.length ?? 0}.`,
-    );
-  }
-
-  const request = state.requests[0];
-  if (request?.method !== 'POST') {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} did not send a POST request to the local SSE server.`,
-    );
-  }
-
-  if (request?.body?.model !== state.model) {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} did not send the fixture model to the local SSE server.`,
-    );
-  }
-
-  if (request?.body?.stream !== true) {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} did not request stream=true from the local SSE server.`,
-    );
-  }
-
-  const lastMessage = request?.body?.messages?.at?.(-1);
-  if (
-    !lastMessage ||
-    lastMessage.role !== 'user' ||
-    lastMessage.content !== state.requestPrompt
-  ) {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} did not send the expected user prompt to the local SSE server.`,
-    );
-  }
-}
-
-async function prepareCompanionChatSmokeState(options = {}) {
-  await clearCompanionChatSmokeUiArtifacts();
-  return await startCompanionChatSmokeServer(options);
-}
-
-async function cleanupCompanionChatSmokeState(state) {
-  await state?.close?.();
-  await clearCompanionChatSmokeUiArtifacts();
-}
-
-async function resolveCompanionChatSmokeUiStatePaths() {
-  const localAppDataRoot = process.env.LOCALAPPDATA || tempRoot;
-  const candidates = [
-    path.join(localAppDataRoot, 'OPApp', llmChatDevSmokeUiStateRelativePath),
-  ];
-  const packagesRoot = path.join(localAppDataRoot, 'Packages');
-
-  try {
-    const entries = await readdir(packagesRoot, {withFileTypes: true});
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !entry.name.startsWith('OpappWindowsHost_')) {
-        continue;
-      }
-
-      candidates.unshift(
-        path.join(
-          packagesRoot,
-          entry.name,
-          'LocalCache',
-          'Local',
-          'OPApp',
-          llmChatDevSmokeUiStateRelativePath,
-        ),
-      );
-    }
-  } catch {
-    // Fall back to the non-packaged local app-data root only.
-  }
-
-  return [...new Set(candidates)];
-}
-
-async function clearCompanionChatSmokeUiArtifacts() {
-  const uiStatePaths = await resolveCompanionChatSmokeUiStatePaths();
-  for (const candidatePath of uiStatePaths) {
-    await clearOptionalFile(candidatePath);
-  }
 }
 
 function escapePowerShellSingleQuotedString(value) {

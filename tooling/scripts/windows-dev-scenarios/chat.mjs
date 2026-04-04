@@ -1,3 +1,13 @@
+import {readdir, rm} from 'node:fs/promises';
+import path from 'node:path';
+import process from 'node:process';
+import {startCompanionChatSmokeServer} from '../companion-chat-sse-smoke.mjs';
+
+const llmChatDevSmokeUiStateRelativePath = path.join(
+  'llm-chat',
+  'dev-smoke-ui-state.json',
+);
+
 function createCompanionChatSmokeMarkers({
   companionChatBundleId,
   companionChatSurfaceId,
@@ -20,14 +30,99 @@ function buildCompanionChatLaunchConfig(companionChatSurfaceId) {
   };
 }
 
+function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {
+  if (!state || state.requests.length !== 1) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} expected exactly 1 SSE request, received ${state?.requests.length ?? 0}.`,
+    );
+  }
+
+  const request = state.requests[0];
+  if (request?.method !== 'POST') {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not send a POST request to the local SSE server.`,
+    );
+  }
+
+  if (request?.body?.model !== state.model) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not send the fixture model to the local SSE server.`,
+    );
+  }
+
+  if (request?.body?.stream !== true) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not request stream=true from the local SSE server.`,
+    );
+  }
+
+  const lastMessage = request?.body?.messages?.at?.(-1);
+  if (
+    !lastMessage ||
+    lastMessage.role !== 'user' ||
+    lastMessage.content !== state.requestPrompt
+  ) {
+    throw new Error(
+      `Windows dev verify failed: ${failureLabel} did not send the expected user prompt to the local SSE server.`,
+    );
+  }
+}
+
+async function resolveCompanionChatSmokeUiStatePaths(tempRoot) {
+  const localAppDataRoot = process.env.LOCALAPPDATA || tempRoot;
+  const candidates = [
+    path.join(localAppDataRoot, 'OPApp', llmChatDevSmokeUiStateRelativePath),
+  ];
+  const packagesRoot = path.join(localAppDataRoot, 'Packages');
+
+  try {
+    const entries = await readdir(packagesRoot, {withFileTypes: true});
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('OpappWindowsHost_')) {
+        continue;
+      }
+
+      candidates.unshift(
+        path.join(
+          packagesRoot,
+          entry.name,
+          'LocalCache',
+          'Local',
+          'OPApp',
+          llmChatDevSmokeUiStateRelativePath,
+        ),
+      );
+    }
+  } catch {
+    // Fall back to the non-packaged local app-data root only.
+  }
+
+  return [...new Set(candidates)];
+}
+
+async function clearCompanionChatSmokeUiArtifacts(tempRoot) {
+  const uiStatePaths = await resolveCompanionChatSmokeUiStatePaths(tempRoot);
+  for (const candidatePath of uiStatePaths) {
+    await rm(candidatePath, {force: true});
+  }
+}
+
+async function prepareCompanionChatSmokeState(tempRoot, options = {}) {
+  await clearCompanionChatSmokeUiArtifacts(tempRoot);
+  return await startCompanionChatSmokeServer(options);
+}
+
+async function cleanupCompanionChatSmokeState(tempRoot, state) {
+  await state?.close?.();
+  await clearCompanionChatSmokeUiArtifacts(tempRoot);
+}
+
 export function createCompanionChatDevScenarios({
-  assertCompanionChatSmokeRequestCaptured,
-  cleanupCompanionChatSmokeState,
   companionChatBundleId,
   companionChatSurfaceId,
   createLlmChatSpec,
   devChatToken,
-  prepareCompanionChatSmokeState,
+  tempRoot,
 }) {
   const baseSmokeMarkers = createCompanionChatSmokeMarkers({
     companionChatBundleId,
@@ -47,13 +142,13 @@ export function createCompanionChatDevScenarios({
         '[frontend-llm-chat] dev-smoke-complete',
       ],
       async prepareState() {
-        return await prepareCompanionChatSmokeState();
+        return await prepareCompanionChatSmokeState(tempRoot);
       },
       buildLaunchConfig() {
         return buildCompanionChatLaunchConfig(companionChatSurfaceId);
       },
       async cleanupState(state) {
-        await cleanupCompanionChatSmokeState(state);
+        await cleanupCompanionChatSmokeState(tempRoot, state);
       },
       async buildUiSpec(state) {
         return await createLlmChatSpec({
@@ -82,7 +177,7 @@ export function createCompanionChatDevScenarios({
         '[frontend-llm-chat] dev-smoke-complete',
       ],
       async prepareState() {
-        return await prepareCompanionChatSmokeState({
+        return await prepareCompanionChatSmokeState(tempRoot, {
           scenario: 'llm-chat-native-sse-server-error',
         });
       },
@@ -90,7 +185,7 @@ export function createCompanionChatDevScenarios({
         return buildCompanionChatLaunchConfig(companionChatSurfaceId);
       },
       async cleanupState(state) {
-        await cleanupCompanionChatSmokeState(state);
+        await cleanupCompanionChatSmokeState(tempRoot, state);
       },
       async buildUiSpec(state) {
         return await createLlmChatSpec({
@@ -124,7 +219,7 @@ export function createCompanionChatDevScenarios({
         '[frontend-llm-chat] dev-smoke-complete',
       ],
       async prepareState() {
-        return await prepareCompanionChatSmokeState({
+        return await prepareCompanionChatSmokeState(tempRoot, {
           scenario: 'llm-chat-native-sse-malformed-chunk',
         });
       },
@@ -132,7 +227,7 @@ export function createCompanionChatDevScenarios({
         return buildCompanionChatLaunchConfig(companionChatSurfaceId);
       },
       async cleanupState(state) {
-        await cleanupCompanionChatSmokeState(state);
+        await cleanupCompanionChatSmokeState(tempRoot, state);
       },
       async buildUiSpec(state) {
         return await createLlmChatSpec({
@@ -166,7 +261,7 @@ export function createCompanionChatDevScenarios({
         '[frontend-llm-chat] dev-smoke-complete',
       ],
       async prepareState() {
-        return await prepareCompanionChatSmokeState({
+        return await prepareCompanionChatSmokeState(tempRoot, {
           scenario: 'llm-chat-native-sse-stream-abort',
         });
       },
@@ -174,7 +269,7 @@ export function createCompanionChatDevScenarios({
         return buildCompanionChatLaunchConfig(companionChatSurfaceId);
       },
       async cleanupState(state) {
-        await cleanupCompanionChatSmokeState(state);
+        await cleanupCompanionChatSmokeState(tempRoot, state);
       },
       async buildUiSpec(state) {
         return await createLlmChatSpec({

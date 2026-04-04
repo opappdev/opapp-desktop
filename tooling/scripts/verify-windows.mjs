@@ -11,6 +11,7 @@ const scenarioFilterToken = process.argv.find(argument => argument.startsWith('-
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
 const preflightOnly = process.argv.includes('--preflight-only');
+const skipTypecheck = process.argv.includes('--skip-typecheck');
 const launchModeArg = process.argv.find(argument => argument.startsWith('--launch='))?.split('=')[1];
 const portableFlag = process.argv.includes('--portable');
 const otaRemoteToken = process.argv.find(argument => argument.startsWith('--ota-remote='));
@@ -484,6 +485,7 @@ function main() {
   log(`optionalPrivateScenarioCount=${privateVerifyScenarios.length}`);
   log(`validateOnly=${validateOnly}`);
   log(`preflightOnly=${preflightOnly}`);
+  log(`skipTypecheck=${skipTypecheck}`);
   log(`launchMode=${launchMode}`);
   if (timeoutDefaultsPath) {
     log(`timeoutDefaultsPath=${timeoutDefaultsPath}`);
@@ -512,7 +514,11 @@ function main() {
     return;
   }
 
-  typecheckFrontend();
+  if (skipTypecheck) {
+    log('skip-typecheck enabled; skipping frontend typecheck before packaged verification.');
+  } else {
+    typecheckFrontend();
+  }
   const scenarioTimings = verifyPackagedScenarios(scenarios);
   const totalDurationMs = scenarioTimings.reduce((sum, item) => sum + item.durationMs, 0);
   log(`scenario timing summary totalMs=${totalDurationMs} scenarioCount=${scenarioTimings.length}`);
