@@ -51,6 +51,48 @@ test('mergeRegistryIndexes unions versions, prefers local channel mapping, and d
   assert.equal(entry.rolloutPercent, 20);
 });
 
+test('mergeRegistryIndexes preserves hostCompatibility only for listed versions', () => {
+  const remote = {
+    bundles: {
+      'companion-app': {
+        latestVersion: '0.1.0',
+        versions: ['0.1.0'],
+        hostCompatibility: {
+          '0.1.0': {
+            minHostVersion: '1.0.0.0',
+          },
+          '9.9.9': {
+            minHostVersion: '9.0.0.0',
+          },
+        },
+      },
+    },
+  };
+  const local = {
+    bundles: {
+      'companion-app': {
+        latestVersion: '0.2.0',
+        versions: ['0.2.0'],
+        hostCompatibility: {
+          '0.2.0': {
+            minHostVersion: '2.0.0.0',
+          },
+        },
+      },
+    },
+  };
+
+  const merged = mergeRegistryIndexes(remote, local);
+  assert.deepEqual(merged.bundles['companion-app'].hostCompatibility, {
+    '0.1.0': {
+      minHostVersion: '1.0.0.0',
+    },
+    '0.2.0': {
+      minHostVersion: '2.0.0.0',
+    },
+  });
+});
+
 test('applyBundlePublishOverrides removes rolloutPercent for full rollout', () => {
   const remote = {
     bundles: {
@@ -266,6 +308,38 @@ test('generateRegistryIndex drops all channel pins when no versions are present'
   assert.deepEqual(index.bundles['companion-app'], {
     latestVersion: null,
     versions: [],
+  });
+});
+
+test('generateRegistryIndex emits hostCompatibility from version manifests', async t => {
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), 'ota-index-host-compat-'));
+  t.after(async () => {
+    await rm(fixtureRoot, {recursive: true, force: true});
+  });
+
+  const manifestDir = path.join(fixtureRoot, 'companion-app', '0.2.0', 'windows');
+  await mkdir(manifestDir, {recursive: true});
+  await writeFile(
+    path.join(manifestDir, 'bundle-manifest.json'),
+    JSON.stringify(
+      {
+        bundleId: 'companion-app',
+        version: '0.2.0',
+        minHostVersion: '1.0.0.0',
+        maxHostVersion: '2.0.0.0',
+      },
+      null,
+      2,
+    ) + '\n',
+    'utf8',
+  );
+
+  const index = await generateRegistryIndex(fixtureRoot);
+  assert.deepEqual(index.bundles['companion-app'].hostCompatibility, {
+    '0.2.0': {
+      minHostVersion: '1.0.0.0',
+      maxHostVersion: '2.0.0.0',
+    },
   });
 });
 

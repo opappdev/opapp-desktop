@@ -7,10 +7,10 @@
  * the next application launch uses the updated bundle.
  *
  * Usage:
- *   node ota-updater.mjs --mode=check    --remote=<url> --platform=windows [--current-version=<ver>] [--bundle-id=<id>] [--channel=<name>]
- *   node ota-updater.mjs --mode=download --remote=<url> --platform=windows [--version=<ver>] [--bundle-id=<id>] [--force] [--channel=<name>]
+ *   node ota-updater.mjs --mode=check    --remote=<url> --platform=windows [--current-version=<ver>] [--bundle-id=<id>] [--channel=<name>] [--host-version=<ver>]
+ *   node ota-updater.mjs --mode=download --remote=<url> --platform=windows [--version=<ver>] [--bundle-id=<id>] [--force] [--channel=<name>] [--host-version=<ver>]
  *   node ota-updater.mjs --mode=apply    --platform=windows [--bundle-id=<id>] [--version=<ver>] [--host-bundle-dir=<d>]
- *   node ota-updater.mjs --mode=update   --remote=<url> --platform=windows [--force] [--channel=<name>]
+ *   node ota-updater.mjs --mode=update   --remote=<url> --platform=windows [--force] [--channel=<name>] [--host-version=<ver>]
  *   node ota-updater.mjs --mode=rollback --platform=windows [--host-bundle-dir=<d>]
  *
  * All modes output a single JSON line to stdout for easy integration with
@@ -44,6 +44,9 @@
  *   --channel=<name>        Update channel name (RFC-015); e.g. 'stable', 'beta',
  *                           'nightly'.  Persisted to <cacheDir>/channel.json.
  *                           Defaults to the persisted channel choice, or 'stable'.
+ *   --host-version=<ver>    Optional current Windows host version used to
+ *                           filter out bundle versions whose manifest-declared
+ *                           host compatibility range excludes this client.
  */
 
 import {existsSync} from 'node:fs';
@@ -53,6 +56,11 @@ import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath} from 'node:url';
 import {LocalRegistryArtifactSource, RemoteArtifactSource} from './artifact-source.mjs';
+import {
+  isVersionCompatibleWithHost,
+  normalizeHostCompatibilityMap,
+  pickLatestCompatibleVersion,
+} from './ota-host-compatibility.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..');
@@ -129,14 +137,29 @@ export async function readOtaState(cacheDir) {
  * @param {string} [options.channel] - Update channel name (RFC-015); persisted
  *   in <cacheDir>/channel.json when explicitly provided.  Defaults to the
  *   persisted channel, or 'stable' when no channel has been chosen.
- * @returns {Promise<{hasUpdate: boolean, inRollout: boolean, rolloutPercent: number|undefined, deviceId: string, currentVersion: string | null, latestVersion: string, bundleId: string, channel: string, channels?: Record<string,string>}>}
+ * @param {string} [options.hostVersion] - Optional current Windows host version.
+ * @returns {Promise<{hasUpdate: boolean, inRollout: boolean, rolloutPercent: number|undefined, deviceId: string, currentVersion: string | null, latestVersion: string | null, bundleId: string, channel: string, channels?: Record<string,string>}>}
  */
-export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, currentVersion, deviceId, channel}) {
+export async function checkForUpdate({
+  remoteBase,
+  platform,
+  cacheDir,
+  bundleId,
+  currentVersion,
+  deviceId,
+  channel,
+  hostVersion,
+}) {
   // RFC-015: resolve and persist channel choice.
   const resolvedChannel = channel ?? await _getOrCreateChannel(cacheDir);
   if (channel !== undefined) await _persistChannel(cacheDir, channel);
 
-  const {bundleId: resolvedBundleId, latestVersion, rolloutPercent, channels} = await _fetchRemoteLatest(remoteBase, bundleId, resolvedChannel);
+  const {
+    bundleId: resolvedBundleId,
+    latestVersion: resolvedLatestVersion,
+    rolloutPercent,
+    channels,
+  } = await _fetchRemoteLatest(remoteBase, bundleId, resolvedChannel, hostVersion);
 
   let resolvedCurrentVersion = currentVersion ?? null;
   if (!resolvedCurrentVersion) {
@@ -149,13 +172,20 @@ export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, 
   // RFC-014: staged rollout — resolve device ID and compute bucket.
   const resolvedDeviceId = deviceId ?? await _getOrCreateDeviceId(cacheDir);
   let inRollout = true;
-  if (typeof rolloutPercent === 'number' && rolloutPercent < 100) {
+  if (
+    resolvedLatestVersion &&
+    typeof rolloutPercent === 'number' &&
+    rolloutPercent < 100
+  ) {
     const bucket = _computeRolloutBucket(resolvedBundleId, resolvedDeviceId);
     inRollout = bucket < rolloutPercent;
   }
 
+  const latestVersion = resolvedLatestVersion ?? resolvedCurrentVersion ?? null;
   const hasUpdate =
-    inRollout && (!resolvedCurrentVersion || latestVersion > resolvedCurrentVersion);
+    inRollout &&
+    !!resolvedLatestVersion &&
+    (!resolvedCurrentVersion || resolvedLatestVersion > resolvedCurrentVersion);
 
   return {
     hasUpdate,
@@ -186,15 +216,30 @@ export async function checkForUpdate({remoteBase, platform, cacheDir, bundleId, 
  * @param {string} [options.channel] - Update channel name (RFC-015); used to
  *   resolve the channel-pinned version from the registry index when
  *   options.version is omitted.
+ * @param {string} [options.hostVersion] - Optional current Windows host version.
  * @returns {Promise<{bundleId: string, version: string, manifestDir: string}>}
  */
-export async function downloadOtaUpdate({remoteBase, platform, cacheDir, bundleId, version, force = false, channel}) {
-  // RFC-015: if a channel is specified without an explicit version, resolve the
-  // channel-pinned version from the remote registry index before downloading.
+export async function downloadOtaUpdate({
+  remoteBase,
+  platform,
+  cacheDir,
+  bundleId,
+  version,
+  force = false,
+  channel,
+  hostVersion,
+}) {
+  // Resolve the latest compatible remote version when callers omit --version.
   let targetVersion = version;
   let targetBundleId = bundleId;
-  if (!targetVersion && channel !== undefined) {
-    const fetched = await _fetchRemoteLatest(remoteBase, bundleId, channel);
+  if (!targetVersion) {
+    const fetched = await _fetchRemoteLatest(remoteBase, bundleId, channel, hostVersion);
+    if (!fetched.latestVersion) {
+      throw new Error(
+        `OtaUpdater: no compatible versions for '${fetched.bundleId}'` +
+          (hostVersion ? ` on host version '${hostVersion}'.` : '.'),
+      );
+    }
     targetVersion = fetched.latestVersion;
     if (!targetBundleId) targetBundleId = fetched.bundleId;
   }
@@ -503,7 +548,7 @@ async function _writeFailedOtaLastRun({cacheDir, mode, remoteBase, context}) {
   }
 }
 
-async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
+async function _fetchRemoteLatest(remoteBase, bundleId, channel, hostVersion) {
   const base = remoteBase.replace(/\/$/, '');
   const indexUrl = `${base}/index.json`;
   let resp;
@@ -557,6 +602,8 @@ async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
     info.channels && typeof info.channels === 'object' && !Array.isArray(info.channels)
       ? info.channels
       : {};
+  const hostCompatibility =
+    normalizeHostCompatibilityMap(info.hostCompatibility, versions) ?? undefined;
   const pickChannelVersion = candidate => {
     if (typeof candidate !== 'string' || !candidate) {
       return undefined;
@@ -564,8 +611,23 @@ async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
     if (hasVersionList && !versions.includes(candidate)) {
       return undefined;
     }
+    if (
+      !isVersionCompatibleWithHost({
+        version: candidate,
+        hostVersion,
+        hostCompatibility,
+      })
+    ) {
+      return undefined;
+    }
     return candidate;
   };
+  const overallLatestCompatible = pickLatestCompatibleVersion({
+    versions,
+    legacyLatestVersion,
+    hostVersion,
+    hostCompatibility,
+  });
   let latestVersion;
   if (channel) {
     latestVersion = pickChannelVersion(channelMap[channel]);
@@ -574,9 +636,19 @@ async function _fetchRemoteLatest(remoteBase, bundleId, channel) {
       latestVersion = pickChannelVersion(channelMap['stable']);
     }
   }
-  latestVersion ??= overallLatest ?? legacyLatestVersion;
+  latestVersion ??= overallLatestCompatible ?? overallLatest ?? legacyLatestVersion;
+  if (
+    latestVersion &&
+    !isVersionCompatibleWithHost({
+      version: latestVersion,
+      hostVersion,
+      hostCompatibility,
+    })
+  ) {
+    latestVersion = null;
+  }
 
-  if (!latestVersion) {
+  if (!latestVersion && !hostVersion) {
     throw new Error(
       `OtaUpdater: no versions for '${resolvedBundleId}' in registry index at ${indexUrl}`,
     );
@@ -693,6 +765,7 @@ async function main() {
   const hostBundleDirArg = _parseArg('host-bundle-dir') ?? DEFAULT_HOST_BUNDLE_DIR;
   const deviceIdArg = _parseArg('device-id') ?? undefined;
   const channelArg = _parseArg('channel') ?? undefined;
+  const hostVersionArg = _parseArg('host-version') ?? undefined;
 
   if (!['check', 'download', 'apply', 'update', 'rollback'].includes(modeArg)) {
     throw new Error(
@@ -736,6 +809,7 @@ async function main() {
         currentVersion: currentVersionArg,
         deviceId: deviceIdArg,
         channel: channelArg,
+        hostVersion: hostVersionArg,
       });
       await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: remoteArg, ...result});
       console.log(JSON.stringify(result));
@@ -756,6 +830,7 @@ async function main() {
         version: versionArg,
         force: forceFlag,
         channel: channelArg,
+        hostVersion: hostVersionArg,
       });
       await _writeOtaLastRun(cacheDirArg, {mode: modeArg, remoteBase: remoteArg, ...result});
       console.log(JSON.stringify(result));
@@ -791,6 +866,7 @@ async function main() {
       currentVersion: currentVersionArg,
       deviceId: deviceIdArg,
       channel: channelArg,
+      hostVersion: hostVersionArg,
     });
     failedLastRunContext = checkResult;
 
@@ -812,6 +888,7 @@ async function main() {
       bundleId: checkResult.bundleId,
       version: checkResult.latestVersion,
       force: forceFlag,
+      hostVersion: hostVersionArg,
     });
     failedLastRunContext = {
       ...checkResult,

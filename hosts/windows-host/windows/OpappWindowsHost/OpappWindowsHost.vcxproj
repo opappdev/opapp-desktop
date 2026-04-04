@@ -142,6 +142,10 @@
       <Link>Bundle\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <DeploymentContent>true</DeploymentContent>
     </None>
+    <None Include="..\OpappWindowsHost.Package\Package.appxmanifest">
+      <Link>host-package.appxmanifest</Link>
+      <DeploymentContent>true</DeploymentContent>
+    </None>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ReactNativeWindowsTargets">

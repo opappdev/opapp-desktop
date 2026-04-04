@@ -10,17 +10,18 @@
  *   1. generateRegistryIndex() emits versions, rolloutPercent, channels
  *   2. stable channel resolves the stable-pinned version
  *   3. beta channel resolves the beta-pinned version
- *   4. Device outside the 50 % rollout window → inRollout=false, hasUpdate=false
- *   5. Device inside  the 50 % rollout window → inRollout=true,  hasUpdate=true
- *   6. rolloutPercent absent (full rollout) → every device inRollout=true
- *   7. Unknown channel falls back to the stable channel entry
- *   8. No channels.json (absent) → RFC-010 backward-compat (overallLatest)
- *   9. Missing latestVersion falls back to the lexicographic latest versions[] entry
- *  10. Channel pins that drift outside versions[] are ignored and fall back safely
- *  11. Invalid top-level latestVersion falls back to versions[] instead of a dead path
- *  12. Explicit empty versions[] rejects stale pins instead of reviving dead paths
- *  13. apply / rollback replace directories cleanly without leaving stale files
- *  14. Up-to-date last-run payload does not claim a staged version
+ *   4. hostCompatibility filters out versions that the current host cannot run
+ *   5. Device outside the 50 % rollout window → inRollout=false, hasUpdate=false
+ *   6. Device inside  the 50 % rollout window → inRollout=true,  hasUpdate=true
+ *   7. rolloutPercent absent (full rollout) → every device inRollout=true
+ *   8. Unknown channel falls back to the stable channel entry
+ *   9. No channels.json (absent) → RFC-010 backward-compat (overallLatest)
+ *  10. Missing latestVersion falls back to the lexicographic latest versions[] entry
+ *  11. Channel pins that drift outside versions[] are ignored and fall back safely
+ *  12. Invalid top-level latestVersion falls back to versions[] instead of a dead path
+ *  13. Explicit empty versions[] rejects stale pins instead of reviving dead paths
+ *  14. apply / rollback replace directories cleanly without leaving stale files
+ *  15. Up-to-date last-run payload does not claim a staged version
  *
  * Usage:
  *   node ota-smoke.mjs
@@ -47,8 +48,10 @@ import {
 } from './ota-updater.mjs';
 
 const BUNDLE_ID = 'opapp.smoke.bundle';
+const COMPAT_BUNDLE_ID = 'opapp.smoke.compat';
 const MAIN_BUNDLE_ID = 'opapp.companion.main';
 const NESTED_BUNDLE_ID = 'opapp.hbr.workspace';
+const NO_COMPAT_BUNDLE_ID = 'opapp.smoke.no-compat';
 const PLATFORM = 'smoke';
 
 // ---------------------------------------------------------------------------
@@ -86,7 +89,13 @@ function eq(actual, expected, label) {
 // Registry setup helpers
 // ---------------------------------------------------------------------------
 
-async function _createFakeBundle(registryRoot, bundleId, version, platform) {
+async function _createFakeBundle(
+  registryRoot,
+  bundleId,
+  version,
+  platform,
+  hostCompatibility = null,
+) {
   const dir = path.join(registryRoot, bundleId, version, platform);
   await mkdir(dir, {recursive: true});
   const entryFile = 'bundle.js';
@@ -98,7 +107,14 @@ async function _createFakeBundle(registryRoot, bundleId, version, platform) {
   await writeFile(
     path.join(dir, 'bundle-manifest.json'),
     JSON.stringify(
-      {bundleId, version, platform, entryFile, sourceKind: 'local-build'},
+      {
+        bundleId,
+        version,
+        platform,
+        entryFile,
+        sourceKind: 'local-build',
+        ...(hostCompatibility ?? {}),
+      },
       null,
       2,
     ) + '\n',
@@ -194,6 +210,21 @@ async function main() {
 
     await _createFakeBundle(registryRoot, BUNDLE_ID, '0.1.0', PLATFORM);
     await _createFakeBundle(registryRoot, BUNDLE_ID, '0.2.0', PLATFORM);
+    await _createFakeBundle(registryRoot, COMPAT_BUNDLE_ID, '0.2.0', PLATFORM);
+    await _createFakeBundle(
+      registryRoot,
+      COMPAT_BUNDLE_ID,
+      '0.3.0',
+      PLATFORM,
+      {minHostVersion: '2.0.0.0'},
+    );
+    await _createFakeBundle(
+      registryRoot,
+      NO_COMPAT_BUNDLE_ID,
+      '0.4.0',
+      PLATFORM,
+      {minHostVersion: '9.0.0.0'},
+    );
 
     await _writeJson(
       path.join(registryRoot, BUNDLE_ID, 'channels.json'),
@@ -202,6 +233,10 @@ async function main() {
     await _writeJson(
       path.join(registryRoot, BUNDLE_ID, 'rollout.json'),
       {percent: 50, updatedAt: new Date().toISOString()},
+    );
+    await _writeJson(
+      path.join(registryRoot, COMPAT_BUNDLE_ID, 'channels.json'),
+      {stable: '0.2.0', nightly: '0.3.0'},
     );
 
     // ── 2. generateRegistryIndex ──────────────────────────────────────────
@@ -218,6 +253,11 @@ async function main() {
     eq(entry.rolloutPercent, 50, 'rolloutPercent = 50 (from rollout.json)');
     eq(entry.channels?.stable, '0.1.0', 'channels.stable = 0.1.0');
     eq(entry.channels?.beta, '0.2.0', 'channels.beta = 0.2.0');
+    eq(
+      index.bundles[COMPAT_BUNDLE_ID].hostCompatibility?.['0.3.0']?.minHostVersion,
+      '2.0.0.0',
+      'hostCompatibility is emitted for host-gated bundle versions',
+    );
 
     await _writeJson(path.join(registryRoot, 'index.json'), index);
 
@@ -263,8 +303,91 @@ async function main() {
     eq(betaResult.latestVersion, '0.2.0', 'beta channel → pinned version 0.2.0');
     ok(betaResult.hasUpdate === true, 'beta: hasUpdate=true (0.0.0 < 0.2.0, in rollout)');
 
-    // ── 5. Staged rollout bucketing (RFC-014) ─────────────────────────────
-    process.stdout.write('\n5. checkForUpdate – staged rollout bucketing (50 %)\n');
+    // ── 5. Host compatibility filtering ────────────────────────────────────
+    process.stdout.write('\n5. checkForUpdate – host compatibility filtering\n');
+
+    const legacyHostResult = await checkForUpdate({
+      remoteBase: baseUrl,
+      platform: PLATFORM,
+      cacheDir: path.join(cacheBase, 'legacy-host'),
+      bundleId: COMPAT_BUNDLE_ID,
+      currentVersion: '0.2.0',
+      deviceId: inDevice,
+      channel: 'nightly',
+      hostVersion: '1.0.0.0',
+    });
+    eq(
+      legacyHostResult.latestVersion,
+      '0.2.0',
+      'host-incompatible nightly pin falls back to the latest compatible version',
+    );
+    ok(
+      legacyHostResult.hasUpdate === false,
+      'host-incompatible latest bundle does not report an update',
+    );
+    ok(
+      legacyHostResult.inRollout === true,
+      'host-incompatible latest bundle does not mark the device out of rollout',
+    );
+
+    const modernHostResult = await checkForUpdate({
+      remoteBase: baseUrl,
+      platform: PLATFORM,
+      cacheDir: path.join(cacheBase, 'modern-host'),
+      bundleId: COMPAT_BUNDLE_ID,
+      currentVersion: '0.2.0',
+      deviceId: inDevice,
+      channel: 'nightly',
+      hostVersion: '2.0.0.0',
+    });
+    eq(
+      modernHostResult.latestVersion,
+      '0.3.0',
+      'compatible hosts resolve the newest compatible bundle version',
+    );
+    ok(
+      modernHostResult.hasUpdate === true,
+      'compatible hosts still receive the newer bundle version',
+    );
+
+    const noCompatCheckResult = await checkForUpdate({
+      remoteBase: baseUrl,
+      platform: PLATFORM,
+      cacheDir: path.join(cacheBase, 'no-compatible-check'),
+      bundleId: NO_COMPAT_BUNDLE_ID,
+      deviceId: inDevice,
+      hostVersion: '1.0.0.0',
+    });
+    eq(
+      noCompatCheckResult.latestVersion,
+      null,
+      'host with no compatible remote version resolves latestVersion=null when nothing is installed',
+    );
+    ok(
+      noCompatCheckResult.hasUpdate === false,
+      'host with no compatible remote version does not report an update',
+    );
+
+    let noCompatDownloadError = null;
+    try {
+      await downloadOtaUpdate({
+        remoteBase: baseUrl,
+        platform: PLATFORM,
+        cacheDir: path.join(cacheBase, 'no-compatible-download'),
+        bundleId: NO_COMPAT_BUNDLE_ID,
+        hostVersion: '1.0.0.0',
+      });
+    } catch (error) {
+      noCompatDownloadError = error;
+    }
+    ok(
+      noCompatDownloadError instanceof Error &&
+        /no compatible versions/.test(noCompatDownloadError.message),
+      'download rejects when no compatible remote version exists for the host',
+    );
+
+    // ── 6. Staged rollout bucketing (RFC-014) ─────────────────────────────
+    process.stdout.write('\n6. checkForUpdate – staged rollout bucketing (50 %)\n');
 
     const outResult = await checkForUpdate({
       remoteBase: baseUrl,
@@ -296,8 +419,8 @@ async function main() {
     );
     ok(inResult.hasUpdate === true, 'in-rollout device: hasUpdate=true');
 
-    // ── 6. Full rollout (rolloutPercent absent) ───────────────────────────
-    process.stdout.write('\n6. Full rollout: rollout.json deleted → all devices inRollout=true\n');
+    // ── 7. Full rollout (rolloutPercent absent) ───────────────────────────
+    process.stdout.write('\n7. Full rollout: rollout.json deleted → all devices inRollout=true\n');
 
     await rm(path.join(registryRoot, BUNDLE_ID, 'rollout.json'), {force: true});
     const fullIndex = await generateRegistryIndex(registryRoot);
@@ -323,8 +446,8 @@ async function main() {
     );
     ok(fullOutResult.hasUpdate === true, 'full rollout: hasUpdate=true for all devices');
 
-    // ── 7. Channel fallback chain (RFC-015) ───────────────────────────────
-    process.stdout.write('\n7. Channel fallback: unknown channel \u2192 stable \u2192 overallLatest\n');
+    // ── 8. Channel fallback chain (RFC-015) ───────────────────────────────
+    process.stdout.write('\n8. Channel fallback: unknown channel \u2192 stable \u2192 overallLatest\n');
 
     // Restore rollout.json so rollout checks remain meaningful.
     await _writeJson(
@@ -352,8 +475,8 @@ async function main() {
       'nightly (unknown) falls back to stable channel version (0.1.0)',
     );
 
-    // ── 8. Backward compat: no channels.json → RFC-010 behaviour ──────────
-    process.stdout.write('\n8. Backward compat: no channels.json \u2192 RFC-010 behaviour\n');
+    // ── 9. Backward compat: no channels.json → RFC-010 behaviour ──────────
+    process.stdout.write('\n9. Backward compat: no channels.json \u2192 RFC-010 behaviour\n');
 
     await rm(path.join(registryRoot, BUNDLE_ID, 'channels.json'), {force: true});
     await rm(path.join(registryRoot, BUNDLE_ID, 'rollout.json'), {force: true});
@@ -375,8 +498,8 @@ async function main() {
     ok(compatResult.inRollout === true, 'no rollout.json → always inRollout=true');
     ok(compatResult.hasUpdate === true, 'backward compat: hasUpdate=true');
 
-    // ── 9. Backward compat: missing latestVersion → versions[] fallback ───
-    process.stdout.write('\n9. Backward compat: missing latestVersion \u2192 versions[] fallback\n');
+    // ── 10. Backward compat: missing latestVersion → versions[] fallback ──
+    process.stdout.write('\n10. Backward compat: missing latestVersion \u2192 versions[] fallback\n');
 
     const indexWithoutLatestVersion = await generateRegistryIndex(registryRoot);
     delete indexWithoutLatestVersion.bundles[BUNDLE_ID].latestVersion;
@@ -400,8 +523,8 @@ async function main() {
       'missing latestVersion fallback still reports hasUpdate=true',
     );
 
-    // ── 10. Invalid channel pin → safe fallback through stable / versions[] ─
-    process.stdout.write('\n10. Invalid channel pin outside versions[] \u2192 safe fallback\n');
+    // ── 11. Invalid channel pin → safe fallback through stable / versions[] ─
+    process.stdout.write('\n11. Invalid channel pin outside versions[] \u2192 safe fallback\n');
 
     const invalidChannelIndex = await generateRegistryIndex(registryRoot);
     invalidChannelIndex.bundles[BUNDLE_ID].channels = {
@@ -425,8 +548,8 @@ async function main() {
       'invalid nightly pin falls back to stable listed version (0.1.0)',
     );
 
-    // ── 11. Invalid latestVersion → versions[] fallback ───────────────────
-    process.stdout.write('\n11. Invalid latestVersion outside versions[] \u2192 versions[] fallback\n');
+    // ── 12. Invalid latestVersion → versions[] fallback ───────────────────
+    process.stdout.write('\n12. Invalid latestVersion outside versions[] \u2192 versions[] fallback\n');
 
     const invalidLatestVersionIndex = await generateRegistryIndex(registryRoot);
     delete invalidLatestVersionIndex.bundles[BUNDLE_ID].channels;
@@ -451,8 +574,8 @@ async function main() {
       'invalid latestVersion fallback still reports hasUpdate=true',
     );
 
-    // ── 12. Explicit empty versions[] rejects stale pins completely ────────
-    process.stdout.write('\n12. Explicit empty versions[] rejects stale pins\n');
+    // ── 13. Explicit empty versions[] rejects stale pins completely ────────
+    process.stdout.write('\n13. Explicit empty versions[] rejects stale pins\n');
 
     const emptyVersionsIndex = await generateRegistryIndex(registryRoot);
     emptyVersionsIndex.bundles[BUNDLE_ID].versions = [];
@@ -487,8 +610,8 @@ async function main() {
       await generateRegistryIndex(registryRoot),
     );
 
-    // ── 13. Apply / rollback replace directories cleanly ───────────────────
-    process.stdout.write('\n13. apply / rollback replace directories cleanly\n');
+    // ── 14. Apply / rollback replace directories cleanly ───────────────────
+    process.stdout.write('\n14. apply / rollback replace directories cleanly\n');
 
     const applyCacheDir = path.join(tmpBase, 'apply-cache');
     const hostBundleDir = path.join(tmpBase, 'host-bundle');
@@ -565,8 +688,8 @@ async function main() {
       'rollback does not leak files from older snapshots into the restored bundle',
     );
 
-    // ── 14. Main bundle apply preserves nested bundles ─────────────────────
-    process.stdout.write('\n14. main bundle apply preserves nested bundles\n');
+    // ── 15. Main bundle apply preserves nested bundles ─────────────────────
+    process.stdout.write('\n15. main bundle apply preserves nested bundles\n');
 
     const mainApplyCacheDir = path.join(tmpBase, 'main-apply-cache');
     const mainHostBundleDir = path.join(tmpBase, 'main-host-bundle');
@@ -629,8 +752,8 @@ async function main() {
       'main bundle apply still removes stale top-level files while preserving nested bundles',
     );
 
-    // ── 15. download → apply → rollback (full HTTP end-to-end) ────────────
-    process.stdout.write('\n15. download \u2192 apply \u2192 rollback (full HTTP end-to-end)\n');
+    // ── 16. download → apply → rollback (full HTTP end-to-end) ────────────
+    process.stdout.write('\n16. download \u2192 apply \u2192 rollback (full HTTP end-to-end)\n');
 
     // The registry still has BUNDLE_ID@0.1.0 and @0.2.0 with no channels/rollout
     // (state from section 8). Use a fresh cache and host dir for isolation.
@@ -709,8 +832,8 @@ async function main() {
       'rollback (post-download-apply): bundle-manifest.json version reverts to 0.1.0',
     );
 
-    // ── 16. Up-to-date last-run payload stays unstaged ────────────────────
-    process.stdout.write('\n16. up-to-date last-run payload does not claim a staged version\n');
+    // ── 17. Up-to-date last-run payload stays unstaged ────────────────────
+    process.stdout.write('\n17. up-to-date last-run payload does not claim a staged version\n');
 
     const upToDateCheckResult = await checkForUpdate({
       remoteBase: baseUrl,

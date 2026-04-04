@@ -42,6 +42,7 @@ import {
   generateRegistryIndex,
   publishToLocalRegistry,
 } from './artifact-source.mjs';
+import {normalizeHostCompatibilityMap} from './ota-host-compatibility.mjs';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -111,6 +112,10 @@ function normalizeRolloutPercent(entry) {
   return clamped < 100 ? clamped : undefined;
 }
 
+function normalizeHostCompatibility(entry, versions = normalizeVersions(entry)) {
+  return normalizeHostCompatibilityMap(entry?.hostCompatibility, versions) ?? undefined;
+}
+
 export function mergeRegistryIndexes(remoteIndex, localIndex) {
   const remoteBundles = asObject(remoteIndex?.bundles);
   const localBundles = asObject(localIndex?.bundles);
@@ -126,9 +131,14 @@ export function mergeRegistryIndexes(remoteIndex, localIndex) {
       ...normalizeChannels(remoteEntry, versions),
       ...normalizeChannels(localEntry, versions),
     };
+    const hostCompatibility = {
+      ...normalizeHostCompatibility(remoteEntry, versions),
+      ...normalizeHostCompatibility(localEntry, versions),
+    };
     const rolloutPercent = normalizeRolloutPercent(localEntry) ?? normalizeRolloutPercent(remoteEntry);
     const mergedEntry = {latestVersion, versions};
     if (Object.keys(channels).length > 0) mergedEntry.channels = channels;
+    if (Object.keys(hostCompatibility).length > 0) mergedEntry.hostCompatibility = hostCompatibility;
     if (rolloutPercent !== undefined) mergedEntry.rolloutPercent = rolloutPercent;
     bundles[bundleId] = mergedEntry;
   }
@@ -144,12 +154,17 @@ export function applyBundlePublishOverrides(index, options) {
     ...normalizeChannels(currentEntry, versions),
     [channel]: version,
   };
+  const hostCompatibility = normalizeHostCompatibility(currentEntry, versions);
 
   const nextEntry = {
     latestVersion: versions.at(-1) ?? version,
     versions,
     channels,
   };
+
+  if (hostCompatibility && Object.keys(hostCompatibility).length > 0) {
+    nextEntry.hostCompatibility = hostCompatibility;
+  }
 
   if (rolloutPercent < 100) {
     nextEntry.rolloutPercent = rolloutPercent;

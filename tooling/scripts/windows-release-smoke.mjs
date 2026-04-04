@@ -6,6 +6,11 @@ import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {SiblingArtifactSource} from './artifact-source.mjs';
+import {
+  isVersionCompatibleWithHost,
+  normalizeHostCompatibilityMap,
+  pickLatestCompatibleVersion,
+} from './ota-host-compatibility.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {
   launchInstalledAppOrThrow,
@@ -93,6 +98,12 @@ const frontendBundleScriptPath = path.join(frontendRoot, 'tooling', 'scripts', '
 const frontendBundleRoot = path.join(frontendRoot, '.dist', 'bundles', 'companion-app', 'windows');
 const hostRoot = path.join(repoRoot, 'hosts', 'windows-host');
 const hostBundleRoot = path.join(hostRoot, 'windows', 'OpappWindowsHost', 'Bundle');
+const windowsHostPackageManifestPath = path.join(
+  hostRoot,
+  'windows',
+  'OpappWindowsHost.Package',
+  'Package.appxmanifest',
+);
 const portableReleaseRoot = path.join(hostRoot, 'windows', 'x64', 'Release');
 const portableExePath = path.join(portableReleaseRoot, 'OpappWindowsHost.exe');
 const windowsSolutionRoot = path.join(hostRoot, 'windows');
@@ -184,6 +195,7 @@ const scenarioTimeoutMs = parsePositiveIntegerArg(
 );
 
 let windowPolicyRegistryCache = null;
+let windowsHostVersionCache;
 const releaseChatToken = 'opapp-release-ui-automation';
 
 function assertUiSavedPath(value, label) {
@@ -1934,6 +1946,22 @@ function normalizeOtaChannels(candidate) {
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+async function resolveExpectedWindowsHostVersion() {
+  if (windowsHostVersionCache !== undefined) {
+    return windowsHostVersionCache;
+  }
+
+  try {
+    const contents = await readFile(windowsHostPackageManifestPath, 'utf8');
+    const versionMatch = contents.match(/<Identity\b[^>]*\bVersion="([^"]+)"/i);
+    windowsHostVersionCache = versionMatch?.[1]?.trim() || null;
+  } catch {
+    windowsHostVersionCache = null;
+  }
+
+  return windowsHostVersionCache;
+}
+
 function formatOtaChannels(channels) {
   return JSON.stringify(
     Object.fromEntries(
@@ -1959,7 +1987,12 @@ function otaChannelsEqual(left, right) {
   return true;
 }
 
-export function resolveExpectedOtaLatestVersion({bundleInfo, channel}) {
+export function resolveExpectedOtaLatestVersion({
+  bundleInfo,
+  channel,
+  hostVersion,
+  currentVersion,
+}) {
   const hasVersionList = Array.isArray(bundleInfo?.versions);
   const versions = hasVersionList
     ? bundleInfo.versions.filter(version => typeof version === 'string' && version)
@@ -1970,6 +2003,8 @@ export function resolveExpectedOtaLatestVersion({bundleInfo, channel}) {
       ? bundleInfo.latestVersion
       : undefined;
   const channels = normalizeOtaChannels(bundleInfo?.channels);
+  const hostCompatibility =
+    normalizeHostCompatibilityMap(bundleInfo?.hostCompatibility, versions) ?? undefined;
   const pickVersion = candidate => {
     if (typeof candidate !== 'string' || !candidate) {
       return undefined;
@@ -1977,8 +2012,23 @@ export function resolveExpectedOtaLatestVersion({bundleInfo, channel}) {
     if (hasVersionList && !versions.includes(candidate)) {
       return undefined;
     }
+    if (
+      !isVersionCompatibleWithHost({
+        version: candidate,
+        hostVersion,
+        hostCompatibility,
+      })
+    ) {
+      return undefined;
+    }
     return candidate;
   };
+  const overallLatestCompatible = pickLatestCompatibleVersion({
+    versions,
+    legacyLatestVersion,
+    hostVersion,
+    hostCompatibility,
+  });
 
   let resolvedLatestVersion;
   if (typeof channel === 'string' && channel) {
@@ -1988,7 +2038,19 @@ export function resolveExpectedOtaLatestVersion({bundleInfo, channel}) {
     }
   }
 
-  return resolvedLatestVersion ?? overallLatest ?? legacyLatestVersion;
+  resolvedLatestVersion ??= overallLatestCompatible ?? overallLatest ?? legacyLatestVersion;
+  if (
+    resolvedLatestVersion &&
+    !isVersionCompatibleWithHost({
+      version: resolvedLatestVersion,
+      hostVersion,
+      hostCompatibility,
+    })
+  ) {
+    resolvedLatestVersion = null;
+  }
+
+  return resolvedLatestVersion ?? currentVersion ?? null;
 }
 
 export function validateOtaLastRunRecord({
@@ -2303,6 +2365,7 @@ async function verifyOtaSideEffects(logContents) {
   const loggedCurrentVersion = extractOtaLoggedCurrentVersion(logContents, resolvedLoggedBundleId);
   let expectedChannels;
   let expectedLatestVersion;
+  const expectedHostVersion = await resolveExpectedWindowsHostVersion();
   if (typeof otaLastRun.bundleId === 'string' && otaLastRun.bundleId) {
     const otaIndexBundleInfo = await waitForOtaIndexBundleInfo({
       bundleId: otaLastRun.bundleId,
@@ -2315,6 +2378,8 @@ async function verifyOtaSideEffects(logContents) {
       expectedLatestVersion = resolveExpectedOtaLatestVersion({
         bundleInfo: otaIndexBundleInfo,
         channel: otaLastRun.channel,
+        hostVersion: expectedHostVersion,
+        currentVersion: loggedCurrentVersion ?? otaLastRun.currentVersion ?? null,
       });
     }
   }

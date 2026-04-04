@@ -6,6 +6,10 @@ import {
   buildOtaUpToDateLastRunRecord,
   buildOtaUpdateLastRunRecord,
 } from './ota-updater.mjs';
+import {
+  normalizeHostCompatibilityEntry,
+  pickLatestCompatibleVersion,
+} from './ota-host-compatibility.mjs';
 
 test('buildOtaUpdateLastRunRecord preserves rollout and channel context', () => {
   const record = buildOtaUpdateLastRunRecord(
@@ -159,4 +163,51 @@ test('buildOtaFailedLastRunRecord omits undefined staging-only fields', () => {
   });
   assert.equal(record.version, undefined);
   assert.equal(record.stagedAt, undefined);
+});
+
+test('normalizeHostCompatibilityEntry drops malformed host version bounds', () => {
+  assert.deepEqual(
+    normalizeHostCompatibilityEntry({
+      minHostVersion: '1.0.0.0',
+      maxHostVersion: 'not-a-version',
+    }),
+    {
+      minHostVersion: '1.0.0.0',
+    },
+  );
+
+  assert.equal(
+    normalizeHostCompatibilityEntry({
+      minHostVersion: 'bad',
+      maxHostVersion: 'still-bad',
+    }),
+    null,
+  );
+});
+
+test('pickLatestCompatibleVersion selects the latest host-compatible bundle version', () => {
+  const latestVersion = pickLatestCompatibleVersion({
+    versions: ['0.1.0', '0.2.0', '0.3.0'],
+    hostVersion: '1.5.0.0',
+    hostCompatibility: {
+      '0.2.0': {
+        minHostVersion: '1.0.0.0',
+      },
+      '0.3.0': {
+        minHostVersion: '2.0.0.0',
+      },
+    },
+  });
+
+  assert.equal(latestVersion, '0.2.0');
+});
+
+test('pickLatestCompatibleVersion falls back to legacy latestVersion when versions[] is absent', () => {
+  const latestVersion = pickLatestCompatibleVersion({
+    versions: [],
+    legacyLatestVersion: '0.9.0-beta.1',
+    hostVersion: '1.0.0.0',
+  });
+
+  assert.equal(latestVersion, '0.9.0-beta.1');
 });

@@ -23,12 +23,15 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <urlmon.h>
 #include <vector>
 #include <bcrypt.h>
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Data.Json.h>
 
 #pragma comment(lib, "urlmon.lib")
@@ -264,6 +267,151 @@ bool HasPackageIdentity() noexcept {
   UINT32 packageFullNameLength = 0;
   auto result = GetCurrentPackageFullName(&packageFullNameLength, nullptr);
   return result != APPMODEL_ERROR_NO_PACKAGE;
+}
+
+std::wstring FormatPackageVersion(
+    uint16_t major,
+    uint16_t minor,
+    uint16_t build,
+    uint16_t revision) {
+  return std::to_wstring(major) + L"." + std::to_wstring(minor) + L"." +
+      std::to_wstring(build) + L"." + std::to_wstring(revision);
+}
+
+std::optional<std::array<uint32_t, 4>> ParseComparableHostVersion(std::wstring const &value) noexcept {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+
+  try {
+    std::array<uint32_t, 4> parts{0, 0, 0, 0};
+    size_t start = 0;
+    size_t index = 0;
+    while (start < value.size()) {
+      if (index >= parts.size()) {
+        return std::nullopt;
+      }
+
+      auto end = value.find(L'.', start);
+      auto token =
+          end == std::wstring::npos ? value.substr(start) : value.substr(start, end - start);
+      if (token.empty()) {
+        return std::nullopt;
+      }
+      if (!std::all_of(token.begin(), token.end(), [](wchar_t ch) { return std::iswdigit(ch) != 0; })) {
+        return std::nullopt;
+      }
+
+      unsigned long parsedPart = std::stoul(token);
+      if (parsedPart > std::numeric_limits<uint32_t>::max()) {
+        return std::nullopt;
+      }
+
+      parts[index] = static_cast<uint32_t>(parsedPart);
+      index += 1;
+
+      if (end == std::wstring::npos) {
+        break;
+      }
+
+      start = end + 1;
+    }
+
+    return parts;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<int32_t> CompareHostVersions(
+    std::wstring const &left,
+    std::wstring const &right) noexcept {
+  auto parsedLeft = ParseComparableHostVersion(left);
+  auto parsedRight = ParseComparableHostVersion(right);
+  if (!parsedLeft || !parsedRight) {
+    return std::nullopt;
+  }
+
+  for (size_t index = 0; index < parsedLeft->size(); index += 1) {
+    if ((*parsedLeft)[index] < (*parsedRight)[index]) {
+      return -1;
+    }
+    if ((*parsedLeft)[index] > (*parsedRight)[index]) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+std::optional<std::wstring> ReadPortableHostVersionFromManifest(
+    std::filesystem::path const &manifestPath) noexcept {
+  try {
+    std::ifstream stream(manifestPath, std::ios::binary);
+    if (!stream.is_open()) {
+      return std::nullopt;
+    }
+
+    std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    auto identityStart = contents.find("<Identity");
+    if (identityStart == std::string::npos) {
+      return std::nullopt;
+    }
+
+    auto identityEnd = contents.find('>', identityStart);
+    if (identityEnd == std::string::npos) {
+      return std::nullopt;
+    }
+
+    constexpr std::string_view versionToken = "Version=\"";
+    auto versionStart = contents.find(versionToken, identityStart);
+    if (versionStart == std::string::npos || versionStart > identityEnd) {
+      return std::nullopt;
+    }
+
+    versionStart += versionToken.size();
+    auto versionEnd = contents.find('"', versionStart);
+    if (versionEnd == std::string::npos || versionEnd > identityEnd) {
+      return std::nullopt;
+    }
+
+    auto versionValue = winrt::to_hstring(contents.substr(versionStart, versionEnd - versionStart));
+    std::wstring version(versionValue.c_str(), versionValue.size());
+    if (!ParseComparableHostVersion(version)) {
+      return std::nullopt;
+    }
+
+    return version;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::wstring> ResolveCurrentHostVersion(std::wstring const &appDirectory) noexcept {
+  try {
+    if (HasPackageIdentity()) {
+      auto packageVersion = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
+      return FormatPackageVersion(
+          packageVersion.Major,
+          packageVersion.Minor,
+          packageVersion.Build,
+          packageVersion.Revision);
+    }
+  } catch (...) {
+  }
+
+  try {
+    std::filesystem::path appPath(appDirectory);
+    for (auto const &manifestFileName : {L"host-package.appxmanifest", L"Package.appxmanifest"}) {
+      auto manifestPath = appPath / manifestFileName;
+      if (auto version = ReadPortableHostVersionFromManifest(manifestPath)) {
+        return version;
+      }
+    }
+  } catch (...) {
+  }
+
+  return std::nullopt;
 }
 
 WindowsAppRuntimeBootstrap InitializeWindowsAppRuntimeBootstrap() {
@@ -911,8 +1059,56 @@ std::optional<int32_t> ParseRolloutPercent(winrt::Windows::Data::Json::JsonObjec
   }
 }
 
+bool IsVersionCompatibleWithHost(
+    winrt::Windows::Data::Json::JsonObject const &bundleInfoObject,
+    std::wstring const &candidate,
+    std::optional<std::wstring> const &hostVersion) noexcept {
+  if (candidate.empty()) {
+    return false;
+  }
+  if (!hostVersion || hostVersion->empty()) {
+    return true;
+  }
+
+  try {
+    auto hostCompatibilityObject = bundleInfoObject.GetNamedObject(L"hostCompatibility", nullptr);
+    if (!hostCompatibilityObject) {
+      return true;
+    }
+
+    auto compatibilityObject =
+        hostCompatibilityObject.GetNamedObject(winrt::hstring(candidate), nullptr);
+    if (!compatibilityObject) {
+      return true;
+    }
+
+    std::wstring minHostVersion =
+        compatibilityObject.GetNamedString(L"minHostVersion", L"").c_str();
+    if (!minHostVersion.empty() && ParseComparableHostVersion(minHostVersion)) {
+      auto minComparison = CompareHostVersions(*hostVersion, minHostVersion);
+      if (minComparison && *minComparison < 0) {
+        return false;
+      }
+    }
+
+    std::wstring maxHostVersion =
+        compatibilityObject.GetNamedString(L"maxHostVersion", L"").c_str();
+    if (!maxHostVersion.empty() && ParseComparableHostVersion(maxHostVersion)) {
+      auto maxComparison = CompareHostVersions(*hostVersion, maxHostVersion);
+      if (maxComparison && *maxComparison > 0) {
+        return false;
+      }
+    }
+
+    return true;
+  } catch (...) {
+    return true;
+  }
+}
+
 std::optional<std::wstring> ResolveLatestVersionFromVersions(
-    winrt::Windows::Data::Json::JsonObject const &bundleInfoObject) noexcept {
+    winrt::Windows::Data::Json::JsonObject const &bundleInfoObject,
+    std::optional<std::wstring> const &hostVersion = std::nullopt) noexcept {
   try {
     auto versionsValue = bundleInfoObject.GetNamedValue(L"versions", nullptr);
     if (!versionsValue ||
@@ -929,6 +1125,10 @@ std::optional<std::wstring> ResolveLatestVersionFromVersions(
 
       auto candidate = std::wstring(value.GetString());
       if (candidate.empty()) {
+        continue;
+      }
+
+      if (!IsVersionCompatibleWithHost(bundleInfoObject, candidate, hostVersion)) {
         continue;
       }
 
@@ -979,6 +1179,77 @@ bool IsListedVersion(
   } catch (...) {
     return false;
   }
+}
+
+struct ResolvedOtaLatestVersion {
+  std::optional<std::wstring> CompatibleRemoteLatestVersion;
+  std::optional<std::wstring> ChannelsJson;
+  std::string Source;
+};
+
+ResolvedOtaLatestVersion ResolveLatestRemoteVersionForHost(
+    winrt::Windows::Data::Json::JsonObject const &bundleInfoObject,
+    std::wstring const &resolvedChannel,
+    std::optional<std::wstring> const &hostVersion,
+    bool logIgnoredCandidates = false) noexcept {
+  ResolvedOtaLatestVersion resolution;
+  auto latestVersionFromVersions = ResolveLatestVersionFromVersions(bundleInfoObject, hostVersion);
+  std::wstring latestVersion;
+
+  auto tryUseLatestVersion = [&](std::wstring const &candidate, std::string const &source) {
+    if (candidate.empty()) {
+      return false;
+    }
+    if (!IsListedVersion(bundleInfoObject, candidate)) {
+      if (logIgnoredCandidates) {
+        AppendLog(
+            "OTA.Native.LatestVersionIgnored source=" + source +
+            " value=" + ToUtf8(candidate) +
+            " reason=missing-from-versions");
+      }
+      return false;
+    }
+    if (!IsVersionCompatibleWithHost(bundleInfoObject, candidate, hostVersion)) {
+      if (logIgnoredCandidates) {
+        AppendLog(
+            "OTA.Native.LatestVersionIgnored source=" + source +
+            " value=" + ToUtf8(candidate) +
+            " reason=host-incompatible");
+      }
+      return false;
+    }
+
+    latestVersion = candidate;
+    resolution.Source = source;
+    return true;
+  };
+
+  if (latestVersionFromVersions) {
+    latestVersion = *latestVersionFromVersions;
+    resolution.Source = "versions";
+  } else {
+    tryUseLatestVersion(
+        bundleInfoObject.GetNamedString(L"latestVersion", L"").c_str(),
+        "latestVersion");
+  }
+
+  if (auto channelsObject = bundleInfoObject.GetNamedObject(L"channels", nullptr)) {
+    resolution.ChannelsJson = channelsObject.Stringify().c_str();
+    std::wstring channelVersion =
+        channelsObject.GetNamedString(winrt::hstring(resolvedChannel), L"").c_str();
+    if (!tryUseLatestVersion(channelVersion, "channels:" + ToUtf8(resolvedChannel)) &&
+        resolvedChannel != L"stable") {
+      std::wstring stableVersion =
+          channelsObject.GetNamedString(L"stable", L"").c_str();
+      tryUseLatestVersion(stableVersion, "channels:stable");
+    }
+  }
+
+  if (!latestVersion.empty()) {
+    resolution.CompatibleRemoteLatestVersion = latestVersion;
+  }
+
+  return resolution;
 }
 
 std::optional<int32_t> ComputeRolloutBucket(
@@ -1213,6 +1484,12 @@ void RunNativeOtaUpdate(
     AppendLog("OTA.Native.Start remoteUrl=" + ToUtf8(normalizedRemoteUrl));
     AppendLog("OTA.Native.CacheRoot path=" + ToUtf8(cacheRoot.wstring()));
     AppendLog("OTA.Native.Channel value=" + ToUtf8(resolvedChannel));
+    auto resolvedHostVersion = ResolveCurrentHostVersion(appDirectory);
+    if (resolvedHostVersion) {
+      AppendLog("OTA.Native.HostVersion value=" + ToUtf8(*resolvedHostVersion));
+    } else {
+      AppendLog("OTA.Native.HostVersionUnavailable");
+    }
 
     auto indexUrl = AppendCacheBustQuery(normalizedRemoteUrl + L"/index.json");
     auto indexPath = cacheRoot / L"index.json";
@@ -1309,56 +1586,33 @@ void RunNativeOtaUpdate(
       return;
     }
 
-    auto latestVersionFromVersions = ResolveLatestVersionFromVersions(bundleInfoObject);
-    std::wstring latestVersion;
-    std::string latestVersionSource;
-    auto tryUseLatestVersion = [&](std::wstring const &candidate, std::string const &source) {
-      if (candidate.empty()) {
-        return false;
-      }
-      if (!IsListedVersion(bundleInfoObject, candidate)) {
-        AppendLog(
-            "OTA.Native.LatestVersionIgnored source=" + source +
-            " value=" + ToUtf8(candidate) +
-            " reason=missing-from-versions");
-        return false;
-      }
-      latestVersion = candidate;
-      latestVersionSource = source;
-      return true;
-    };
+    auto latestResolution = ResolveLatestRemoteVersionForHost(
+        bundleInfoObject,
+        resolvedChannel,
+        resolvedHostVersion,
+        true);
+    channelsJsonForLastRun = latestResolution.ChannelsJson;
 
-    if (latestVersionFromVersions) {
-      latestVersion = *latestVersionFromVersions;
-      latestVersionSource = "versions";
+    auto compatibleRemoteLatestVersion = latestResolution.CompatibleRemoteLatestVersion;
+    std::wstring effectiveLatestVersion;
+    if (compatibleRemoteLatestVersion) {
+      effectiveLatestVersion = *compatibleRemoteLatestVersion;
+      AppendLog(
+          "OTA.Native.LatestVersion source=" + latestResolution.Source +
+          " value=" + ToUtf8(*compatibleRemoteLatestVersion));
+    } else if (currentVersion && !currentVersion->empty()) {
+      effectiveLatestVersion = *currentVersion;
+      AppendLog(
+          "OTA.Native.LatestVersion source=currentVersion value=" +
+          ToUtf8(*currentVersion) +
+          " reason=no-compatible-remote");
     } else {
-      tryUseLatestVersion(
-          bundleInfoObject.GetNamedString(L"latestVersion", L"").c_str(),
-          "latestVersion");
-    }
-
-    if (auto channelsObject = bundleInfoObject.GetNamedObject(L"channels", nullptr)) {
-      channelsJsonForLastRun = channelsObject.Stringify().c_str();
-      std::wstring channelVersion =
-          channelsObject.GetNamedString(winrt::hstring(resolvedChannel), L"").c_str();
-      if (!tryUseLatestVersion(channelVersion, "channels:" + ToUtf8(resolvedChannel)) &&
-          resolvedChannel != L"stable") {
-        std::wstring stableVersion =
-            channelsObject.GetNamedString(L"stable", L"").c_str();
-        tryUseLatestVersion(stableVersion, "channels:stable");
-      }
-    }
-
-    if (latestVersion.empty()) {
       AppendLog("OTA.Native.LatestVersionMissing bundleId=" + ToUtf8(*resolvedBundleId));
-      errorMessageForLastRun = L"Unable to resolve the latest available version.";
+      errorMessageForLastRun = L"No compatible bundle versions are available for this host.";
       writeFailedLastRun();
       return;
     }
-    latestVersionForLastRun = latestVersion;
-    AppendLog(
-        "OTA.Native.LatestVersion source=" + latestVersionSource +
-        " value=" + ToUtf8(latestVersion));
+    latestVersionForLastRun = effectiveLatestVersion;
 
     auto resolvedDeviceId = GetOrCreateOtaDeviceId(cacheRoot);
     if (!resolvedDeviceId) {
@@ -1373,7 +1627,7 @@ void RunNativeOtaUpdate(
     auto rolloutPercent = ParseRolloutPercent(bundleInfoObject);
     rolloutPercentForLastRun = rolloutPercent;
     auto inRollout = true;
-    if (rolloutPercent && *rolloutPercent < 100) {
+    if (compatibleRemoteLatestVersion && rolloutPercent && *rolloutPercent < 100) {
       auto rolloutBucket = ComputeRolloutBucket(*resolvedBundleId, *resolvedDeviceId);
       if (!rolloutBucket) {
         AppendLog("OTA.Native.RolloutBucketFailed");
@@ -1389,24 +1643,29 @@ void RunNativeOtaUpdate(
     } else if (rolloutPercent) {
       AppendLog(
           "OTA.Native.Rollout percent=" + std::to_string(*rolloutPercent) +
-          " inRollout=true");
+          " inRollout=true" +
+          (compatibleRemoteLatestVersion ? std::string("") : std::string(" reason=no-compatible-remote")));
     } else {
       AppendLog("OTA.Native.Rollout percent=100 inRollout=true");
     }
     inRolloutForLastRun = inRollout;
 
-    auto shouldUpdate = inRollout && forceUpdate;
-    if (!shouldUpdate && inRollout) {
-      shouldUpdate = !currentVersion || latestVersion > *currentVersion;
+    auto shouldUpdate = false;
+    if (compatibleRemoteLatestVersion && inRollout) {
+      shouldUpdate = forceUpdate;
+      if (!shouldUpdate) {
+        shouldUpdate = !currentVersion || *compatibleRemoteLatestVersion > *currentVersion;
+      }
     }
     hasUpdateForLastRun = shouldUpdate;
 
     if (!shouldUpdate) {
-      auto reason = inRollout ? "version" : "rollout";
+      auto reason =
+          !compatibleRemoteLatestVersion ? "host-compatibility" : (inRollout ? "version" : "rollout");
       AppendLog(
           "OTA.Native.UpToDate reason=" + std::string(reason) +
           " bundleId=" + ToUtf8(*resolvedBundleId) +
-          " version=" + ToUtf8(latestVersion));
+          " version=" + ToUtf8(effectiveLatestVersion));
       WriteOtaLastRun(
           cacheRoot,
           normalizedRemoteUrl,
@@ -1414,7 +1673,7 @@ void RunNativeOtaUpdate(
           resolvedBundleId,
           resolvedChannel,
           currentVersion,
-          latestVersion,
+          effectiveLatestVersion,
           std::nullopt,
           std::nullopt,
           std::nullopt,
@@ -1427,8 +1686,8 @@ void RunNativeOtaUpdate(
     }
 
     auto artifactBaseUrl =
-        normalizedRemoteUrl + L"/" + *resolvedBundleId + L"/" + latestVersion + L"/windows";
-    auto manifestPath = cacheRoot / *resolvedBundleId / latestVersion / L"windows" / L"bundle-manifest.json";
+        normalizedRemoteUrl + L"/" + *resolvedBundleId + L"/" + *compatibleRemoteLatestVersion + L"/windows";
+    auto manifestPath = cacheRoot / *resolvedBundleId / *compatibleRemoteLatestVersion / L"windows" / L"bundle-manifest.json";
     if (!DownloadUrlToFile(
             artifactBaseUrl + L"/bundle-manifest.json",
             manifestPath,
@@ -1514,7 +1773,7 @@ void RunNativeOtaUpdate(
     auto nowIso = NowIso8601Utc();
     winrt::Windows::Data::Json::JsonObject otaStateObject;
     InsertStringField(otaStateObject, L"bundleId", *resolvedBundleId);
-    InsertStringField(otaStateObject, L"version", latestVersion);
+    InsertStringField(otaStateObject, L"version", *compatibleRemoteLatestVersion);
     InsertStringField(otaStateObject, L"platform", L"windows");
     InsertStringField(otaStateObject, L"manifestDir", stagedDirectory.wstring());
     InsertStringField(otaStateObject, L"downloadedAt", nowIso);
@@ -1545,8 +1804,8 @@ void RunNativeOtaUpdate(
         resolvedBundleId,
         resolvedChannel,
         currentVersion,
-        latestVersion,
-        latestVersion,
+        *compatibleRemoteLatestVersion,
+        *compatibleRemoteLatestVersion,
         previousVersionForLastRun,
         nowIso,
         resolvedDeviceId,
@@ -1556,7 +1815,7 @@ void RunNativeOtaUpdate(
         channelsJsonForLastRun);
     AppendLog(
         "OTA.Native.Updated bundleId=" + ToUtf8(*resolvedBundleId) +
-        " version=" + ToUtf8(latestVersion));
+        " version=" + ToUtf8(*compatibleRemoteLatestVersion));
   } catch (winrt::hresult_error const &error) {
     AppendLog(
         "OTA.Native.HResultError code=" + std::to_string(static_cast<int32_t>(error.code().value)) +
@@ -1901,6 +2160,7 @@ std::vector<BundleUpdateStatus> OpappWindowsHost::ResolveBundleUpdateStatuses(
 
     auto recordedAt = NowIso8601Utc();
     auto resolvedChannel = ResolveOtaChannel(cacheRoot, GetOtaChannel());
+    auto resolvedHostVersion = ResolveCurrentHostVersion(appDirectory);
     auto buildBaseStatus = [&](std::wstring const &bundleId) {
       BundleUpdateStatus status;
       status.BundleId = bundleId;
@@ -1976,41 +2236,23 @@ std::vector<BundleUpdateStatus> OpappWindowsHost::ResolveBundleUpdateStatuses(
         continue;
       }
 
-      auto latestVersionFromVersions = ResolveLatestVersionFromVersions(bundleInfoObject);
-      std::wstring latestVersion;
-      auto tryUseLatestVersion = [&](std::wstring const &candidate) {
-        if (candidate.empty()) {
-          return false;
-        }
-        if (!IsListedVersion(bundleInfoObject, candidate)) {
-          return false;
-        }
-        latestVersion = candidate;
-        return true;
-      };
+      auto latestResolution = ResolveLatestRemoteVersionForHost(
+          bundleInfoObject,
+          resolvedChannel,
+          resolvedHostVersion);
+      status.ChannelsJson = latestResolution.ChannelsJson;
 
-      if (latestVersionFromVersions) {
-        latestVersion = *latestVersionFromVersions;
+      auto compatibleRemoteLatestVersion = latestResolution.CompatibleRemoteLatestVersion;
+      if (compatibleRemoteLatestVersion) {
+        status.LatestVersion = *compatibleRemoteLatestVersion;
+      } else if (status.CurrentVersion) {
+        status.LatestVersion = status.CurrentVersion;
       } else {
-        tryUseLatestVersion(bundleInfoObject.GetNamedString(L"latestVersion", L"").c_str());
-      }
-
-      if (auto channelsObject = bundleInfoObject.GetNamedObject(L"channels", nullptr)) {
-        status.ChannelsJson = channelsObject.Stringify().c_str();
-        std::wstring channelVersion =
-            channelsObject.GetNamedString(winrt::hstring(resolvedChannel), L"").c_str();
-        if (!tryUseLatestVersion(channelVersion) && resolvedChannel != L"stable") {
-          tryUseLatestVersion(channelsObject.GetNamedString(L"stable", L"").c_str());
-        }
-      }
-
-      if (latestVersion.empty()) {
         status.Status = L"failed";
-        status.ErrorMessage = L"Unable to resolve the latest available version.";
+        status.ErrorMessage = L"No compatible bundle versions are available for this host.";
         statuses.push_back(std::move(status));
         continue;
       }
-      status.LatestVersion = latestVersion;
 
       auto resolvedDeviceId = GetOrCreateOtaDeviceId(cacheRoot);
       if (!resolvedDeviceId) {
@@ -2023,7 +2265,7 @@ std::vector<BundleUpdateStatus> OpappWindowsHost::ResolveBundleUpdateStatuses(
       auto rolloutPercent = ParseRolloutPercent(bundleInfoObject);
       status.RolloutPercent = rolloutPercent;
       auto inRollout = true;
-      if (rolloutPercent && *rolloutPercent < 100) {
+      if (compatibleRemoteLatestVersion && rolloutPercent && *rolloutPercent < 100) {
         auto rolloutBucket = ComputeRolloutBucket(bundleId, *resolvedDeviceId);
         if (!rolloutBucket) {
           status.Status = L"failed";
@@ -2037,12 +2279,15 @@ std::vector<BundleUpdateStatus> OpappWindowsHost::ResolveBundleUpdateStatuses(
       status.InRollout = inRollout;
 
       auto hasUpdate = false;
-      if (inRollout) {
-        hasUpdate = !status.CurrentVersion || latestVersion > *status.CurrentVersion;
+      if (compatibleRemoteLatestVersion && inRollout) {
+        hasUpdate = !status.CurrentVersion || *compatibleRemoteLatestVersion > *status.CurrentVersion;
       }
       status.HasUpdate = hasUpdate;
 
-      if (!inRollout) {
+      if (!compatibleRemoteLatestVersion) {
+        status.Status = L"up-to-date";
+        status.Version = status.CurrentVersion ? status.CurrentVersion : status.LatestVersion;
+      } else if (!inRollout) {
         status.Status = L"rollout-paused";
       } else if (hasUpdate) {
         status.Status = status.CurrentVersion ? L"update-available" : L"install-available";

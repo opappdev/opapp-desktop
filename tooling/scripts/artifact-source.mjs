@@ -12,6 +12,7 @@ import {createHash} from 'node:crypto';
 import {readFile, writeFile, readdir, cp, mkdir, rm} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import path from 'node:path';
+import {normalizeHostCompatibilityEntry} from './ota-host-compatibility.mjs';
 
 /**
  * @typedef {Object} ArtifactResolveOptions
@@ -455,7 +456,9 @@ export class RemoteArtifactSource extends ArtifactSource {
  * @returns {Promise<{bundles: Object}>} Registry index structure.
  *   Each bundle entry may include `rolloutPercent` (RFC-014) and/or `channels`
  *   (RFC-015) when the corresponding sidecar files are present in the bundle
- *   directory.
+ *   directory. When a versioned bundle-manifest.json declares min/max host
+ *   compatibility, the generated index also includes `hostCompatibility`
+ *   keyed by version.
  */
 export async function generateRegistryIndex(registryRoot) {
   let bundleDirs;
@@ -522,9 +525,20 @@ export async function generateRegistryIndex(registryRoot) {
       // No channels.json — single-channel behaviour (backward compatible).
     }
 
+    const hostCompatibilityEntries = {};
+    for (const version of versions) {
+      const compatibility = await readVersionHostCompatibility(bundleIdDir, version);
+      if (compatibility) {
+        hostCompatibilityEntries[version] = compatibility;
+      }
+    }
+
     const entry = {latestVersion: versions.at(-1) ?? null, versions};
     if (rolloutPercent !== undefined) entry.rolloutPercent = rolloutPercent;
     if (channels !== undefined) entry.channels = channels;
+    if (Object.keys(hostCompatibilityEntries).length > 0) {
+      entry.hostCompatibility = hostCompatibilityEntries;
+    }
     bundles[bundleId] = entry;
   }
 
@@ -600,6 +614,48 @@ export async function pruneLocalRegistry(registryRoot, options = {}) {
 
 /** Subdirectory names that are never treated as version directories. */
 const PRUNE_SKIP_DIRS = ['previous'];
+
+async function readVersionHostCompatibility(bundleIdDir, version) {
+  const versionDir = path.join(bundleIdDir, version);
+  const manifestPath = await resolveVersionManifestPath(versionDir);
+  if (!manifestPath) {
+    return null;
+  }
+
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    return normalizeHostCompatibilityEntry(manifest);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveVersionManifestPath(versionDir) {
+  const preferredWindowsManifestPath = path.join(versionDir, 'windows', 'bundle-manifest.json');
+  if (existsSync(preferredWindowsManifestPath)) {
+    return preferredWindowsManifestPath;
+  }
+
+  let platformEntries;
+  try {
+    platformEntries = await readdir(versionDir, {withFileTypes: true});
+  } catch {
+    return null;
+  }
+
+  for (const platformEntry of platformEntries) {
+    if (!platformEntry.isDirectory()) {
+      continue;
+    }
+
+    const manifestPath = path.join(versionDir, platformEntry.name, 'bundle-manifest.json');
+    if (existsSync(manifestPath)) {
+      return manifestPath;
+    }
+  }
+
+  return null;
+}
 
 
 

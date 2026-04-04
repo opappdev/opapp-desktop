@@ -271,6 +271,69 @@ test('resolveExpectedOtaLatestVersion prefers channel pins, then stable fallback
   );
 });
 
+test('resolveExpectedOtaLatestVersion respects hostCompatibility and falls back to the installed version', () => {
+  assert.equal(
+    resolveExpectedOtaLatestVersion({
+      bundleInfo: {
+        versions: ['0.9.0', '1.0.0'],
+        latestVersion: '1.0.0',
+        channels: {
+          stable: '0.9.0',
+          nightly: '1.0.0',
+        },
+        hostCompatibility: {
+          '1.0.0': {
+            minHostVersion: '2.0.0.0',
+          },
+        },
+      },
+      channel: 'nightly',
+      hostVersion: '1.0.0.0',
+      currentVersion: '0.9.0',
+    }),
+    '0.9.0',
+  );
+
+  assert.equal(
+    resolveExpectedOtaLatestVersion({
+      bundleInfo: {
+        versions: ['0.9.0', '1.0.0'],
+        latestVersion: '1.0.0',
+        channels: {
+          stable: '0.9.0',
+          nightly: '1.0.0',
+        },
+        hostCompatibility: {
+          '1.0.0': {
+            minHostVersion: '2.0.0.0',
+          },
+        },
+      },
+      channel: 'nightly',
+      hostVersion: '2.0.0.0',
+      currentVersion: '0.9.0',
+    }),
+    '1.0.0',
+  );
+
+  assert.equal(
+    resolveExpectedOtaLatestVersion({
+      bundleInfo: {
+        versions: ['1.0.0'],
+        latestVersion: '1.0.0',
+        hostCompatibility: {
+          '1.0.0': {
+            minHostVersion: '9.0.0.0',
+          },
+        },
+      },
+      hostVersion: '1.0.0.0',
+      currentVersion: null,
+    }),
+    null,
+  );
+});
+
 test('extractFrontendDiagnosticEvents collects bundle-library load diagnostics', () => {
   const events = extractFrontendDiagnosticEvents(
     createLauncherDiagnosticLog(),
