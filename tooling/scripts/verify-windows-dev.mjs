@@ -31,6 +31,7 @@ import {
 } from './windows-dev-common.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
+import {launchInstalledAppOrThrow} from './windows-installed-app-common.mjs';
 import {
   createAgentWorkbenchDevScenarios,
   createCompanionChatDevScenarios,
@@ -144,65 +145,15 @@ function hostProcessExists() {
   );
 }
 
-function getInstalledPackageFamilyName() {
-  const result = spawnSync(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      `(Get-AppxPackage -Name '${packageName}' | Select-Object -First 1 -ExpandProperty PackageFamilyName)`,
-    ],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    },
-  );
-
-  const packageFamilyName = (result.stdout ?? '').trim();
-  if (result.status !== 0 || !packageFamilyName) {
-    const detail = (result.stderr ?? '').trim();
-    throw new Error(
-      `Windows dev verify failed: could not resolve an installed Debug package for ${packageName}. ` +
-        `Run \`npm run verify:windows:dev -- --scenario=<name>\` or \`npm run build:windows\` once before using \`--skip-prepare\`.` +
-        (detail ? ` ${detail}` : ''),
-    );
-  }
-
-  return packageFamilyName;
-}
-
 function launchInstalledDebugAppOrThrow() {
-  const packageFamilyName = getInstalledPackageFamilyName();
-  const appUserModelId = `${packageFamilyName}!${applicationId}`;
-  const shellTarget = `shell:AppsFolder\\${appUserModelId}`;
-  const result = spawnSync(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      `Start-Process '${escapePowerShellSingleQuotedString(shellTarget)}'`,
-    ],
-    {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    },
-  );
-
-  if (result.status !== 0) {
-    const detail = (result.stderr ?? '').trim();
-    throw new Error(
-      `Windows dev verify failed: could not launch installed Debug app ${appUserModelId}.` +
-        (detail ? ` ${detail}` : ''),
-    );
-  }
+  const {appUserModelId} = launchInstalledAppOrThrow({
+    packageName,
+    applicationId,
+    missingPackageMessage:
+      `Windows dev verify failed: could not resolve an installed Debug package for ${packageName}. ` +
+      `Run \`npm run verify:windows:dev -- --scenario=<name>\` or \`npm run build:windows\` once before using \`--skip-prepare\`.`,
+    launchFailureMessage: 'Windows dev verify failed: could not launch installed Debug app.',
+  });
 
   log('verify-dev', `launched installed Debug app via ${appUserModelId}`);
 }

@@ -8,6 +8,9 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {SiblingArtifactSource} from './artifact-source.mjs';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {
+  launchInstalledAppOrThrow,
+} from './windows-installed-app-common.mjs';
+import {
   classifyRunWindowsFailure,
   collectPortableMsbuildFallbackCandidates,
   collectPortableMsbuildFallbackProfiles,
@@ -1702,45 +1705,14 @@ function buildPreferencesFile() {
   return content;
 }
 
-function getInstalledPackageFamilyName() {
-  const packageFamilyName = runCaptureOrThrow(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      `(Get-AppxPackage -Name '${packageName}' | Select-Object -First 1 -ExpandProperty PackageFamilyName)`,
-    ],
-    {cwd: repoRoot},
-  ).trim();
-
-  if (!packageFamilyName) {
-    throw new Error(`Could not resolve PackageFamilyName for ${packageName}.`);
-  }
-
-  return packageFamilyName;
-}
-
 function launchInstalledApp() {
-  const packageFamilyName = getInstalledPackageFamilyName();
-  const appUserModelId = `${packageFamilyName}!${applicationId}`;
-  const shellTarget = `shell:AppsFolder\\${appUserModelId}`;
+  const {appUserModelId} = launchInstalledAppOrThrow({
+    packageName,
+    applicationId,
+    cwd: repoRoot,
+  });
 
   log(`launching installed app via ${appUserModelId}`);
-  runOrThrow(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      `Start-Process '${shellTarget}'`,
-    ],
-    {cwd: repoRoot},
-  );
 }
 
 function launchPortableApp() {
