@@ -32,6 +32,7 @@ import {
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 import {launchInstalledAppOrThrow} from './windows-installed-app-common.mjs';
+import {resolveVerifyDevScenarioLaunchStrategy} from './verify-windows-dev-strategy.mjs';
 import {
   createAgentWorkbenchDevScenarios,
   createCompanionChatDevScenarios,
@@ -850,10 +851,15 @@ async function prepareScenarioRun(scenario, scenarioState) {
   );
 }
 
-async function runDevScenario(scenario) {
+async function runDevScenario(scenario, scenarioIndex) {
   let scenarioState = null;
   let hostChild = null;
   const scenarioStartMs = Date.now();
+  const launchStrategy = resolveVerifyDevScenarioLaunchStrategy({
+    skipPrepare,
+    scenarioIndex,
+    allowInstalledDebugReuse: scenario.allowInstalledDebugReuse !== false,
+  });
 
   try {
     if (scenario.prepareState) {
@@ -862,17 +868,17 @@ async function runDevScenario(scenario) {
 
     await prepareScenarioRun(scenario, scenarioState);
 
-    if (skipPrepare) {
+    if (launchStrategy.launchMode === 'installed-debug-relaunch') {
       log(
         'verify-dev',
-        `relaunching installed Debug host without RNW prepare for scenario '${scenario.name}'`,
+        `relaunching installed Debug host without RNW prepare for scenario '${scenario.name}' (source=${launchStrategy.source})`,
       );
       launchInstalledDebugAppOrThrow();
       hostChild = null;
     } else {
       log(
         'verify-dev',
-        `launching Windows host against Metro-backed bundle for scenario '${scenario.name}'`,
+        `launching Windows host against Metro-backed bundle for scenario '${scenario.name}' (source=${launchStrategy.source})`,
       );
       hostChild = await spawnCmdAsync('npm run windows', {
         cwd: hostRoot,
@@ -1000,11 +1006,15 @@ async function main() {
 
   log('verify-dev', `hostRoot=${hostRoot}`);
   log('verify-dev', `scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
-  log('verify-dev', `scenarioCount=${scenarios.length}`);
-  log('verify-dev', `validateOnly=${validateOnly}`);
-  log('verify-dev', `skipPrepare=${skipPrepare}`);
-  log('verify-dev', `readinessTimeoutMs=${readinessTimeoutMs}`);
-  log('verify-dev', `smokeTimeoutMs=${smokeTimeoutMs}`);
+    log('verify-dev', `scenarioCount=${scenarios.length}`);
+    log('verify-dev', `validateOnly=${validateOnly}`);
+    log('verify-dev', `skipPrepare=${skipPrepare}`);
+    log(
+      'verify-dev',
+      `multiScenarioInstalledDebugReuse=${!skipPrepare && scenarios.length > 1}`,
+    );
+    log('verify-dev', `readinessTimeoutMs=${readinessTimeoutMs}`);
+    log('verify-dev', `smokeTimeoutMs=${smokeTimeoutMs}`);
 
   if (validateOnly) {
     log('verify-dev', 'validate-only enabled; skipping Metro and host execution.');
@@ -1022,8 +1032,8 @@ async function main() {
     }
 
     const scenarioTimings = [];
-    for (const scenario of scenarios) {
-      const durationMs = await runDevScenario(scenario);
+    for (const [scenarioIndex, scenario] of scenarios.entries()) {
+      const durationMs = await runDevScenario(scenario, scenarioIndex);
       scenarioTimings.push({name: scenario.name, durationMs});
     }
 
