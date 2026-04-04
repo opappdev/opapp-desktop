@@ -9,7 +9,7 @@ import {
   windows,
 } from './shared.mjs';
 
-function createGroupedToolCardAssertionSteps({
+function createLatestGroupedToolCardAssertionSteps({
   window,
   scrollLabel,
   expectedToolName = 'shell_command',
@@ -18,6 +18,7 @@ function createGroupedToolCardAssertionSteps({
   expectedInputText,
   expectedOutputTexts,
 }) {
+  // The frontend reserves tool.0 for the latest grouped tool card.
   const outputAssertionSteps = expectedOutputTexts.map(expectedOutputText => ({
     type: 'waitText',
     window,
@@ -134,7 +135,7 @@ export async function createAgentWorkbenchSpec({
           includes: 'git status',
         },
       },
-      ...createGroupedToolCardAssertionSteps({
+      ...createLatestGroupedToolCardAssertionSteps({
         window,
         scrollLabel: 'scroll-to-tool-timeline',
         expectedCallStatus: '已完成',
@@ -266,7 +267,7 @@ export async function createAgentWorkbenchApprovalSpec({
             ? defaultChatResponseTimeoutMs
             : defaultLocatorTimeoutMs,
       }),
-      ...createGroupedToolCardAssertionSteps({
+      ...createLatestGroupedToolCardAssertionSteps({
         window,
         scrollLabel: `scroll-to-tool-timeline-${decision}`,
         expectedCallStatus: decision === 'approve' ? '已完成' : '已取消',
@@ -490,7 +491,7 @@ export async function createAgentWorkbenchRetryRestoreSpec({
         locator: byAutomationId('agent-workbench.run.resumed-from'),
         saveAs: 'retriedResumedFromRunId',
       },
-      ...createGroupedToolCardAssertionSteps({
+      ...createLatestGroupedToolCardAssertionSteps({
         window,
         scrollLabel: 'scroll-to-retried-tool-timeline',
         expectedCallStatus: '已完成',
