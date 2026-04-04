@@ -27,6 +27,7 @@ import {
   formatMarkerTimeoutMessage,
   formatMarkerTimingSummary,
 } from './windows-smoke-timing.mjs';
+import {resolveScenarioTimeoutMs} from './windows-scenario-timeouts.mjs';
 import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 import {
@@ -1101,6 +1102,13 @@ const scenario = smokeScenarios[scenarioName];
 if (!scenario) {
   throw new Error(`Unsupported smoke scenario: ${scenarioName}`);
 }
+
+const resolvedScenarioTimeout = resolveScenarioTimeoutMs({
+  argv: process.argv,
+  baseScenarioTimeoutMs: scenarioTimeoutMs,
+  scenarioName,
+});
+const effectiveScenarioTimeoutMs = resolvedScenarioTimeout.scenarioTimeoutMs;
 
 const successMarkers = [
   ...scenario.successMarkers,
@@ -2230,14 +2238,14 @@ async function verifyOtaSideEffects(logContents) {
 
   if (!normalizedLog.includes('OTA.EnsureBundle.Start bundleId=')) {
     await waitForMarkers(['OTA.SpawnUpdateProcess.OK'], {
-      timeoutMs: scenarioTimeoutMs,
+      timeoutMs: effectiveScenarioTimeoutMs,
       phaseLabel: 'ota spawn marker',
       timeoutFlag: '--scenario-ms',
     });
   }
 
   const otaLastRun = await waitForOtaLastRun({
-    timeoutMs: scenarioTimeoutMs,
+    timeoutMs: effectiveScenarioTimeoutMs,
     timeoutFlag: '--scenario-ms',
   });
 
@@ -2256,7 +2264,7 @@ async function verifyOtaSideEffects(logContents) {
   }
   if (activeOtaChannelArg) {
     const otaChannel = await waitForOtaChannel({
-      timeoutMs: scenarioTimeoutMs,
+      timeoutMs: effectiveScenarioTimeoutMs,
       timeoutFlag: '--scenario-ms',
     });
     if (otaChannel?.channel !== activeOtaChannelArg) {
@@ -2284,7 +2292,7 @@ async function verifyOtaSideEffects(logContents) {
   if (typeof otaLastRun.bundleId === 'string' && otaLastRun.bundleId) {
     const otaIndexBundleInfo = await waitForOtaIndexBundleInfo({
       bundleId: otaLastRun.bundleId,
-      timeoutMs: scenarioTimeoutMs,
+      timeoutMs: effectiveScenarioTimeoutMs,
       timeoutFlag: '--scenario-ms',
       allowMissingBundleInfo: otaExpectedStatus === 'failed',
     });
@@ -2329,7 +2337,7 @@ async function verifyOtaSideEffects(logContents) {
       );
     }
     await waitForOtaDeviceId({
-      timeoutMs: scenarioTimeoutMs,
+      timeoutMs: effectiveScenarioTimeoutMs,
       timeoutFlag: '--scenario-ms',
     });
   }
@@ -2348,7 +2356,7 @@ async function verifyOtaSideEffects(logContents) {
   }
 
   const otaState = await waitForOtaState({
-    timeoutMs: scenarioTimeoutMs,
+    timeoutMs: effectiveScenarioTimeoutMs,
     timeoutFlag: '--scenario-ms',
   });
   if (otaState.hostBundleDir !== expectedOtaHostBundleDir) {
@@ -2408,7 +2416,13 @@ async function main() {
   log(`readinessTimeoutMs=${readinessTimeoutMs}`);
   log(`smokeTimeoutMs=${smokeTimeoutMs}`);
   log(`startupTimeoutMs=${startupTimeoutMs}`);
-  log(`scenarioTimeoutMs=${scenarioTimeoutMs}`);
+  log(`scenarioTimeoutMs=${effectiveScenarioTimeoutMs}`);
+  if (resolvedScenarioTimeout.source) {
+    log(
+      `scenarioTimeoutOverride scenario=${scenarioName} baseMs=${scenarioTimeoutMs} ` +
+        `effectiveMs=${effectiveScenarioTimeoutMs} source=${resolvedScenarioTimeout.source}`,
+    );
+  }
   log(`validateOnly=${validateOnly}`);
   log(`preflightOnly=${preflightOnly}`);
   log(`skipPrepare=${skipPrepare}`);
@@ -2526,7 +2540,7 @@ async function main() {
       await scenario.verifyUiResult?.(uiResult, scenarioState);
     } else {
       logContents = await waitForMarkers(successMarkers, {
-        timeoutMs: scenarioTimeoutMs,
+        timeoutMs: effectiveScenarioTimeoutMs,
         phaseLabel: 'scenario success markers',
         timeoutFlag: '--scenario-ms',
       });
@@ -2535,7 +2549,7 @@ async function main() {
     logTimingPhaseResult({
       phaseLabel: 'scenario success markers',
       elapsedMs: scenarioPhaseDurationMs,
-      budgetMs: scenarioTimeoutMs,
+      budgetMs: effectiveScenarioTimeoutMs,
       timeoutFlag: '--scenario-ms',
     });
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {parsePositiveIntegerArg} from './windows-args-common.mjs';
+import {resolveScenarioTimeoutMs} from './windows-scenario-timeouts.mjs';
 import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 
 const includeSecondaryWindowOnly = process.argv.includes('--include-secondary-window');
@@ -347,6 +348,11 @@ function typecheckFrontend() {
 function runWindowsSmoke(scenario, scenarioIndex) {
   log(`running ${launchMode} Windows smoke: ${scenario.name} (${scenario.description})`);
   const scenarioArgs = resolveSmokeArgsForRun(scenario, scenarioIndex);
+  const effectiveScenarioTimeoutMs = resolveScenarioTimeoutMs({
+    argv: process.argv,
+    baseScenarioTimeoutMs: scenarioTimeoutMs,
+    scenarioName: scenario.name,
+  }).scenarioTimeoutMs;
   const smokeArgs = [
     smokeScriptPath,
     ...scenarioArgs,
@@ -354,7 +360,7 @@ function runWindowsSmoke(scenario, scenarioIndex) {
     `--readiness-ms=${readinessTimeoutMs}`,
     `--smoke-ms=${smokeTimeoutMs}`,
     `--startup-ms=${startupTimeoutMs}`,
-    `--scenario-ms=${scenarioTimeoutMs}`,
+    `--scenario-ms=${effectiveScenarioTimeoutMs}`,
   ];
   if (otaRemoteArg) {
     smokeArgs.push(`--ota-remote=${otaRemoteArg}`);
@@ -498,6 +504,19 @@ function main() {
   log(`smokeTimeoutMs=${smokeTimeoutMs}`);
   log(`startupTimeoutMs=${startupTimeoutMs}`);
   log(`scenarioTimeoutMs=${scenarioTimeoutMs}`);
+  for (const scenario of scenarios) {
+    const resolvedScenarioTimeout = resolveScenarioTimeoutMs({
+      argv: process.argv,
+      baseScenarioTimeoutMs: scenarioTimeoutMs,
+      scenarioName: scenario.name,
+    });
+    if (resolvedScenarioTimeout.source) {
+      log(
+        `scenarioTimeoutOverride scenario=${scenario.name} baseMs=${scenarioTimeoutMs} ` +
+          `effectiveMs=${resolvedScenarioTimeout.scenarioTimeoutMs} source=${resolvedScenarioTimeout.source}`,
+      );
+    }
+  }
 
   if (validateOnly && preflightOnly) {
     throw new Error('`--validate-only` conflicts with `--preflight-only`; choose one execution mode.');
