@@ -18,7 +18,7 @@ export async function createAgentWorkbenchSpec({
     steps: [
       ...waitForLocator(
         window,
-        byAutomationId('agent-workbench.action.run-git-status'),
+        byAutomationId('agent-workbench.action.start-draft-task'),
       ),
       {
         type: 'click',
@@ -34,9 +34,28 @@ export async function createAgentWorkbenchSpec({
         },
       },
       {
+        type: 'setValue',
+        window,
+        locator: byAutomationId('agent-workbench.task.goal-input'),
+        value: '检查当前变更',
+      },
+      {
+        type: 'setValue',
+        window,
+        locator: byAutomationId('agent-workbench.task.command-input'),
+        value: 'git status',
+      },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
         type: 'click',
         window,
-        locator: byAutomationId('agent-workbench.action.run-git-status'),
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
       },
       {
         type: 'waitText',
