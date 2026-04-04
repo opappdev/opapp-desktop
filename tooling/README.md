@@ -56,6 +56,9 @@ Windows verification entrypoints:
   dev effect.
 - `npm run verify:windows:dev`: fast Metro-backed self-check after the UI or
   bridge change feels right.
+- `npm run smoke:windows:dev:reuse`: Metro-backed rerun that reuses the
+  existing Debug deployment and only relaunches host + UIA for already-prepared
+  local iteration.
 - `npm run verify:windows`: full packaged validation.
 - `npm run verify:windows:portable`: full portable validation.
 - `npm run smoke:windows`: packaged smoke only.
@@ -102,6 +105,8 @@ Windows verification entrypoints:
     `npm run verify:windows:portable -- --include-secondary-window`
   - repeated packaged single-scenario rerun after one prepared pass:
     `npm run smoke:windows:reuse -- --scenario=companion-chat-current-window-malformed-chunk`
+  - repeated Metro-backed single-scenario rerun after one prepared Debug deploy:
+    `npm run smoke:windows:dev:reuse -- --scenario=companion-chat-current-window-malformed-chunk`
   - repeated portable single-scenario rerun after one prepared pass:
     `npm run smoke:windows:portable:reuse -- --scenario=companion-chat-current-window-malformed-chunk`
   - batch related packaged scenarios under one gate to amortize `typecheck` and first prepare:
@@ -117,6 +122,9 @@ Windows verification entrypoints:
 - `verify:windows` remains the higher-level packaged gate and keeps frontend `typecheck`
   plus first-scenario prepare by design; use the `smoke:windows:reuse` rerun
   shortcuts only for already-prepared local iteration.
+- `verify:windows:dev` keeps the existing RNW `run-windows` prepare + launch
+  path; use `smoke:windows:dev:reuse` only after a prior Debug deploy already
+  registered the app package locally.
 - use `npm run verify:windows:raw-release` after preflight has already identified the blocker and you need the unwrapped upstream restore/build failure for the Windows host itself.
 - `scripts/resolve-public-frontend-ref.mjs`: resolves the pinned public
   `opapp-frontend` checkout ref from `tooling/config/opapp-frontend-ref.txt`

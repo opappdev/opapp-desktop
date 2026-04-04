@@ -51,11 +51,14 @@ import {
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
+const skipPrepare = process.argv.includes('--skip-prepare');
 const uiDebugScreenshots = process.argv.includes('--ui-debug-screenshots');
 const companionMainBundleId = 'opapp.companion.main';
 const companionChatBundleId = 'opapp.companion.chat';
 const companionAgentWorkbenchSurfaceId = 'companion.agent-workbench';
 const companionChatSurfaceId = 'companion.chat.main';
+const packageName = 'OpappWindowsHost';
+const applicationId = 'App';
 const verifyDevPreferencesPath = path.join(
   tempRoot,
   'opapp-windows-host.verify-dev.preferences.ini',
@@ -139,6 +142,69 @@ function hostProcessExists() {
     result.status === 0 &&
     (result.stdout ?? '').toLowerCase().includes('opappwindowshost.exe')
   );
+}
+
+function getInstalledPackageFamilyName() {
+  const result = spawnSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `(Get-AppxPackage -Name '${packageName}' | Select-Object -First 1 -ExpandProperty PackageFamilyName)`,
+    ],
+    {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    },
+  );
+
+  const packageFamilyName = (result.stdout ?? '').trim();
+  if (result.status !== 0 || !packageFamilyName) {
+    const detail = (result.stderr ?? '').trim();
+    throw new Error(
+      `Windows dev verify failed: could not resolve an installed Debug package for ${packageName}. ` +
+        `Run \`npm run verify:windows:dev -- --scenario=<name>\` or \`npm run build:windows\` once before using \`--skip-prepare\`.` +
+        (detail ? ` ${detail}` : ''),
+    );
+  }
+
+  return packageFamilyName;
+}
+
+function launchInstalledDebugAppOrThrow() {
+  const packageFamilyName = getInstalledPackageFamilyName();
+  const appUserModelId = `${packageFamilyName}!${applicationId}`;
+  const shellTarget = `shell:AppsFolder\\${appUserModelId}`;
+  const result = spawnSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `Start-Process '${escapePowerShellSingleQuotedString(shellTarget)}'`,
+    ],
+    {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    },
+  );
+
+  if (result.status !== 0) {
+    const detail = (result.stderr ?? '').trim();
+    throw new Error(
+      `Windows dev verify failed: could not launch installed Debug app ${appUserModelId}.` +
+        (detail ? ` ${detail}` : ''),
+    );
+  }
+
+  log('verify-dev', `launched installed Debug app via ${appUserModelId}`);
 }
 
 async function runUiScenarioWithDevFailFast({
@@ -227,6 +293,7 @@ const allScenarios = [
     tempRoot,
   }),
 ];
+const defaultScenarios = allScenarios;
 const scenarioByName = new Map(allScenarios.map(scenario => [scenario.name, scenario]));
 
 function normalizeLogContents(logContents) {
@@ -844,18 +911,27 @@ async function runDevScenario(scenario) {
 
     await prepareScenarioRun(scenario, scenarioState);
 
-    log(
-      'verify-dev',
-      `launching Windows host against Metro-backed bundle for scenario '${scenario.name}'`,
-    );
-    hostChild = await spawnCmdAsync('npm run windows', {
-      cwd: hostRoot,
-      env: process.env,
-      label: 'host',
-      outputCapturePath: hostCommandOutputPath,
-    });
-    if (hostChild?.opappSpawnMode) {
-      log('verify-dev', `Host spawn mode: ${hostChild.opappSpawnMode}`);
+    if (skipPrepare) {
+      log(
+        'verify-dev',
+        `relaunching installed Debug host without RNW prepare for scenario '${scenario.name}'`,
+      );
+      launchInstalledDebugAppOrThrow();
+      hostChild = null;
+    } else {
+      log(
+        'verify-dev',
+        `launching Windows host against Metro-backed bundle for scenario '${scenario.name}'`,
+      );
+      hostChild = await spawnCmdAsync('npm run windows', {
+        cwd: hostRoot,
+        env: process.env,
+        label: 'host',
+        outputCapturePath: hostCommandOutputPath,
+      });
+      if (hostChild?.opappSpawnMode) {
+        log('verify-dev', `Host spawn mode: ${hostChild.opappSpawnMode}`);
+      }
     }
 
     const ready = await waitForHostLogMarkers(readinessMarkers, readinessTimeoutMs, {
@@ -975,6 +1051,7 @@ async function main() {
   log('verify-dev', `scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
   log('verify-dev', `scenarioCount=${scenarios.length}`);
   log('verify-dev', `validateOnly=${validateOnly}`);
+  log('verify-dev', `skipPrepare=${skipPrepare}`);
   log('verify-dev', `readinessTimeoutMs=${readinessTimeoutMs}`);
   log('verify-dev', `smokeTimeoutMs=${smokeTimeoutMs}`);
 

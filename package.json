@@ -12,6 +12,7 @@
     "commit:check:infra": "npm run test:windows:release-diagnostics && npm run test:windows:release-smoke:ota && npm run test:frontend-ref:resolve && npm run test:windows:nightly-assets && npm run test:ota:publish && npm run test:registry:ops && npm run test:ota:updater && npm run smoke:ota",
     "dev:windows": "node ./tooling/scripts/dev-windows.mjs",
     "verify:windows:dev": "node ./tooling/scripts/verify-windows-dev.mjs",
+    "smoke:windows:dev:reuse": "node ./tooling/scripts/verify-windows-dev.mjs --skip-prepare",
     "verify:windows": "node ./tooling/scripts/verify-windows.mjs",
     "verify:windows:portable": "node ./tooling/scripts/verify-windows.mjs --launch=portable",
     "smoke:windows": "node ./tooling/scripts/windows-release-smoke.mjs --scenario=tab-session",
