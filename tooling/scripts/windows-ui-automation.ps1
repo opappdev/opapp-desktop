@@ -704,14 +704,42 @@ function Resolve-AnyElement {
 function Read-ElementText {
   param([System.Windows.Automation.AutomationElement]$Element)
 
+  function Repair-Utf8MojibakeText {
+    param([string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) {
+      return $Text
+    }
+
+    if ($Text -notmatch '[\uFF61-\uFFEF]') {
+      return $Text
+    }
+
+    try {
+      $bytes = New-Object byte[] $Text.Length
+      for ($index = 0; $index -lt $Text.Length; $index += 1) {
+        $bytes[$index] = [byte](([int][char]$Text[$index]) -band 0xFF)
+      }
+
+      $decoded = [System.Text.Encoding]::UTF8.GetString($bytes)
+      if ($decoded -and $decoded -notmatch '[\uFF61-\uFFEF]') {
+        return $decoded
+      }
+    } catch {
+      return $Text
+    }
+
+    return $Text
+  }
+
   $textPattern = $null
   if ($Element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$textPattern)) {
-    return ($textPattern.DocumentRange.GetText(-1) -replace [char]0, '').Trim()
+    return Repair-Utf8MojibakeText (($textPattern.DocumentRange.GetText(-1) -replace [char]0, '').Trim())
   }
 
   $valuePattern = $null
   if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
-    return [string]$valuePattern.Current.Value
+    return Repair-Utf8MojibakeText ([string]$valuePattern.Current.Value)
   }
 
   if ($null -ne $legacyIAccessiblePatternId) {
@@ -719,7 +747,7 @@ function Read-ElementText {
     if ($Element.TryGetCurrentPattern($legacyIAccessiblePatternId, [ref]$legacyPattern)) {
       try {
         if ($legacyPattern.Current.Value) {
-          return [string]$legacyPattern.Current.Value
+          return Repair-Utf8MojibakeText ([string]$legacyPattern.Current.Value)
         }
       } catch {
         # Some environments do not surface the legacy accessibility pattern consistently.
@@ -728,7 +756,7 @@ function Read-ElementText {
     }
   }
 
-  return [string]$Element.Current.Name
+  return Repair-Utf8MojibakeText ([string]$Element.Current.Name)
 }
 
 function Get-NamedPropertyValue {

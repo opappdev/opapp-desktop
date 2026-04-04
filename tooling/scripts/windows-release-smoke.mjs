@@ -29,8 +29,10 @@ import {
 import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 import {
+  createCompanionChatReleaseScenarios,
   createLauncherAndSettingsReleaseScenarios,
   createViewShotReleaseScenarios,
+  createWindowCaptureReleaseScenarios,
 } from './windows-release-scenarios/index.mjs';
 import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
 import {
@@ -516,25 +518,6 @@ async function cleanupCompanionChatCurrentWindowState(state) {
   }
 }
 
-function assertCompanionChatCurrentWindowStayedOnChildBundle(
-  logContents,
-  failureLabel,
-) {
-  const normalized = normalizeLogContents(logContents);
-
-  if (!normalized.includes(companionChatBundleRootMarker)) {
-    throw new Error(
-      `Windows release smoke failed: ${failureLabel} did not point the host at the staged chat child bundle root.`,
-    );
-  }
-
-  assertLogDoesNotContain(
-    logContents,
-    `[frontend-companion] surface-fallback bundle=opapp.companion.main requested=${companionChatSurfaceId} rendered=companion.main`,
-    `${failureLabel} still fell back through the main companion surface.`,
-  );
-}
-
 function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {
   if (!state?.chatSmoke || state.chatSmoke.requests.length !== 1) {
     throw new Error(
@@ -569,54 +552,6 @@ function assertCompanionChatSmokeRequestCaptured(state, failureLabel) {
   ) {
     throw new Error(
       `Windows release smoke failed: ${failureLabel} did not send the expected user prompt to the local SSE server.`,
-    );
-  }
-}
-
-async function assertCompanionChatSmokeErrorUiState(state, failureLabel) {
-  const uiStatePaths = await resolveCompanionChatSmokeUiStatePaths();
-  let fileContent = null;
-  let resolvedPath = null;
-  for (const candidatePath of uiStatePaths) {
-    try {
-      fileContent = await readFile(candidatePath, 'utf8');
-      resolvedPath = candidatePath;
-      break;
-    } catch {
-      // Try the next known user-data root.
-    }
-  }
-
-  if (!fileContent || !resolvedPath) {
-    throw new Error(
-      `Windows release smoke failed: ${failureLabel} did not persist the rendered error UI state to any known OPApp user-data root.`,
-    );
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(fileContent);
-  } catch {
-    throw new Error(
-      `Windows release smoke failed: ${failureLabel} persisted an unreadable error UI state artifact at ${resolvedPath}.`,
-    );
-  }
-
-  if (parsed?.scenario !== state?.chatSmoke?.scenario) {
-    throw new Error(
-      `Windows release smoke failed: ${failureLabel} persisted an error UI state for '${parsed?.scenario ?? '<unknown>'}' instead of '${state?.chatSmoke?.scenario ?? '<unknown>'}'.`,
-    );
-  }
-
-  if (parsed?.state !== 'error') {
-    throw new Error(
-      `Windows release smoke failed: ${failureLabel} persisted UI state '${parsed?.state ?? '<unknown>'}' instead of 'error'.`,
-    );
-  }
-
-  if (parsed?.errorMessage !== state?.chatSmoke?.expectedErrorText) {
-    throw new Error(
-      `Windows release smoke failed: ${failureLabel} persisted error UI text '${parsed?.errorMessage ?? '<missing>'}' instead of '${state?.chatSmoke?.expectedErrorText ?? '<missing>'}' at ${resolvedPath}.`,
     );
   }
 }
@@ -1348,302 +1283,29 @@ const publicSmokeScenarios = {
     rm,
     runUiScenarioWithReleaseFailFast,
   }),
-  'window-capture-current-window': {
-    description: 'auto-open window-capture lab in the current window and run foreground WGC smoke',
-    preferences: defaultPreferences,
-    launchConfig: {
-      initialOpen: {
-        surface: 'companion.window-capture',
-        policy: 'tool',
-        presentation: 'current-window',
-      },
-      initialOpenProps: {
-        'dev-smoke-scenario': 'window-capture-basics',
-      },
-    },
-    successMarkers: [
-      ...commonSuccessMarkers,
-      'InitialOpenSurface surface=companion.window-capture policy=tool presentation=current-window',
-      '[frontend-companion] auto-open window=window.main surface=companion.window-capture presentation=current-window',
-      '[frontend-companion] render window=window.main surface=companion.window-capture policy=tool',
-      '[frontend-companion] mounted window=window.main surface=companion.window-capture policy=tool',
-      '[frontend-companion] session window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.window-capture',
-      '[frontend-window-capture] dev-smoke-start',
-      '[frontend-window-capture] dev-smoke-list count=',
-      '[frontend-window-capture] dev-smoke-capture-window backend=wgc size=',
-      '[frontend-window-capture] dev-smoke-capture-client backend=wgc crop=',
-      '[frontend-window-capture] dev-smoke-complete',
-    ],
-    async verifyLog(logContents) {
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-list count=\d+ handle=0x[0-9a-f]+ process=/i,
-        'window-capture smoke did not list a foreground window.',
-      );
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-capture-window backend=wgc size=\d+x\d+ path=.*OPApp[\\/]+window-capture[\\/]+/i,
-        'window-capture smoke did not produce a WGC window capture artifact under the managed host directory.',
-      );
-      const windowCapturePath = extractLoggedPath(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-capture-window backend=wgc size=\d+x\d+ path=([^\r\n]+)/i,
-        'window-capture smoke did not emit the window capture path.',
-      );
-      try {
-        const inspectionStats = assertPngCaptureLooksOpaque(
-          windowCapturePath,
-          'Windows release smoke window-capture window capture',
-        );
-        log(
-          `window-capture window OK: path=${windowCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
-        );
-      } finally {
-        await rm(windowCapturePath, {force: true});
-      }
-      assertLogContainsRegex(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=.*OPApp[\\/]+window-capture[\\/]+/i,
-        'window-capture smoke did not produce a WGC client capture artifact under the managed host directory.',
-      );
-      const clientCapturePath = extractLoggedPath(
-        logContents,
-        /\[frontend-window-capture\] dev-smoke-capture-client backend=wgc crop=\d+x\d+ path=([^\r\n]+)/i,
-        'window-capture smoke did not emit the client capture path.',
-      );
-      try {
-        const inspectionStats = assertPngCaptureLooksOpaque(
-          clientCapturePath,
-          'Windows release smoke window-capture client capture',
-        );
-        log(
-          `window-capture client OK: path=${clientCapturePath} opaqueSamples=${inspectionStats.opaqueSamples}/${inspectionStats.sampleCount} distinctSamples=${inspectionStats.distinctSampleCount} averageAlpha=${inspectionStats.averageAlpha}`,
-        );
-      } finally {
-        await rm(clientCapturePath, {force: true});
-      }
-    },
-    verifyPersistedSession(sessionFile) {
-      if (!sessionFile.includes('[session]') || !sessionFile.includes('window.main=')) {
-        throw new Error('Windows release smoke failed: main window session was not persisted during window-capture smoke.');
-      }
-
-      assertPersistedSessionHasSurfaceId(
-        sessionFile,
-        'window.main',
-        'companion.window-capture',
-        'window-capture smoke did not persist the window-capture lab surface in the main window session.',
-      );
-    },
-  },
-  'companion-chat-current-window': {
-    description: 'auto-open companion chat in the current window and switch into the child chat bundle',
-    preferences: defaultPreferences,
-    usesLocalOtaRemoteFixture: true,
-    skipNativeOtaVerification: true,
-    buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
-    async prepareState() {
-      return await createCompanionChatCurrentWindowState();
-    },
-    successMarkers: [
-      ...commonSuccessMarkers,
-      `InitialOpenSurface surface=${companionChatSurfaceId} policy=main presentation=current-window`,
-      `BundleSwitchPrepared window=window.main bundle=${companionChatBundleId} surface=${companionChatSurfaceId} policy=main`,
-      `BundleSwitchReloadRequested window=window.main bundle=${companionChatBundleId}`,
-      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      '[frontend-llm-chat] dev-smoke-start',
-      '[frontend-llm-chat] dev-smoke-open',
-      '[frontend-llm-chat] dev-smoke-assistant-text text=CHAT_TEST_OK',
-      '[frontend-llm-chat] dev-smoke-complete',
-    ],
-    cleanupState: cleanupCompanionChatCurrentWindowState,
-    async verifyLog(logContents, state) {
-      assertCompanionChatCurrentWindowStayedOnChildBundle(
-        logContents,
-        'companion chat current-window flow',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-failed',
-        'companion chat current-window flow logged a dev-smoke failure marker.',
-      );
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat current-window flow',
-      );
-      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
-    },
-    verifyPersistedSession(sessionFile) {
-      verifyCompanionChatPersistedSession(
-        sessionFile,
-        'companion chat current-window flow',
-      );
-    },
-  },
-  'companion-chat-current-window-server-error': {
-    description:
-      'auto-open companion chat in the current window and surface an expected native SSE HTTP error from the child chat bundle',
-    preferences: defaultPreferences,
-    usesLocalOtaRemoteFixture: true,
-    skipNativeOtaVerification: true,
-    buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
-    async prepareState() {
-      return await createCompanionChatCurrentWindowState({
-        scenario: 'llm-chat-native-sse-server-error',
-      });
-    },
-    successMarkers: [
-      ...commonSuccessMarkers,
-      `InitialOpenSurface surface=${companionChatSurfaceId} policy=main presentation=current-window`,
-      `BundleSwitchPrepared window=window.main bundle=${companionChatBundleId} surface=${companionChatSurfaceId} policy=main`,
-      `BundleSwitchReloadRequested window=window.main bundle=${companionChatBundleId}`,
-      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      '[frontend-llm-chat] dev-smoke-start',
-      '[frontend-llm-chat] dev-smoke-error message=EventSource requires HTTP 200, received 500.',
-      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=EventSource requires HTTP 200, received 500.',
-      '[frontend-llm-chat] dev-smoke-complete',
-    ],
-    cleanupState: cleanupCompanionChatCurrentWindowState,
-    async verifyLog(logContents, state) {
-      assertCompanionChatCurrentWindowStayedOnChildBundle(
-        logContents,
-        'companion chat current-window server-error flow',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-failed',
-        'companion chat current-window server-error flow logged an unexpected dev-smoke failure marker.',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-open',
-        'companion chat current-window server-error flow unexpectedly accepted an HTTP error response as an open SSE stream.',
-      );
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat current-window server-error flow',
-      );
-      await assertCompanionChatSmokeErrorUiState(
-        state,
-        'companion chat current-window server-error flow',
-      );
-      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
-    },
-    verifyPersistedSession(sessionFile) {
-      verifyCompanionChatPersistedSession(
-        sessionFile,
-        'companion chat current-window server-error flow',
-      );
-    },
-  },
-  'companion-chat-current-window-malformed-chunk': {
-    description:
-      'auto-open companion chat in the current window and surface an expected malformed SSE chunk error from the child chat bundle',
-    preferences: defaultPreferences,
-    usesLocalOtaRemoteFixture: true,
-    skipNativeOtaVerification: true,
-    buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
-    async prepareState() {
-      return await createCompanionChatCurrentWindowState({
-        scenario: 'llm-chat-native-sse-malformed-chunk',
-      });
-    },
-    successMarkers: [
-      ...commonSuccessMarkers,
-      `InitialOpenSurface surface=${companionChatSurfaceId} policy=main presentation=current-window`,
-      `BundleSwitchPrepared window=window.main bundle=${companionChatBundleId} surface=${companionChatSurfaceId} policy=main`,
-      `BundleSwitchReloadRequested window=window.main bundle=${companionChatBundleId}`,
-      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      '[frontend-llm-chat] dev-smoke-start',
-      '[frontend-llm-chat] dev-smoke-open',
-      '[frontend-llm-chat] dev-smoke-error message=服务端返回了无法解析的流式 JSON 数据。',
-      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=服务端返回了无法解析的流式 JSON 数据。',
-      '[frontend-llm-chat] dev-smoke-complete',
-    ],
-    cleanupState: cleanupCompanionChatCurrentWindowState,
-    async verifyLog(logContents, state) {
-      assertCompanionChatCurrentWindowStayedOnChildBundle(
-        logContents,
-        'companion chat current-window malformed-chunk flow',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-failed',
-        'companion chat current-window malformed-chunk flow logged an unexpected dev-smoke failure marker.',
-      );
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat current-window malformed-chunk flow',
-      );
-      await assertCompanionChatSmokeErrorUiState(
-        state,
-        'companion chat current-window malformed-chunk flow',
-      );
-      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
-    },
-    verifyPersistedSession(sessionFile) {
-      verifyCompanionChatPersistedSession(
-        sessionFile,
-        'companion chat current-window malformed-chunk flow',
-      );
-    },
-  },
-  'companion-chat-current-window-stream-abort': {
-    description:
-      'auto-open companion chat in the current window and surface an expected interrupted SSE stream error from the child chat bundle',
-    preferences: defaultPreferences,
-    usesLocalOtaRemoteFixture: true,
-    skipNativeOtaVerification: true,
-    buildLaunchConfig: buildCompanionChatCurrentWindowLaunchConfig,
-    async prepareState() {
-      return await createCompanionChatCurrentWindowState({
-        scenario: 'llm-chat-native-sse-stream-abort',
-      });
-    },
-    successMarkers: [
-      ...commonSuccessMarkers,
-      `InitialOpenSurface surface=${companionChatSurfaceId} policy=main presentation=current-window`,
-      `BundleSwitchPrepared window=window.main bundle=${companionChatBundleId} surface=${companionChatSurfaceId} policy=main`,
-      `BundleSwitchReloadRequested window=window.main bundle=${companionChatBundleId}`,
-      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      '[frontend-llm-chat] dev-smoke-start',
-      '[frontend-llm-chat] dev-smoke-open',
-      '[frontend-llm-chat] dev-smoke-error message=服务端在完成流式响应前中断了连接。',
-      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=服务端在完成流式响应前中断了连接。',
-      '[frontend-llm-chat] dev-smoke-complete',
-    ],
-    cleanupState: cleanupCompanionChatCurrentWindowState,
-    async verifyLog(logContents, state) {
-      assertCompanionChatCurrentWindowStayedOnChildBundle(
-        logContents,
-        'companion chat current-window stream-abort flow',
-      );
-      assertLogDoesNotContain(
-        logContents,
-        '[frontend-llm-chat] dev-smoke-failed',
-        'companion chat current-window stream-abort flow logged an unexpected dev-smoke failure marker.',
-      );
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat current-window stream-abort flow',
-      );
-      await assertCompanionChatSmokeErrorUiState(
-        state,
-        'companion chat current-window stream-abort flow',
-      );
-      await assertRectMatchesPolicy(logContents, 'WindowRect', 'main', 'wide');
-    },
-    verifyPersistedSession(sessionFile) {
-      verifyCompanionChatPersistedSession(
-        sessionFile,
-        'companion chat current-window stream-abort flow',
-      );
-    },
-  },
+  ...createWindowCaptureReleaseScenarios({
+    assertPersistedSessionHasSurfaceId,
+    assertPngCaptureLooksOpaque,
+    assertUiSavedPath,
+    commonSuccessMarkers,
+    createWindowCaptureLabSpec,
+    defaultPreferences,
+    log,
+    rm,
+  }),
+  ...createCompanionChatReleaseScenarios({
+    assertCompanionChatSmokeRequestCaptured,
+    buildCompanionChatCurrentWindowLaunchConfig,
+    cleanupCompanionChatCurrentWindowState,
+    commonSuccessMarkers,
+    companionChatBundleId,
+    companionChatSurfaceId,
+    createCompanionChatCurrentWindowState,
+    createLlmChatSpec,
+    defaultPreferences,
+    releaseChatToken,
+    verifyCompanionChatPersistedSession,
+  }),
 };
 
 function normalizeCompanionMarker(marker) {
@@ -1685,134 +1347,6 @@ const smokeScenarios = {
   ...publicSmokeScenarios,
   ...privateSmokeScenarios,
 };
-
-function applyUiScenarioOverrides(targetScenarios) {
-  const assignUiScenario = (scenarioNameToAssign, config) => {
-    const targetScenario = targetScenarios[scenarioNameToAssign];
-    if (!targetScenario) {
-      return;
-    }
-
-    if (config.buildUiSpec) {
-      targetScenario.buildUiSpec = config.buildUiSpec;
-    }
-    if (config.verifyUiResult) {
-      targetScenario.verifyUiResult = config.verifyUiResult;
-    }
-    if ('verifyLog' in config) {
-      targetScenario.verifyLog = config.verifyLog;
-    }
-  };
-
-  assignUiScenario('window-capture-current-window', {
-    buildUiSpec: async () => createWindowCaptureLabSpec({}),
-    async verifyUiResult(uiResult) {
-      const captureWindowPath = assertUiSavedPath(
-        uiResult?.savedValues?.captureWindowPath,
-        'window-capture window path',
-      );
-      const captureClientPath = assertUiSavedPath(
-        uiResult?.savedValues?.captureClientPath,
-        'window-capture client path',
-      );
-
-      const windowStats = assertPngCaptureLooksOpaque(
-        captureWindowPath,
-        'Windows release smoke window-capture window capture',
-      );
-      log(
-        `window-capture window OK: path=${captureWindowPath} opaqueSamples=${windowStats.opaqueSamples}/${windowStats.sampleCount} distinctSamples=${windowStats.distinctSampleCount} averageAlpha=${windowStats.averageAlpha}`,
-      );
-      const clientStats = assertPngCaptureLooksOpaque(
-        captureClientPath,
-        'Windows release smoke window-capture client capture',
-      );
-      log(
-        `window-capture client OK: path=${captureClientPath} opaqueSamples=${clientStats.opaqueSamples}/${clientStats.sampleCount} distinctSamples=${clientStats.distinctSampleCount} averageAlpha=${clientStats.averageAlpha}`,
-      );
-
-      await rm(captureWindowPath, {force: true});
-      await rm(captureClientPath, {force: true});
-    },
-    verifyLog: undefined,
-  });
-  assignUiScenario('companion-chat-current-window', {
-    buildUiSpec: async state =>
-      createLlmChatSpec({
-        baseUrl: state?.chatSmoke?.baseUrl ?? '',
-        model: state?.chatSmoke?.model ?? 'fixture-native-sse',
-        token: releaseChatToken,
-        prompt: state?.chatSmoke?.requestPrompt ?? 'CHAT_TEST_PROMPT',
-        expectedAssistantText: 'CHAT_TEST_OK',
-      }),
-    async verifyUiResult(_uiResult, state) {
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat current-window flow',
-      );
-    },
-    verifyLog: undefined,
-  });
-  assignUiScenario('companion-chat-current-window-server-error', {
-    buildUiSpec: async state =>
-      createLlmChatSpec({
-        baseUrl: state?.chatSmoke?.baseUrl ?? '',
-        model: state?.chatSmoke?.model ?? 'fixture-native-sse',
-        token: releaseChatToken,
-        prompt: state?.chatSmoke?.requestPrompt ?? 'CHAT_TEST_PROMPT',
-        expectedErrorText:
-          state?.chatSmoke?.expectedErrorText ??
-          'EventSource requires HTTP 200, received 500.',
-      }),
-    async verifyUiResult(_uiResult, state) {
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat current-window server-error flow',
-      );
-    },
-    verifyLog: undefined,
-  });
-  assignUiScenario('companion-chat-current-window-malformed-chunk', {
-    buildUiSpec: async state =>
-      createLlmChatSpec({
-        baseUrl: state?.chatSmoke?.baseUrl ?? '',
-        model: state?.chatSmoke?.model ?? 'fixture-native-sse',
-        token: releaseChatToken,
-        prompt: state?.chatSmoke?.requestPrompt ?? 'CHAT_TEST_PROMPT',
-        expectedErrorText:
-          state?.chatSmoke?.expectedErrorText ??
-          '服务端返回了无法解析的流式 JSON 数据。',
-      }),
-    async verifyUiResult(_uiResult, state) {
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat current-window malformed-chunk flow',
-      );
-    },
-    verifyLog: undefined,
-  });
-  assignUiScenario('companion-chat-current-window-stream-abort', {
-    buildUiSpec: async state =>
-      createLlmChatSpec({
-        baseUrl: state?.chatSmoke?.baseUrl ?? '',
-        model: state?.chatSmoke?.model ?? 'fixture-native-sse',
-        token: releaseChatToken,
-        prompt: state?.chatSmoke?.requestPrompt ?? 'CHAT_TEST_PROMPT',
-        expectedErrorText:
-          state?.chatSmoke?.expectedErrorText ??
-          '服务端在完成流式响应前中断了连接。',
-      }),
-    async verifyUiResult(_uiResult, state) {
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat current-window stream-abort flow',
-      );
-    },
-    verifyLog: undefined,
-  });
-}
-
-applyUiScenarioOverrides(smokeScenarios);
 
 const supportedScenarioNames = Object.keys(smokeScenarios);
 const scenarioName = resolveScenarioNameOrThrow();

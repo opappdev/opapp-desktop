@@ -34,7 +34,9 @@ import {parsePositiveIntegerArg} from './windows-args-common.mjs';
 import {assertPngCaptureLooksOpaque} from './windows-image-inspection.mjs';
 import {
   createAgentWorkbenchDevScenarios,
+  createCompanionChatDevScenarios,
   createViewShotDevScenarios,
+  createWindowCaptureDevScenarios,
 } from './windows-dev-scenarios/index.mjs';
 import {runWindowsUiAutomation} from './windows-ui-automation-runner.mjs';
 import {
@@ -193,7 +195,7 @@ function applyUiDebugOptions(uiSpec) {
   };
 }
 
-const defaultScenarios = [
+const allScenarios = [
   ...createViewShotDevScenarios({
     assertPngCaptureLooksOpaque,
     assertUiSavedDataUri,
@@ -205,65 +207,13 @@ const defaultScenarios = [
     log,
     runUiScenarioWithDevFailFast,
   }),
-  {
-    name: 'window-capture-current-window',
-    description:
-      'Metro-backed auto-open window-capture lab runs foreground WGC smoke in the current window',
-    smokeMarkers: [
-      'InitialOpenSurface surface=companion.window-capture policy=tool presentation=current-window',
-      '[frontend-companion] auto-open bundle=opapp.companion.main window=window.main surface=companion.window-capture presentation=current-window targetBundle=opapp.companion.main',
-      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.window-capture policy=tool',
-      '[frontend-companion] mounted bundle=opapp.companion.main window=window.main surface=companion.window-capture policy=tool',
-      '[frontend-companion] session bundle=opapp.companion.main window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:companion.window-capture',
-      '[frontend-window-capture] dev-smoke-start',
-      '[frontend-window-capture] dev-smoke-list count=',
-      '[frontend-window-capture] dev-smoke-capture-window backend=wgc size=',
-      '[frontend-window-capture] dev-smoke-capture-client backend=wgc crop=',
-      '[frontend-window-capture] dev-smoke-complete',
-    ],
-    launchConfig: {
-      initialOpen: {
-        surface: 'companion.window-capture',
-        policy: 'tool',
-        presentation: 'current-window',
-      },
-    },
-    async buildUiSpec() {
-      return await createWindowCaptureLabSpec({});
-    },
-    async verifyUiResult(uiResult) {
-      const captureWindowPath = assertUiSavedPath(
-        uiResult?.savedValues?.captureWindowPath,
-        'window-capture window path',
-      );
-      const captureClientPath = assertUiSavedPath(
-        uiResult?.savedValues?.captureClientPath,
-        'window-capture client path',
-      );
-
-      const windowStats = assertPngCaptureLooksOpaque(
-        captureWindowPath,
-        'Windows dev verify window-capture window capture',
-      );
-      log(
-        'verify-dev',
-        `window-capture window OK: path=${captureWindowPath} opaqueSamples=${windowStats.opaqueSamples}/${windowStats.sampleCount} distinctSamples=${windowStats.distinctSampleCount} averageAlpha=${windowStats.averageAlpha}`,
-      );
-      const clientStats = assertPngCaptureLooksOpaque(
-        captureClientPath,
-        'Windows dev verify window-capture client capture',
-      );
-      log(
-        'verify-dev',
-        `window-capture client OK: path=${captureClientPath} opaqueSamples=${clientStats.opaqueSamples}/${clientStats.sampleCount} distinctSamples=${clientStats.distinctSampleCount} averageAlpha=${clientStats.averageAlpha}`,
-      );
-
-      await clearOptionalFile(captureWindowPath);
-      await clearOptionalFile(captureClientPath);
-    },
-    successSummary:
-      'Metro-backed Windows host completed window-capture dev smoke.',
-  },
+  ...createWindowCaptureDevScenarios({
+    assertPngCaptureLooksOpaque,
+    assertUiSavedPath,
+    clearOptionalFile,
+    createWindowCaptureLabSpec,
+    log,
+  }),
   ...createAgentWorkbenchDevScenarios({
     assertAgentWorkbenchApprovalState,
     cleanupAgentWorkbenchSmokeState,
@@ -274,207 +224,16 @@ const defaultScenarios = [
     prepareAgentWorkbenchSmokeState,
     verifyDevPreferencesPath,
   }),
-  {
-    name: 'companion-chat-current-window',
-    description:
-      'Metro-backed Windows host launches the chat child bundle directly into the main window',
-    smokeMarkers: [
-      'Runtime=Metro entryFile=index.chat',
-      `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
-      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      '[frontend-llm-chat] dev-smoke-start',
-      '[frontend-llm-chat] dev-smoke-open',
-      '[frontend-llm-chat] dev-smoke-assistant-text text=CHAT_TEST_OK',
-      '[frontend-llm-chat] dev-smoke-complete',
-    ],
-    async prepareState() {
-      return await prepareCompanionChatSmokeState();
-    },
-    buildLaunchConfig(state) {
-      return {
-        main: {
-          surface: companionChatSurfaceId,
-          policy: 'main',
-          'entry-file': 'index.chat',
-        },
-      };
-    },
-    async cleanupState(state) {
-      await cleanupCompanionChatSmokeState(state);
-    },
-    async buildUiSpec(state) {
-      return await createLlmChatSpec({
-        baseUrl: state?.baseUrl ?? '',
-        model: state?.model ?? 'fixture-native-sse',
-        token: devChatToken,
-        prompt: state?.requestPrompt ?? 'CHAT_TEST_PROMPT',
-        expectedAssistantText: 'CHAT_TEST_OK',
-      });
-    },
-    async verifyUiResult(_uiResult, state) {
-      assertCompanionChatSmokeRequestCaptured(state, 'companion chat dev smoke');
-    },
-    successSummary:
-      'Metro-backed Windows host completed direct chat child-bundle startup smoke.',
-  },
+  ...createCompanionChatDevScenarios({
+    assertCompanionChatSmokeRequestCaptured,
+    cleanupCompanionChatSmokeState,
+    companionChatBundleId,
+    companionChatSurfaceId,
+    createLlmChatSpec,
+    devChatToken,
+    prepareCompanionChatSmokeState,
+  }),
 ];
-
-const optionalScenarios = [
-  {
-    name: 'companion-chat-current-window-server-error',
-    description:
-      'Metro-backed Windows host surfaces an expected native SSE HTTP error from the chat child bundle in the main window',
-    smokeMarkers: [
-      'Runtime=Metro entryFile=index.chat',
-      `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
-      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      '[frontend-llm-chat] dev-smoke-start',
-      '[frontend-llm-chat] dev-smoke-error message=EventSource requires HTTP 200, received 500.',
-      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=EventSource requires HTTP 200, received 500.',
-      '[frontend-llm-chat] dev-smoke-complete',
-    ],
-    async prepareState() {
-      return await prepareCompanionChatSmokeState({
-        scenario: 'llm-chat-native-sse-server-error',
-      });
-    },
-    buildLaunchConfig(state) {
-      return {
-        main: {
-          surface: companionChatSurfaceId,
-          policy: 'main',
-          'entry-file': 'index.chat',
-        },
-      };
-    },
-    async cleanupState(state) {
-      await cleanupCompanionChatSmokeState(state);
-    },
-    async buildUiSpec(state) {
-      return await createLlmChatSpec({
-        baseUrl: state?.baseUrl ?? '',
-        model: state?.model ?? 'fixture-native-sse',
-        token: devChatToken,
-        prompt: state?.requestPrompt ?? 'CHAT_TEST_PROMPT',
-        expectedErrorText: state?.expectedErrorText ?? 'EventSource requires HTTP 200',
-      });
-    },
-    async verifyUiResult(_uiResult, state) {
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat server-error dev smoke',
-      );
-    },
-    successSummary:
-      'Metro-backed Windows host completed direct chat child-bundle server-error smoke.',
-  },
-  {
-    name: 'companion-chat-current-window-malformed-chunk',
-    description:
-      'Metro-backed Windows host surfaces a malformed native SSE chunk error from the chat child bundle in the main window and records the rendered error state',
-    smokeMarkers: [
-      'Runtime=Metro entryFile=index.chat',
-      `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
-      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      '[frontend-llm-chat] dev-smoke-start',
-      '[frontend-llm-chat] dev-smoke-open',
-      '[frontend-llm-chat] dev-smoke-error message=服务端返回了无法解析的流式 JSON 数据。',
-      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=服务端返回了无法解析的流式 JSON 数据。',
-      '[frontend-llm-chat] dev-smoke-complete',
-    ],
-    async prepareState() {
-      return await prepareCompanionChatSmokeState({
-        scenario: 'llm-chat-native-sse-malformed-chunk',
-      });
-    },
-    buildLaunchConfig(state) {
-      return {
-        main: {
-          surface: companionChatSurfaceId,
-          policy: 'main',
-          'entry-file': 'index.chat',
-        },
-      };
-    },
-    async cleanupState(state) {
-      await cleanupCompanionChatSmokeState(state);
-    },
-    async buildUiSpec(state) {
-      return await createLlmChatSpec({
-        baseUrl: state?.baseUrl ?? '',
-        model: state?.model ?? 'fixture-native-sse',
-        token: devChatToken,
-        prompt: state?.requestPrompt ?? 'CHAT_TEST_PROMPT',
-        expectedErrorText:
-          state?.expectedErrorText ?? '服务端返回了无法解析的流式 JSON 数据。',
-      });
-    },
-    async verifyUiResult(_uiResult, state) {
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat malformed-chunk dev smoke',
-      );
-    },
-    successSummary:
-      'Metro-backed Windows host completed direct chat child-bundle malformed-chunk smoke.',
-  },
-  {
-    name: 'companion-chat-current-window-stream-abort',
-    description:
-      'Metro-backed Windows host surfaces an interrupted native SSE stream error from the chat child bundle in the main window and records the rendered error state',
-    smokeMarkers: [
-      'Runtime=Metro entryFile=index.chat',
-      `LaunchSurface surface=${companionChatSurfaceId} policy=main mode=`,
-      `[frontend-companion] render bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      `[frontend-companion] mounted bundle=${companionChatBundleId} window=window.main surface=${companionChatSurfaceId} policy=main`,
-      '[frontend-llm-chat] dev-smoke-start',
-      '[frontend-llm-chat] dev-smoke-open',
-      '[frontend-llm-chat] dev-smoke-error message=服务端在完成流式响应前中断了连接。',
-      '[frontend-llm-chat] dev-smoke-error-ui path=llm-chat/dev-smoke-ui-state.json message=服务端在完成流式响应前中断了连接。',
-      '[frontend-llm-chat] dev-smoke-complete',
-    ],
-    async prepareState() {
-      return await prepareCompanionChatSmokeState({
-        scenario: 'llm-chat-native-sse-stream-abort',
-      });
-    },
-    buildLaunchConfig(state) {
-      return {
-        main: {
-          surface: companionChatSurfaceId,
-          policy: 'main',
-          'entry-file': 'index.chat',
-        },
-      };
-    },
-    async cleanupState(state) {
-      await cleanupCompanionChatSmokeState(state);
-    },
-    async buildUiSpec(state) {
-      return await createLlmChatSpec({
-        baseUrl: state?.baseUrl ?? '',
-        model: state?.model ?? 'fixture-native-sse',
-        token: devChatToken,
-        prompt: state?.requestPrompt ?? 'CHAT_TEST_PROMPT',
-        expectedErrorText:
-          state?.expectedErrorText ?? '服务端在完成流式响应前中断了连接。',
-      });
-    },
-    async verifyUiResult(_uiResult, state) {
-      assertCompanionChatSmokeRequestCaptured(
-        state,
-        'companion chat stream-abort dev smoke',
-      );
-    },
-    successSummary:
-      'Metro-backed Windows host completed direct chat child-bundle stream-abort smoke.',
-  },
-];
-
-const allScenarios = [...defaultScenarios, ...optionalScenarios];
 const scenarioByName = new Map(allScenarios.map(scenario => [scenario.name, scenario]));
 
 function normalizeLogContents(logContents) {
@@ -500,26 +259,6 @@ function extractLoggedPath(logContents, regex, reason) {
   }
 
   return match[1].trim();
-}
-
-function assertCompanionChatCurrentWindowStayedOnChildBundle(
-  logContents,
-  failureLabel,
-) {
-  assertLogContainsRegex(
-    logContents,
-    /\[frontend-companion\] session bundle=opapp\.companion\.chat window=window\.main tabs=1 active=tab:companion\.chat\.main:1 entries=tab:companion\.chat\.main:1:companion\.chat\.main/i,
-    `${failureLabel} did not persist the chat child bundle session in the main window.`,
-  );
-  if (
-    normalizeLogContents(logContents).includes(
-      '[frontend-companion] render bundle=opapp.companion.main window=window.main surface=companion.main policy=main',
-    )
-  ) {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} still rendered the main companion bundle instead of launching the chat child bundle directly.`,
-    );
-  }
 }
 
 function assertCompanionAgentWorkbenchCurrentWindowStayedOnSurface(
@@ -921,54 +660,6 @@ async function prepareCompanionChatSmokeState(options = {}) {
 async function cleanupCompanionChatSmokeState(state) {
   await state?.close?.();
   await clearCompanionChatSmokeUiArtifacts();
-}
-
-async function assertCompanionChatSmokeErrorUiState(state, failureLabel) {
-  const uiStatePaths = await resolveCompanionChatSmokeUiStatePaths();
-  let fileContent = null;
-  let resolvedPath = null;
-  for (const candidatePath of uiStatePaths) {
-    try {
-      fileContent = await readFile(candidatePath, 'utf8');
-      resolvedPath = candidatePath;
-      break;
-    } catch {
-      // Try the next known user-data root.
-    }
-  }
-
-  if (!fileContent || !resolvedPath) {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} did not persist the rendered error UI state to any known OPApp user-data root.`,
-    );
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(fileContent);
-  } catch {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} persisted an unreadable error UI state artifact at ${resolvedPath}.`,
-    );
-  }
-
-  if (parsed?.scenario !== state?.scenario) {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} persisted an error UI state for '${parsed?.scenario ?? '<unknown>'}' instead of '${state?.scenario ?? '<unknown>'}'.`,
-    );
-  }
-
-  if (parsed?.state !== 'error') {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} persisted UI state '${parsed?.state ?? '<unknown>'}' instead of 'error'.`,
-    );
-  }
-
-  if (parsed?.errorMessage !== state?.expectedErrorText) {
-    throw new Error(
-      `Windows dev verify failed: ${failureLabel} persisted error UI text '${parsed?.errorMessage ?? '<missing>'}' instead of '${state?.expectedErrorText ?? '<missing>'}' at ${resolvedPath}.`,
-    );
-  }
 }
 
 async function resolveCompanionChatSmokeUiStatePaths() {
