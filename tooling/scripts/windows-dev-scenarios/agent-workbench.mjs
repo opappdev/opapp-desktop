@@ -3,10 +3,11 @@ function createAgentWorkbenchSmokeMarkers({
   companionMainBundleId,
 }) {
   return [
-    `LaunchSurface surface=${companionAgentWorkbenchSurfaceId} policy=main mode=`,
+    `InitialOpenSurface surface=${companionAgentWorkbenchSurfaceId} policy=main presentation=current-window`,
+    `[frontend-companion] auto-open bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} presentation=current-window targetBundle=${companionMainBundleId}`,
     `[frontend-companion] render bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
     `[frontend-companion] mounted bundle=${companionMainBundleId} window=window.main surface=${companionAgentWorkbenchSurfaceId} policy=main`,
-    `[frontend-companion] session bundle=${companionMainBundleId} window=window.main tabs=1 active=tab:${companionAgentWorkbenchSurfaceId}:1 entries=tab:${companionAgentWorkbenchSurfaceId}:1:${companionAgentWorkbenchSurfaceId}`,
+    `[frontend-companion] session bundle=${companionMainBundleId} window=window.main tabs=1 active=tab:companion.main:1 entries=tab:companion.main:1:${companionAgentWorkbenchSurfaceId}`,
   ];
 }
 
@@ -30,10 +31,10 @@ export function createAgentWorkbenchDevScenarios({
     preferences: {
       path: verifyDevPreferencesPath,
     },
-    main: {
+    initialOpen: {
       surface: companionAgentWorkbenchSurfaceId,
       policy: 'main',
-      mode: 'wide',
+      presentation: 'current-window',
     },
   };
 
@@ -41,7 +42,7 @@ export function createAgentWorkbenchDevScenarios({
     {
       name: 'companion-agent-workbench-current-window',
       description:
-        'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the workspace/diff smoke path',
+        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises the workspace/diff smoke path',
       smokeMarkers: [
         ...baseSmokeMarkers,
         '[frontend-agent-workbench] dev-smoke-start',
@@ -63,12 +64,12 @@ export function createAgentWorkbenchDevScenarios({
         return await createAgentWorkbenchSpec({});
       },
       successSummary:
-        'Metro-backed Windows host completed direct agent-workbench startup smoke.',
+        'Metro-backed Windows host completed current-window agent-workbench startup smoke.',
     },
     {
       name: 'companion-agent-workbench-approval-approve-current-window',
       description:
-        'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the approval request/approve flow',
+        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises the approval request/approve flow',
       smokeMarkers: baseSmokeMarkers,
       async prepareState() {
         return await prepareAgentWorkbenchSmokeState();
@@ -82,18 +83,19 @@ export function createAgentWorkbenchDevScenarios({
           decision: 'approve',
         });
       },
-      async verifyUiResult() {
+      async verifyUiResult(uiResult) {
         await assertAgentWorkbenchApprovalState({
           decision: 'approve',
+          uiResult,
         });
       },
       successSummary:
-        'Metro-backed Windows host completed direct agent-workbench approval approve smoke.',
+        'Metro-backed Windows host completed current-window agent-workbench approval approve smoke.',
     },
     {
       name: 'companion-agent-workbench-approval-reject-current-window',
       description:
-        'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises the approval request/reject flow',
+        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises the approval request/reject flow',
       smokeMarkers: baseSmokeMarkers,
       async prepareState() {
         return await prepareAgentWorkbenchSmokeState();
@@ -107,18 +109,19 @@ export function createAgentWorkbenchDevScenarios({
           decision: 'reject',
         });
       },
-      async verifyUiResult() {
+      async verifyUiResult(uiResult) {
         await assertAgentWorkbenchApprovalState({
           decision: 'reject',
+          uiResult,
         });
       },
       successSummary:
-        'Metro-backed Windows host completed direct agent-workbench approval reject smoke.',
+        'Metro-backed Windows host completed current-window agent-workbench approval reject smoke.',
     },
     {
       name: 'companion-agent-workbench-retry-restore-current-window',
       description:
-        'Metro-backed Windows host launches the agent workbench surface directly into the main window and exercises retry/restore flow from thread history',
+        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises retry/restore flow from thread history',
       smokeMarkers: baseSmokeMarkers,
       async prepareState() {
         return await prepareAgentWorkbenchSmokeState();
@@ -136,7 +139,7 @@ export function createAgentWorkbenchDevScenarios({
         });
       },
       successSummary:
-        'Metro-backed Windows host completed direct agent-workbench retry/restore smoke.',
+        'Metro-backed Windows host completed current-window agent-workbench retry/restore smoke.',
     },
   ];
 }

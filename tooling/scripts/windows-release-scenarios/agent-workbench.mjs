@@ -5,6 +5,13 @@ import path from 'node:path';
 const defaultStateVerificationTimeoutMs = 10_000;
 const defaultStateVerificationPollMs = 200;
 const agentRunDocumentFileNamePattern = /^run-[^\\/]+\.json$/i;
+const agentWorkbenchApprovalFixtureBaseline = [
+  '# Agent Workbench Approval Smoke Fixture',
+  'approvedAt=baseline',
+  'requestedCwd=baseline',
+  'executor=baseline',
+  '',
+].join('\n');
 
 function assertUiSavedText(value, label) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -185,11 +192,13 @@ function createAgentWorkbenchRuntimePaths({workspaceRoot, userDataRoot}) {
     agentRuntimeRoot,
     agentRunDocumentsRoot: path.join(agentRuntimeRoot, 'runs'),
     agentThreadIndexPath: path.join(agentRuntimeRoot, 'thread-index.json'),
-    agentWorkbenchApprovalSmokePath: path.join(
+    agentWorkbenchApprovalFixturePath: path.join(
       workspaceRoot,
-      '.tmp',
-      'agent-workbench',
-      'approval-write-smoke.txt',
+      'opapp-frontend',
+      'tooling',
+      'tests',
+      'fixtures',
+      'agent-workbench-approval-smoke.txt',
     ),
     workspaceTargetPath: path.join(agentRuntimeRoot, 'workspace-target.json'),
     companionStartupTargetPath: path.join(
@@ -205,12 +214,19 @@ async function prepareAgentWorkbenchSmokeState(paths, workspaceRoot) {
     paths.companionStartupTargetPath,
   );
   const agentRuntimeSnapshot = await snapshotTextTree(paths.agentRuntimeRoot);
-  const approvalSmokeContent = await readOptionalFile(
-    paths.agentWorkbenchApprovalSmokePath,
+  const approvalFixtureContent = await readOptionalFile(
+    paths.agentWorkbenchApprovalFixturePath,
   );
 
   await rm(paths.agentRuntimeRoot, {recursive: true, force: true});
-  await clearOptionalFile(paths.agentWorkbenchApprovalSmokePath);
+  await mkdir(path.dirname(paths.agentWorkbenchApprovalFixturePath), {
+    recursive: true,
+  });
+  await writeFile(
+    paths.agentWorkbenchApprovalFixturePath,
+    agentWorkbenchApprovalFixtureBaseline,
+    'utf8',
+  );
   await mkdir(path.dirname(paths.workspaceTargetPath), {recursive: true});
   await writeFile(
     paths.workspaceTargetPath,
@@ -225,7 +241,7 @@ async function prepareAgentWorkbenchSmokeState(paths, workspaceRoot) {
 
   return {
     agentRuntimeSnapshot,
-    approvalSmokeContent,
+    approvalFixtureContent,
     legacyStartupTargetContent,
   };
 }
@@ -233,17 +249,17 @@ async function prepareAgentWorkbenchSmokeState(paths, workspaceRoot) {
 async function cleanupAgentWorkbenchSmokeState(paths, state) {
   await restoreTextTree(paths.agentRuntimeRoot, state?.agentRuntimeSnapshot);
 
-  if (typeof state?.approvalSmokeContent === 'string') {
-    await mkdir(path.dirname(paths.agentWorkbenchApprovalSmokePath), {
+  if (typeof state?.approvalFixtureContent === 'string') {
+    await mkdir(path.dirname(paths.agentWorkbenchApprovalFixturePath), {
       recursive: true,
     });
     await writeFile(
-      paths.agentWorkbenchApprovalSmokePath,
-      state.approvalSmokeContent,
+      paths.agentWorkbenchApprovalFixturePath,
+      state.approvalFixtureContent,
       'utf8',
     );
   } else {
-    await clearOptionalFile(paths.agentWorkbenchApprovalSmokePath);
+    await clearOptionalFile(paths.agentWorkbenchApprovalFixturePath);
   }
 
   if (typeof state?.legacyStartupTargetContent === 'string') {
@@ -599,11 +615,19 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
 
   await waitForAsyncCondition(
     async () => {
-      const approvalSmokeContent = await readOptionalFile(
-        paths.agentWorkbenchApprovalSmokePath,
+      const approvalFixtureContent = await readOptionalFile(
+        paths.agentWorkbenchApprovalFixturePath,
       );
+      const normalizedApprovalFixtureContent =
+        typeof approvalFixtureContent === 'string'
+          ? approvalFixtureContent.replace(/\r/g, '')
+          : null;
       if (decision === 'approve') {
-        if (!approvalSmokeContent) {
+        if (
+          !normalizedApprovalFixtureContent ||
+          normalizedApprovalFixtureContent ===
+            agentWorkbenchApprovalFixtureBaseline
+        ) {
           return null;
         }
 
@@ -612,15 +636,18 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
           'requestedCwd=opapp-frontend',
           'executor=agent-workbench',
         ]) {
-          if (!approvalSmokeContent.includes(marker)) {
+          if (!normalizedApprovalFixtureContent.includes(marker)) {
             throw new Error(
-              `Windows release smoke failed: agent workbench approval smoke file is missing '${marker}'.`,
+              `Windows release smoke failed: agent workbench approval fixture is missing '${marker}'.`,
             );
           }
         }
-      } else if (approvalSmokeContent) {
+      } else if (
+        normalizedApprovalFixtureContent !==
+        agentWorkbenchApprovalFixtureBaseline
+      ) {
         throw new Error(
-          `Windows release smoke failed: rejected agent workbench approval smoke unexpectedly created ${paths.agentWorkbenchApprovalSmokePath}.`,
+          `Windows release smoke failed: rejected agent workbench approval unexpectedly changed ${paths.agentWorkbenchApprovalFixturePath}.`,
         );
       }
 
@@ -673,10 +700,12 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
       }
 
       if (
-        !runDocument.run?.request?.command?.includes('approval-write-smoke.txt')
+        !runDocument.run?.request?.command?.includes(
+          'agent-workbench-approval-smoke.txt',
+        )
       ) {
         throw new Error(
-          `Windows release smoke failed: the ${decisionLabel} agent workbench run request no longer targets approval-write-smoke.txt.`,
+          `Windows release smoke failed: the ${decisionLabel} agent workbench run request no longer targets agent-workbench-approval-smoke.txt.`,
         );
       }
 
@@ -687,18 +716,21 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
         const approvedStdout = terminalEvents
           .filter(
             entry =>
-              entry?.event === 'stdout' && typeof entry?.text === 'string',
+            entry?.event === 'stdout' && typeof entry?.text === 'string',
           )
           .map(entry => entry.text)
           .join('');
-        if (!approvedStdout.includes('workspace write smoke saved to')) {
+        if (!approvedStdout.includes('approval smoke fixture saved to')) {
           throw new Error(
-            'Windows release smoke failed: the approved agent workbench run did not print the approval smoke save marker.',
+            'Windows release smoke failed: the approved agent workbench run did not print the approval fixture save marker.',
           );
         }
-        if (!approvedStdout.includes('approvedAt=')) {
+        if (
+          !approvedStdout.includes('approvedAt=') ||
+          !approvedStdout.includes('diff --git')
+        ) {
           throw new Error(
-            'Windows release smoke failed: the approved agent workbench run did not echo the approval smoke contents.',
+            'Windows release smoke failed: the approved agent workbench run did not echo both the fixture contents and git diff.',
           );
         }
 
@@ -710,6 +742,7 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
             `Windows release smoke failed: approved agent workbench run exit code was '${approvedExitEntry?.exitCode ?? '<missing>'}' instead of 0.`,
           );
         }
+
       } else if (terminalEvents.length > 0) {
         throw new Error(
           'Windows release smoke failed: rejected agent workbench approval run should not have started a terminal session.',
@@ -717,7 +750,7 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
       }
 
       return {
-        approvalSmokeContent,
+        approvalFixtureContent,
         threadIndex,
         runDocument,
       };
@@ -815,9 +848,10 @@ export function createAgentWorkbenchReleaseScenarios({
           decision: 'approve',
         });
       },
-      async verifyUiResult() {
+      async verifyUiResult(uiResult) {
         await assertAgentWorkbenchApprovalState(runtimePaths, {
           decision: 'approve',
+          uiResult,
         });
       },
       verifyPersistedSession(sessionFile) {
@@ -836,9 +870,10 @@ export function createAgentWorkbenchReleaseScenarios({
           decision: 'reject',
         });
       },
-      async verifyUiResult() {
+      async verifyUiResult(uiResult) {
         await assertAgentWorkbenchApprovalState(runtimePaths, {
           decision: 'reject',
+          uiResult,
         });
       },
       verifyPersistedSession(sessionFile) {

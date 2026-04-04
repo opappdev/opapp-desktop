@@ -91,27 +91,13 @@ export async function createAgentWorkbenchApprovalSpec({
     decision === 'approve'
       ? 'agent-workbench.action.approve-request'
       : 'agent-workbench.action.reject-request';
-  const outcomeTranscriptMatcher =
-    decision === 'approve'
-      ? {
-          type: 'waitText',
-          window,
-          locator: byAutomationId('agent-workbench.terminal.transcript'),
-          matcher: {
-            includes: 'approvedAt=',
-          },
-          timeoutMs: defaultChatResponseTimeoutMs,
-          saveAs: 'approvalTranscript',
-        }
-      : null;
-
   return {
     name: `agent-workbench-approval-${decision}`,
     defaultTimeoutMs: defaultStepTimeoutMs,
     steps: [
       ...waitForLocator(
         window,
-        byAutomationId('agent-workbench.action.request-write-approval'),
+        byAutomationId('agent-workbench.action.start-draft-task'),
       ),
       {
         type: 'click',
@@ -126,9 +112,16 @@ export async function createAgentWorkbenchApprovalSpec({
           includes: 'opapp-frontend',
         },
       },
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId(
+          'agent-workbench.action.populate-write-approval-draft',
+        ),
+      },
       waitForElementState({
         window,
-        locator: byAutomationId('agent-workbench.action.request-write-approval'),
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
         matcher: {
           enabled: true,
         },
@@ -136,7 +129,15 @@ export async function createAgentWorkbenchApprovalSpec({
       {
         type: 'click',
         window,
-        locator: byAutomationId('agent-workbench.action.request-write-approval'),
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.run.command'),
+        matcher: {
+          includes: 'agent-workbench-approval-smoke.txt',
+        },
       },
       {
         type: 'waitText',
@@ -183,10 +184,11 @@ export async function createAgentWorkbenchApprovalSpec({
         locator: byAutomationId('agent-workbench.action.reject-request'),
         timeoutMs: defaultLocatorTimeoutMs,
       },
-      ...(outcomeTranscriptMatcher ? [outcomeTranscriptMatcher] : []),
       waitForElementState({
         window,
-        locator: byAutomationId('agent-workbench.action.request-write-approval'),
+        locator: byAutomationId(
+          'agent-workbench.action.populate-write-approval-draft',
+        ),
         matcher: {
           enabled: true,
         },
