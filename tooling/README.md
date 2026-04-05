@@ -130,6 +130,10 @@ Windows verification entrypoints:
     `npm run verify:windows -- --scenario=save-main-window-preferences --ui-debug-screenshots`
   - Metro-backed debug screenshots for UI automation:
     `npm run verify:windows:dev -- --scenario=window-capture-current-window --ui-debug-screenshots`
+  - when `--ui-debug-screenshots` is enabled, the UI automation runner now prints
+    the screenshot artifact directory up front and echoes each saved screenshot
+    path during execution; if screenshots were actually captured, the success-path
+    artifact directory is retained for manual review instead of being cleaned up
 - `verify:windows` remains the higher-level packaged gate and keeps frontend `typecheck`
   plus first-scenario prepare by design; use the `smoke:windows:reuse` rerun
   shortcuts only for already-prepared local iteration.

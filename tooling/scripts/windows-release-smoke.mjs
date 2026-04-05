@@ -254,6 +254,7 @@ function applyUiDebugOptions(uiSpec) {
     debug: {
       ...(uiSpec?.debug ?? {}),
       captureAfterActions: true,
+      reportArtifactsDuringRun: true,
     },
   };
 }

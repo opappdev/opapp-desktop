@@ -85,6 +85,13 @@ export async function createAgentWorkbenchSpec({
       {
         type: 'click',
         window,
+        locator: byAutomationId(
+          'agent-workbench.action.toggle-workspace-selector',
+        ),
+      },
+      {
+        type: 'click',
+        window,
         locator: byAutomationId('agent-workbench.workspace.opapp-frontend'),
       },
       {
@@ -100,6 +107,11 @@ export async function createAgentWorkbenchSpec({
         window,
         locator: byAutomationId('agent-workbench.task.goal-input'),
         value: '检查当前变更',
+      },
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.toggle-command-input'),
       },
       {
         type: 'setValue',
@@ -169,6 +181,13 @@ export async function createAgentWorkbenchApprovalSpec({
         window,
         byAutomationId('agent-workbench.action.start-draft-task'),
       ),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId(
+          'agent-workbench.action.toggle-workspace-selector',
+        ),
+      },
       {
         type: 'click',
         window,
@@ -293,6 +312,13 @@ export async function createAgentWorkbenchRetryRestoreSpec({
         window,
         byAutomationId('agent-workbench.action.run-git-status'),
       ),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId(
+          'agent-workbench.action.toggle-workspace-selector',
+        ),
+      },
       {
         type: 'click',
         window,

@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -52,6 +52,66 @@ function hasArtifacts(parsedResult) {
   );
 }
 
+export function shouldKeepArtifactDir(parsedResult, artifactPaths = []) {
+  return hasArtifacts(parsedResult) || artifactPaths.length > 0;
+}
+
+function normalizeArtifactPathKey(artifactPath) {
+  const normalizedPath = path.normalize(String(artifactPath ?? ''));
+  return process.platform === 'win32'
+    ? normalizedPath.toLowerCase()
+    : normalizedPath;
+}
+
+async function listArtifactPaths(artifactDir) {
+  try {
+    const entries = await readdir(artifactDir, {withFileTypes: true});
+    return entries
+      .filter(entry => entry.isFile())
+      .map(entry => path.join(artifactDir, entry.name))
+      .sort((left, right) =>
+        left.localeCompare(right, undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        }),
+      );
+  } catch {
+    return [];
+  }
+}
+
+export function createArtifactProgressReporter(
+  artifactDir,
+  {
+    logger = console.log,
+    specName = 'windows-ui-automation',
+  } = {},
+) {
+  const seenArtifactKeys = new Set();
+
+  return {
+    announceStart() {
+      logger(
+        `[windows-ui-automation] debug screenshots enabled for '${specName}'; saving screenshots under ${artifactDir}`,
+      );
+    },
+    async reportNewArtifacts() {
+      const artifactPaths = await listArtifactPaths(artifactDir);
+      for (const artifactPath of artifactPaths) {
+        const artifactKey = normalizeArtifactPathKey(artifactPath);
+        if (seenArtifactKeys.has(artifactKey)) {
+          continue;
+        }
+
+        seenArtifactKeys.add(artifactKey);
+        logger(
+          `[windows-ui-automation] screenshot saved for '${specName}': ${artifactPath}`,
+        );
+      }
+    },
+  };
+}
+
 async function removeTempDir(tempDir) {
   await rm(tempDir, {recursive: true, force: true});
 }
@@ -79,6 +139,14 @@ export async function runWindowsUiAutomation(
       artifactDir: spec?.debug?.artifactDir ?? artifactDir,
     },
   };
+  const shouldReportArtifactsDuringRun = Boolean(
+    effectiveSpec.debug?.reportArtifactsDuringRun,
+  );
+  const artifactProgressReporter = shouldReportArtifactsDuringRun
+    ? createArtifactProgressReporter(effectiveSpec.debug.artifactDir, {
+        specName: effectiveSpec.name,
+      })
+    : null;
 
   await writeFile(specPath, JSON.stringify(effectiveSpec, null, 2), 'utf8');
 
@@ -87,6 +155,8 @@ export async function runWindowsUiAutomation(
   let settled = false;
   let failFastError = null;
   let keepArtifactDir = false;
+
+  artifactProgressReporter?.announceStart();
 
   const runner = spawn(
     'powershell.exe',
@@ -119,6 +189,7 @@ export async function runWindowsUiAutomation(
   const poller = (async () => {
     while (!settled) {
       await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+      await artifactProgressReporter?.reportNewArtifacts();
       if (settled || typeof failFastCheck !== 'function') {
         continue;
       }
@@ -154,6 +225,8 @@ export async function runWindowsUiAutomation(
       throw failFastError;
     }
 
+    await artifactProgressReporter?.reportNewArtifacts();
+
     let parsedResult = null;
     try {
       const raw = await readFile(outputPath, 'utf8');
@@ -162,8 +235,10 @@ export async function runWindowsUiAutomation(
       parsedResult = null;
     }
 
+    const artifactPaths = await listArtifactPaths(artifactDir);
+
     if (exitResult.code !== 0 || parsedResult?.ok === false) {
-      keepArtifactDir = hasArtifacts(parsedResult);
+      keepArtifactDir = shouldKeepArtifactDir(parsedResult, artifactPaths);
       throw new Error(
         formatRunnerFailure({
           message:
@@ -187,11 +262,12 @@ export async function runWindowsUiAutomation(
       );
     }
 
-    keepArtifactDir = hasArtifacts(parsedResult);
+    keepArtifactDir = shouldKeepArtifactDir(parsedResult, artifactPaths);
     return parsedResult;
   } catch (error) {
     settled = true;
     runner.kill();
+    await artifactProgressReporter?.reportNewArtifacts();
     throw error;
   } finally {
     await removeTempDir(tempDir);
