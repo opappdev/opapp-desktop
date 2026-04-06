@@ -384,6 +384,13 @@ export async function createAgentWorkbenchRetryRestoreSpec({
         window,
         byAutomationId('agent-workbench.run-history.index-1'),
       ),
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.run-git-status'),
+        matcher: {
+          enabled: true,
+        },
+      }),
       {
         type: 'readText',
         window,
@@ -401,12 +408,10 @@ export async function createAgentWorkbenchRetryRestoreSpec({
         window,
         locator: byAutomationId('agent-workbench.action.view-previous-run'),
       },
-      {
-        type: 'assertElementMissing',
+      ...waitForLocator(
         window,
-        locator: byAutomationId('agent-workbench.action.view-previous-run'),
-        timeoutMs: defaultLocatorTimeoutMs,
-      },
+        byAutomationId('agent-workbench.action.focus-latest-run'),
+      ),
       {
         type: 'readText',
         window,
