@@ -83,18 +83,6 @@ export async function createAgentWorkbenchSpec({
         byAutomationId('agent-workbench.action.start-draft-task'),
       ),
       {
-        type: 'click',
-        window,
-        locator: byAutomationId(
-          'agent-workbench.action.toggle-workspace-selector',
-        ),
-      },
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.workspace.opapp-frontend'),
-      },
-      {
         type: 'waitText',
         window,
         locator: byAutomationId('agent-workbench.detail.selected-cwd'),
@@ -177,18 +165,6 @@ export async function createAgentWorkbenchApprovalSpec({
         window,
         byAutomationId('agent-workbench.action.start-draft-task'),
       ),
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId(
-          'agent-workbench.action.toggle-workspace-selector',
-        ),
-      },
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.workspace.opapp-frontend'),
-      },
       {
         type: 'waitText',
         window,
@@ -308,18 +284,6 @@ export async function createAgentWorkbenchRetryRestoreSpec({
         window,
         byAutomationId('agent-workbench.action.run-git-status'),
       ),
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId(
-          'agent-workbench.action.toggle-workspace-selector',
-        ),
-      },
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.workspace.opapp-frontend'),
-      },
       {
         type: 'waitText',
         window,
@@ -561,18 +525,6 @@ export async function createAgentWorkbenchWorkspaceManagementSpec({
         byAutomationId('agent-workbench.action.run-git-status'),
       ),
       {
-        type: 'click',
-        window,
-        locator: byAutomationId(
-          'agent-workbench.action.toggle-workspace-selector',
-        ),
-      },
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.workspace.opapp-frontend'),
-      },
-      {
         type: 'waitText',
         window,
         locator: byAutomationId('agent-workbench.detail.selected-cwd'),
@@ -618,7 +570,7 @@ export async function createAgentWorkbenchWorkspaceManagementSpec({
         type: 'click',
         window,
         locator: byAutomationId(
-          'agent-workbench.action.toggle-workspace-management',
+          'agent-workbench.action.toggle-workspace-config',
         ),
       },
       ...waitForLocator(
