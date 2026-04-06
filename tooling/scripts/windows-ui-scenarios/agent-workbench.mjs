@@ -106,17 +106,6 @@ export async function createAgentWorkbenchSpec({
         type: 'setValue',
         window,
         locator: byAutomationId('agent-workbench.task.goal-input'),
-        value: '检查当前变更',
-      },
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.action.toggle-command-input'),
-      },
-      {
-        type: 'setValue',
-        window,
-        locator: byAutomationId('agent-workbench.task.command-input'),
         value: 'git status',
       },
       waitForElementState({
