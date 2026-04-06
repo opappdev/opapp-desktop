@@ -586,6 +586,17 @@ export async function createAgentWorkbenchWorkspaceManagementSpec({
         type: 'click',
         window,
         locator: byAutomationId(
+          'agent-workbench.action.toggle-workspace-actions',
+        ),
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.action.clear-trusted-workspace-root'),
+      ),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId(
           'agent-workbench.action.clear-trusted-workspace-root',
         ),
       },
