@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      frontend_ref:
+        description: Optional opapp-frontend git ref (commit, tag, or branch) to verify instead of the latest main commit
+        required: false
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -47,7 +53,8 @@ jobs:
         shell: pwsh
         working-directory: opapp-desktop
         env:
-          OPAPP_FRONTEND_REF: ${{ vars.OPAPP_FRONTEND_REF }}
+          OPAPP_FRONTEND_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.frontend_ref || '' }}
+          OPAPP_FRONTEND_REF_DEFAULT: latest
         run: |
           $ref = node ./tooling/scripts/resolve-public-frontend-ref.mjs
           "ref=$ref" >> $env:GITHUB_OUTPUT

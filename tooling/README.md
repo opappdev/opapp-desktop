@@ -143,7 +143,9 @@ Windows verification entrypoints:
 - use `npm run verify:windows:raw-release` after preflight has already identified the blocker and you need the unwrapped upstream restore/build failure for the Windows host itself.
 - `scripts/resolve-public-frontend-ref.mjs`: resolves the pinned public
   `opapp-frontend` checkout ref from `tooling/config/opapp-frontend-ref.txt`
-  unless `OPAPP_FRONTEND_REF` explicitly overrides it.
+  unless `OPAPP_FRONTEND_REF` explicitly overrides it. When
+  `OPAPP_FRONTEND_REF_DEFAULT=latest`, it resolves the latest remote branch head
+  instead (default branch `main`, overridable via `OPAPP_FRONTEND_BRANCH`).
 - `scripts/windows-nightly-release-assets.mjs`: collects the packaged Windows
   build outputs after public verify, emits a user-runnable portable zip,
   checksums, and release notes for GitHub nightly publishing. Nightly no
