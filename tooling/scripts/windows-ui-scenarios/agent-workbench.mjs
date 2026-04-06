@@ -103,10 +103,17 @@ export async function createAgentWorkbenchSpec({
         },
       },
       {
-        type: 'setValue',
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.run-git-status'),
+      },
+      {
+        type: 'waitText',
         window,
         locator: byAutomationId('agent-workbench.task.goal-input'),
-        value: 'git status',
+        matcher: {
+          includes: '检查工作区状态',
+        },
       },
       waitForElementState({
         window,
@@ -333,6 +340,18 @@ export async function createAgentWorkbenchRetryRestoreSpec({
         window,
         locator: byAutomationId('agent-workbench.action.run-git-status'),
       },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
+      },
       {
         type: 'waitText',
         window,
@@ -384,6 +403,18 @@ export async function createAgentWorkbenchRetryRestoreSpec({
         type: 'click',
         window,
         locator: byAutomationId('agent-workbench.action.run-git-status'),
+      },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
       },
       ...waitForLocator(
         window,
