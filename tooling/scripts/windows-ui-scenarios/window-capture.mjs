@@ -30,6 +30,10 @@ export async function createWindowCaptureLabSpec({
         matcher: {
           regex: '^[1-9]\\d*$',
         },
+        // Window enumeration + regex pattern match against live windows can
+        // take variable time under system load; use capture-level timeout
+        // rather than the default step timeout to reduce flakiness.
+        timeoutMs: defaultCaptureResultTimeoutMs,
       },
       {
         type: 'click',
