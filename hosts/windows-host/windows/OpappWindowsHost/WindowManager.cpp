@@ -274,7 +274,7 @@ struct HostedSurfaceWindow : public std::enable_shared_from_this<HostedSurfaceWi
     }
 
     ApplyInitialPlacement();
-    ShowWindow(m_hwnd, SW_SHOW);
+    ShowWindow(m_hwnd, IsWindowPolicyDefaultMaximized(m_launchSurface.Policy) ? SW_MAXIMIZE : SW_SHOW);
     BringWindowToTop(m_hwnd);
     SetForegroundWindow(m_hwnd);
     SetFocus(m_hwnd);

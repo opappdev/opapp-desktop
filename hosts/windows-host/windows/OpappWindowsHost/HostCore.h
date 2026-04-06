@@ -80,6 +80,7 @@ struct WindowPolicyDefinition {
   int MinWidth{960};
   int MinHeight{780};
   std::wstring DefaultPlacement{L"centered"};
+  bool DefaultMaximized{false};
   bool RememberWindowRect{true};
   bool AllowManualResize{true};
   std::map<WindowSizeMode, WindowModeGeometry> Geometry;
@@ -129,6 +130,7 @@ WindowMetrics ResolveWindowMetrics(
     int workAreaHeight,
     WindowPolicyId policy,
     WindowSizeMode mode = WindowSizeMode::Balanced) noexcept;
+bool IsWindowPolicyDefaultMaximized(WindowPolicyId policy) noexcept;
 bool InitializeWindowPolicyRegistry(std::wstring const &appDirectory, bool bundledRuntime) noexcept;
 WindowPreferences LoadWindowPreferences() noexcept;
 bool SaveWindowPreferences(WindowPreferences const &preferences) noexcept;

@@ -269,6 +269,11 @@ std::optional<WindowPolicyDefinition> ParseWindowPolicyDefinition(
   definition.DefaultPlacement = defaultPlacement->c_str();
   definition.RememberWindowRect = *rememberWindowRect;
   definition.AllowManualResize = *allowManualResize;
+
+  // Optional field: defaultMaximized (defaults to false if absent)
+  auto defaultMaximized = TryJsonValue<bool>([&]() { return policyObject.GetNamedBoolean(L"defaultMaximized"); });
+  definition.DefaultMaximized = defaultMaximized.value_or(false);
+
   definition.Geometry = {
       {WindowSizeMode::Balanced, *balanced},
       {WindowSizeMode::Compact, *compact},
@@ -319,6 +324,13 @@ std::optional<WindowPolicyRegistry> LoadWindowPolicyRegistryFromPath(
 }
 
 } // namespace
+
+bool IsWindowPolicyDefaultMaximized(WindowPolicyId policy) noexcept {
+  if (auto definition = FindWindowPolicyDefinition(policy)) {
+    return definition->DefaultMaximized;
+  }
+  return false;
+}
 
 WindowSizeMode ResolveWindowSizeMode(
     WindowPolicyId policy,
