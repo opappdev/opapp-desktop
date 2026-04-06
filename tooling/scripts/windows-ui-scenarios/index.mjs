@@ -16,5 +16,6 @@ export {
   createAgentWorkbenchApprovalSpec,
   createAgentWorkbenchRetryRestoreSpec,
   createAgentWorkbenchSpec,
+  createAgentWorkbenchWorkspaceManagementSpec,
 } from './agent-workbench.mjs';
 export {createLlmChatSpec} from './llm-chat.mjs';

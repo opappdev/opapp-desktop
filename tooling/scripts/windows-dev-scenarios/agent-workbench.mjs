@@ -20,6 +20,7 @@ export function createAgentWorkbenchDevScenarios({
   createAgentWorkbenchApprovalSpec,
   createAgentWorkbenchRetryRestoreSpec,
   createAgentWorkbenchSpec,
+  createAgentWorkbenchWorkspaceManagementSpec,
   prepareAgentWorkbenchSmokeState,
   verifyDevPreferencesPath,
 }) {
@@ -65,6 +66,24 @@ export function createAgentWorkbenchDevScenarios({
       },
       successSummary:
         'Metro-backed Windows host completed current-window agent-workbench startup smoke.',
+    },
+    {
+      name: 'companion-agent-workbench-workspace-management-current-window',
+      description:
+        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises trusted workspace clear/recovery flow',
+      smokeMarkers: baseSmokeMarkers,
+      async prepareState() {
+        return await prepareAgentWorkbenchSmokeState();
+      },
+      launchConfig: baseLaunchConfig,
+      async cleanupState(state) {
+        await cleanupAgentWorkbenchSmokeState(state);
+      },
+      async buildUiSpec() {
+        return await createAgentWorkbenchWorkspaceManagementSpec({});
+      },
+      successSummary:
+        'Metro-backed Windows host completed current-window agent-workbench workspace management smoke.',
     },
     {
       name: 'companion-agent-workbench-approval-approve-current-window',

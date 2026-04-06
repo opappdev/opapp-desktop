@@ -548,3 +548,121 @@ export async function createAgentWorkbenchRetryRestoreSpec({
     ],
   };
 }
+
+export async function createAgentWorkbenchWorkspaceManagementSpec({
+  window = windows.main,
+}) {
+  return {
+    name: 'agent-workbench-workspace-management',
+    defaultTimeoutMs: defaultStepTimeoutMs,
+    steps: [
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.action.run-git-status'),
+      ),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId(
+          'agent-workbench.action.toggle-workspace-selector',
+        ),
+      },
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.workspace.opapp-frontend'),
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.detail.selected-cwd'),
+        matcher: {
+          includes: 'opapp-frontend',
+        },
+      },
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.run-git-status'),
+      },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
+        matcher: {
+          enabled: true,
+        },
+      }),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.run.command'),
+        matcher: {
+          includes: 'git status',
+        },
+      },
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.terminal.transcript'),
+        matcher: {
+          includes: '[exit 0]',
+        },
+        timeoutMs: defaultChatResponseTimeoutMs,
+      },
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId(
+          'agent-workbench.action.toggle-workspace-management',
+        ),
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.workspace.root-input'),
+      ),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId(
+          'agent-workbench.action.clear-trusted-workspace-root',
+        ),
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.action.trust-recovered-workspace-root'),
+      ),
+      {
+        type: 'assertElementMissing',
+        window,
+        locator: byAutomationId(
+          'agent-workbench.action.toggle-workspace-selector',
+        ),
+        timeoutMs: defaultLocatorTimeoutMs,
+      },
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId(
+          'agent-workbench.action.trust-recovered-workspace-root',
+        ),
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.action.toggle-workspace-selector'),
+      ),
+      {
+        type: 'waitText',
+        window,
+        locator: byAutomationId('agent-workbench.detail.selected-cwd'),
+        matcher: {
+          includes: 'opapp-frontend',
+        },
+      },
+    ],
+  };
+}
