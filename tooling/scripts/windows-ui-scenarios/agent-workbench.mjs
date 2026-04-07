@@ -9,6 +9,8 @@ import {
   windows,
 } from './shared.mjs';
 
+const workspaceStatusTaskGoal = '检查工作区状态';
+
 function createLatestGroupedToolCardAssertionSteps({
   window,
   scrollLabel,
@@ -71,6 +73,55 @@ function createLatestGroupedToolCardAssertionSteps({
   ];
 }
 
+function createSubmitWorkspaceStatusTaskSteps({
+  window,
+}) {
+  return [
+    {
+      type: 'setValue',
+      window,
+      locator: byAutomationId('agent-workbench.task.goal-input'),
+      value: workspaceStatusTaskGoal,
+    },
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.task.goal-input'),
+      matcher: {
+        includes: workspaceStatusTaskGoal,
+      },
+    },
+    waitForElementState({
+      window,
+      locator: byAutomationId('agent-workbench.action.start-draft-task'),
+      matcher: {
+        enabled: true,
+      },
+    }),
+    {
+      type: 'click',
+      window,
+      locator: byAutomationId('agent-workbench.action.start-draft-task'),
+    },
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.run.command'),
+      matcher: {
+        includes: 'git status',
+      },
+    },
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.terminal.transcript'),
+      matcher: {
+        includes: 'git status',
+      },
+    },
+  ];
+}
+
 export async function createAgentWorkbenchSpec({
   window = windows.main,
 }) {
@@ -90,47 +141,9 @@ export async function createAgentWorkbenchSpec({
           includes: 'opapp-frontend',
         },
       },
-      {
-        type: 'click',
+      ...createSubmitWorkspaceStatusTaskSteps({
         window,
-        locator: byAutomationId('agent-workbench.action.run-git-status'),
-      },
-      {
-        type: 'waitText',
-        window,
-        locator: byAutomationId('agent-workbench.task.goal-input'),
-        matcher: {
-          includes: '检查工作区状态',
-        },
-      },
-      waitForElementState({
-        window,
-        locator: byAutomationId('agent-workbench.action.start-draft-task'),
-        matcher: {
-          enabled: true,
-        },
       }),
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.action.start-draft-task'),
-      },
-      {
-        type: 'waitText',
-        window,
-        locator: byAutomationId('agent-workbench.run.command'),
-        matcher: {
-          includes: 'git status',
-        },
-      },
-      {
-        type: 'waitText',
-        window,
-        locator: byAutomationId('agent-workbench.terminal.transcript'),
-        matcher: {
-          includes: 'git status',
-        },
-      },
       ...createLatestGroupedToolCardAssertionSteps({
         window,
         scrollLabel: 'scroll-to-tool-timeline',
@@ -292,46 +305,9 @@ export async function createAgentWorkbenchRetryRestoreSpec({
           includes: 'opapp-frontend',
         },
       },
-      waitForElementState({
+      ...createSubmitWorkspaceStatusTaskSteps({
         window,
-        locator: byAutomationId('agent-workbench.action.run-git-status'),
-        matcher: {
-          enabled: true,
-        },
       }),
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.action.run-git-status'),
-      },
-      waitForElementState({
-        window,
-        locator: byAutomationId('agent-workbench.action.start-draft-task'),
-        matcher: {
-          enabled: true,
-        },
-      }),
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.action.start-draft-task'),
-      },
-      {
-        type: 'waitText',
-        window,
-        locator: byAutomationId('agent-workbench.run.command'),
-        matcher: {
-          includes: 'git status',
-        },
-      },
-      {
-        type: 'waitText',
-        window,
-        locator: byAutomationId('agent-workbench.terminal.transcript'),
-        matcher: {
-          includes: 'git status',
-        },
-      },
       {
         type: 'readText',
         window,
@@ -340,7 +316,7 @@ export async function createAgentWorkbenchRetryRestoreSpec({
       },
       waitForElementState({
         window,
-        locator: byAutomationId('agent-workbench.action.run-git-status'),
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
         matcher: {
           enabled: true,
         },
@@ -363,23 +339,9 @@ export async function createAgentWorkbenchRetryRestoreSpec({
           enabled: true,
         },
       }),
-      {
-        type: 'click',
+      ...createSubmitWorkspaceStatusTaskSteps({
         window,
-        locator: byAutomationId('agent-workbench.action.run-git-status'),
-      },
-      waitForElementState({
-        window,
-        locator: byAutomationId('agent-workbench.action.start-draft-task'),
-        matcher: {
-          enabled: true,
-        },
       }),
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.action.start-draft-task'),
-      },
       ...waitForLocator(
         window,
         byAutomationId('agent-workbench.run-history.index-1'),
@@ -537,31 +499,9 @@ export async function createAgentWorkbenchWorkspaceManagementSpec({
           includes: 'opapp-frontend',
         },
       },
-      {
-        type: 'click',
+      ...createSubmitWorkspaceStatusTaskSteps({
         window,
-        locator: byAutomationId('agent-workbench.action.run-git-status'),
-      },
-      waitForElementState({
-        window,
-        locator: byAutomationId('agent-workbench.action.start-draft-task'),
-        matcher: {
-          enabled: true,
-        },
       }),
-      {
-        type: 'click',
-        window,
-        locator: byAutomationId('agent-workbench.action.start-draft-task'),
-      },
-      {
-        type: 'waitText',
-        window,
-        locator: byAutomationId('agent-workbench.run.command'),
-        matcher: {
-          includes: 'git status',
-        },
-      },
       {
         type: 'waitText',
         window,
