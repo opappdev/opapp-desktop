@@ -79,40 +79,9 @@ function createSubmitWorkspaceStatusTaskSteps({
 }) {
   return [
     {
-      type: 'setValue',
+      type: 'click',
       window,
-      locator: byAutomationId('agent-workbench.task.goal-input'),
-      value: workspaceStatusTaskGoal,
-    },
-    {
-      type: 'waitText',
-      window,
-      locator: byAutomationId('agent-workbench.task.goal-input'),
-      matcher: {
-        includes: workspaceStatusTaskGoal,
-      },
-    },
-    {
-      type: 'assertElementMissing',
-      window,
-      locator: byAutomationId('agent-workbench.task.unresolved-hint.detail'),
-      timeoutMs: defaultLocatorTimeoutMs,
-    },
-    {
-      type: 'waitText',
-      window,
-      locator: byAutomationId('agent-workbench.task.resolved-summary.command'),
-      matcher: {
-        includes: 'git status',
-      },
-    },
-    {
-      type: 'waitText',
-      window,
-      locator: byAutomationId('agent-workbench.task.resolved-summary.detail'),
-      matcher: {
-        includes: workspaceStatusTaskGoal,
-      },
+      locator: byAutomationId('agent-workbench.action.run-git-status'),
     },
     waitForElementState({
       window,
@@ -170,15 +139,13 @@ export async function createAgentWorkbenchSpec({
         locator: byAutomationId('agent-workbench.task.goal-input'),
         value: unsupportedTaskGoal,
       },
-      ...waitForLocator(
-        window,
-        byAutomationId('agent-workbench.task.unresolved-hint.detail'),
-      ),
       {
-        type: 'assertElementMissing',
+        type: 'waitText',
         window,
-        locator: byAutomationId('agent-workbench.task.resolved-summary.command'),
-        timeoutMs: defaultLocatorTimeoutMs,
+        locator: byAutomationId('agent-workbench.task.goal-input'),
+        matcher: {
+          includes: unsupportedTaskGoal,
+        },
       },
       waitForElementState({
         window,
