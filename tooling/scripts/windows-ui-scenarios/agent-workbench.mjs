@@ -10,6 +10,7 @@ import {
 } from './shared.mjs';
 
 const workspaceStatusTaskGoal = '检查工作区状态';
+const unsupportedTaskGoal = '帮我总结一下这个仓库';
 
 function createLatestGroupedToolCardAssertionSteps({
   window,
@@ -91,6 +92,28 @@ function createSubmitWorkspaceStatusTaskSteps({
         includes: workspaceStatusTaskGoal,
       },
     },
+    {
+      type: 'assertElementMissing',
+      window,
+      locator: byAutomationId('agent-workbench.task.unresolved-hint.detail'),
+      timeoutMs: defaultLocatorTimeoutMs,
+    },
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.task.resolved-summary.command'),
+      matcher: {
+        includes: 'git status',
+      },
+    },
+    {
+      type: 'waitText',
+      window,
+      locator: byAutomationId('agent-workbench.task.resolved-summary.detail'),
+      matcher: {
+        includes: workspaceStatusTaskGoal,
+      },
+    },
     waitForElementState({
       window,
       locator: byAutomationId('agent-workbench.action.start-draft-task'),
@@ -141,6 +164,29 @@ export async function createAgentWorkbenchSpec({
           includes: 'opapp-frontend',
         },
       },
+      {
+        type: 'setValue',
+        window,
+        locator: byAutomationId('agent-workbench.task.goal-input'),
+        value: unsupportedTaskGoal,
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId('agent-workbench.task.unresolved-hint.detail'),
+      ),
+      {
+        type: 'assertElementMissing',
+        window,
+        locator: byAutomationId('agent-workbench.task.resolved-summary.command'),
+        timeoutMs: defaultLocatorTimeoutMs,
+      },
+      waitForElementState({
+        window,
+        locator: byAutomationId('agent-workbench.action.start-draft-task'),
+        matcher: {
+          enabled: false,
+        },
+      }),
       ...createSubmitWorkspaceStatusTaskSteps({
         window,
       }),
