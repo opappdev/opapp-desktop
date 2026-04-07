@@ -14,6 +14,7 @@ export function createViewShotDevScenarios({
       name: 'view-shot-current-window',
       description:
         'Metro-backed auto-open view-shot lab runs captureRef/captureScreen smoke in the current window',
+      allowInstalledDebugReuse: false,
       smokeMarkers: [
         'InitialOpenSurface surface=companion.view-shot policy=tool presentation=current-window',
         '[frontend-companion] auto-open bundle=opapp.companion.main window=window.main surface=companion.view-shot presentation=current-window targetBundle=opapp.companion.main',
