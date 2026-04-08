@@ -202,6 +202,17 @@ export async function createAgentWorkbenchApprovalSpec({
       {
         type: 'click',
         window,
+        locator: byAutomationId('agent-workbench.action.toggle-command-input'),
+      },
+      ...waitForLocator(
+        window,
+        byAutomationId(
+          'agent-workbench.action.populate-write-approval-draft',
+        ),
+      ),
+      {
+        type: 'click',
+        window,
         locator: byAutomationId(
           'agent-workbench.action.populate-write-approval-draft',
         ),
