@@ -18,6 +18,9 @@ using System;
 using System.Runtime.InteropServices;
 
 public static class OpappUiAutomationNative {
+  public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+  public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
   [StructLayout(LayoutKind.Sequential)]
   public struct RECT {
     public int Left;
@@ -40,6 +43,12 @@ public static class OpappUiAutomationNative {
 
   [DllImport("user32.dll")]
   public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+  [DllImport("user32.dll")]
+  public static extern bool SetCursorPos(int x, int y);
+
+  [DllImport("user32.dll")]
+  public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
 }
 "@
 
@@ -263,7 +272,7 @@ function Get-StepCaptureRequested {
   }
 
   if ($null -ne $spec.debug -and $spec.debug.captureAfterActions) {
-    return @('click', 'setValue', 'sendKeys') -contains $StepType
+    return @('click', 'clickPointer', 'setValue', 'sendKeys') -contains $StepType
   }
 
   return $false
@@ -1037,6 +1046,42 @@ function Invoke-Element {
   throw "Element does not support Invoke/Selection/Toggle patterns."
 }
 
+function Invoke-ElementPointer {
+  param([System.Windows.Automation.AutomationElement]$Element)
+
+  $bounds = Get-RectangleFromBounds $Element.Current.BoundingRectangle
+  if ($null -eq $bounds) {
+    throw 'Element does not expose a clickable bounding rectangle.'
+  }
+
+  $targetX = [int][Math]::Floor($bounds.Left + ($bounds.Width / 2))
+  $targetY = [int][Math]::Floor($bounds.Top + ($bounds.Height / 2))
+  $originalCursorPosition = [System.Windows.Forms.Cursor]::Position
+
+  try {
+    [void][OpappUiAutomationNative]::SetCursorPos($targetX, $targetY)
+    Start-Sleep -Milliseconds 100
+    [OpappUiAutomationNative]::mouse_event(
+      [OpappUiAutomationNative]::MOUSEEVENTF_LEFTDOWN,
+      0,
+      0,
+      0,
+      [UIntPtr]::Zero
+    )
+    Start-Sleep -Milliseconds 60
+    [OpappUiAutomationNative]::mouse_event(
+      [OpappUiAutomationNative]::MOUSEEVENTF_LEFTUP,
+      0,
+      0,
+      0,
+      [UIntPtr]::Zero
+    )
+    Start-Sleep -Milliseconds 180
+  } finally {
+    [System.Windows.Forms.Cursor]::Position = $originalCursorPosition
+  }
+}
+
 function Set-ElementValue {
   param(
     [System.Windows.Automation.AutomationElement]$Element,
@@ -1360,6 +1405,28 @@ try {
 
           Invoke-Element -Element $element
           Start-Sleep -Milliseconds 150
+          return @{
+            text = Read-ElementText -Element $element
+          }
+        }
+      }
+      'clickPointer' {
+        $locatorDescription = Get-LocatorDescription $step.locator
+        $stepOutput = Wait-ForMatch -TimeoutMs $timeoutMs -PollMs $pollMs -FailureMessage "Timed out waiting to pointer-click element: $locatorDescription." -Probe {
+          $element = Resolve-Element -Step $step
+          if ($null -eq $element) {
+            return $null
+          }
+
+          $windowSpec = Get-WindowSpec $step
+          if ($null -ne $windowSpec) {
+            $window = Get-IndexedItem -Items (Get-Windows $windowSpec) -Index $step.index
+            if ($null -ne $window) {
+              Focus-Window -Window $window
+            }
+          }
+
+          Invoke-ElementPointer -Element $element
           return @{
             text = Read-ElementText -Element $element
           }
