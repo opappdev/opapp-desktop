@@ -80,7 +80,11 @@ export async function createBundleLauncherRootSpec({
         saveAs: 'selectedBundleTitleAfterHbrSelection',
       },
       {
-        type: 'clickPointer',
+        // Rows need a real pointer path after the selectable-row polish, but
+        // the disclosure header is a semantic button and may sit near the fold
+        // in CI-sized windows. Use button activation here so UIA does not
+        // pointer-click outside the window.
+        type: 'click',
         window,
         locator: bundleLauncherStartupPreferencesHeaderLocator,
         timeoutMs: defaultLocatorTimeoutMs,
