@@ -64,7 +64,11 @@ export async function createBundleLauncherRootSpec({
         saveAs: 'selectedBundleTitle',
       },
       {
-        type: 'clickPointer',
+        // Public verify runs packaged and portable launches under CI-hosted
+        // windows where pointer coordinates can drift to unrelated windows.
+        // Keep launcher selection on semantic UIA activation so the scenario
+        // survives both launch modes.
+        type: 'click',
         window,
         locator: bundleLauncherHbrRowLocator,
         timeoutMs: defaultLocatorTimeoutMs,
