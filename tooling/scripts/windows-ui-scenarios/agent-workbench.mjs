@@ -11,6 +11,7 @@ import {
 
 const workspaceStatusTaskGoal = '检查工作区状态';
 const unsupportedTaskGoal = '帮我总结一下这个仓库';
+const approvalRejectReason = '当前不允许写入临时文件';
 
 function createLatestGroupedToolCardAssertionSteps({
   window,
@@ -179,10 +180,10 @@ export async function createAgentWorkbenchApprovalSpec({
     );
   }
 
-  const decisionButtonAutomationId =
+  const decisionOptionAutomationId =
     decision === 'approve'
-      ? 'agent-workbench.action.approve-request'
-      : 'agent-workbench.action.reject-request';
+      ? 'agent-workbench.approval.option.approve-once'
+      : 'agent-workbench.approval.option.reject';
   return {
     name: `agent-workbench-approval-${decision}`,
     defaultTimeoutMs: defaultStepTimeoutMs,
@@ -245,41 +246,38 @@ export async function createAgentWorkbenchApprovalSpec({
           minLength: 4,
         },
       },
-      sendKeys({
+      ...waitForLocator(
         window,
-        keys: '{PGDN}',
-        delayMs: 300,
-        label: 'scroll-to-approval-panel',
-      }),
-      waitForElementState({
-        window,
-        locator: byAutomationId('agent-workbench.action.approve-request'),
-        matcher: {
-          enabled: true,
-        },
-      }),
-      waitForElementState({
-        window,
-        locator: byAutomationId('agent-workbench.action.reject-request'),
-        matcher: {
-          enabled: true,
-        },
-      }),
+        byAutomationId('agent-workbench.approval.panel'),
+      ),
       {
         type: 'click',
         window,
-        locator: byAutomationId(decisionButtonAutomationId),
+        locator: byAutomationId(decisionOptionAutomationId),
+      },
+      ...(decision === 'reject'
+        ? [
+            ...waitForLocator(
+              window,
+              byAutomationId('agent-workbench.approval.reject-reason'),
+            ),
+            {
+              type: 'setValue',
+              window,
+              locator: byAutomationId('agent-workbench.approval.reject-reason'),
+              value: approvalRejectReason,
+            },
+          ]
+        : []),
+      {
+        type: 'click',
+        window,
+        locator: byAutomationId('agent-workbench.approval.submit'),
       },
       {
         type: 'assertElementMissing',
         window,
-        locator: byAutomationId('agent-workbench.action.approve-request'),
-        timeoutMs: defaultLocatorTimeoutMs,
-      },
-      {
-        type: 'assertElementMissing',
-        window,
-        locator: byAutomationId('agent-workbench.action.reject-request'),
+        locator: byAutomationId('agent-workbench.approval.panel'),
         timeoutMs: defaultLocatorTimeoutMs,
       },
       waitForElementState({
@@ -304,7 +302,7 @@ export async function createAgentWorkbenchApprovalSpec({
         expectedOutputTexts:
           decision === 'approve'
             ? ['$ Set-Content', '[exit 0]']
-            : ['无文本内容'],
+            : ['用户手动拒绝', approvalRejectReason],
       }),
     ],
   };

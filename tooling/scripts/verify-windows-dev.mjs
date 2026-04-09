@@ -36,6 +36,7 @@ import {
   resolveInstalledPackageLogPathCandidates,
 } from './windows-installed-app-common.mjs';
 import {resolveVerifyDevScenarioLaunchStrategy} from './verify-windows-dev-strategy.mjs';
+import {startAgentWorkbenchLlmSmokeServer} from './agent-workbench-llm-smoke.mjs';
 import {
   createAgentWorkbenchDevScenarios,
   createCompanionChatDevScenarios,
@@ -60,6 +61,7 @@ const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
 const validateOnly = process.argv.includes('--validate-only');
 const skipPrepare = process.argv.includes('--skip-prepare');
 const uiDebugScreenshots = process.argv.includes('--ui-debug-screenshots');
+const liveLlm = process.argv.includes('--live-llm');
 const companionMainBundleId = 'opapp.companion.main';
 const companionChatBundleId = 'opapp.companion.chat';
 const companionAgentWorkbenchSurfaceId = 'companion.agent-workbench';
@@ -79,6 +81,16 @@ const opappUserDataRoot = path.join(
 const agentRuntimeRoot = path.join(opappUserDataRoot, 'agent-runtime');
 const agentRunDocumentsRoot = path.join(agentRuntimeRoot, 'runs');
 const agentThreadIndexPath = path.join(agentRuntimeRoot, 'thread-index.json');
+const agentWorkbenchProviderConfigPath = path.join(
+  agentRuntimeRoot,
+  'llm-provider-config.json',
+);
+const agentWorkbenchLiveEnvPath = path.join(
+  workspaceRoot,
+  '.tmp',
+  'local',
+  'agent-live.env',
+);
 const agentWorkbenchApprovalFixturePath = path.join(
   frontendRoot,
   'tooling',
@@ -102,6 +114,7 @@ const companionStartupTargetPath = path.join(
   'startup',
   'companion-startup-target.json',
 );
+const agentWorkbenchApprovalRejectReason = '当前不允许写入临时文件';
 
 const readinessMarkers = [
   'Runtime=Metro',
@@ -123,6 +136,84 @@ const smokeTimeoutMs = parsePositiveIntegerArg(process.argv, '--smoke-ms', defau
 
 const foregroundWindowTitles = ['OpappWindowsHost', 'Opapp Tool', 'Opapp Settings'];
 const devChatToken = 'opapp-dev-ui-automation';
+
+function parseSimpleEnvFile(raw) {
+  const values = {};
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const value = trimmed.slice(separatorIndex + 1).trim();
+    if (!key) {
+      continue;
+    }
+
+    values[key] = value;
+  }
+
+  return values;
+}
+
+async function resolveAgentWorkbenchProviderSeed() {
+  if (liveLlm) {
+    let rawEnvFile = null;
+    try {
+      rawEnvFile = await readFile(agentWorkbenchLiveEnvPath, 'utf8');
+    } catch (error) {
+      throw new Error(
+        `Windows dev verify failed: --live-llm requires ${agentWorkbenchLiveEnvPath}. ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const values = parseSimpleEnvFile(rawEnvFile);
+    const baseUrl = values.OPAPP_AGENT_LIVE_BASE_URL?.trim();
+    const model = values.OPAPP_AGENT_LIVE_MODEL?.trim();
+    const token = values.OPAPP_AGENT_LIVE_TOKEN?.trim();
+    if (!baseUrl || !model || !token) {
+      throw new Error(
+        `Windows dev verify failed: ${agentWorkbenchLiveEnvPath} must define OPAPP_AGENT_LIVE_BASE_URL, OPAPP_AGENT_LIVE_MODEL, and OPAPP_AGENT_LIVE_TOKEN when --live-llm is enabled.`,
+      );
+    }
+
+    return {
+      close: async () => {},
+      mode: 'live',
+      providerConfig: {
+        providerId: 'agent-workbench-live',
+        label: 'Agent Workbench Live',
+        apiFamily: 'chat-completions',
+        baseUrl,
+        model,
+        token,
+        systemPrompt: values.OPAPP_AGENT_LIVE_SYSTEM_PROMPT?.trim() ?? '',
+      },
+    };
+  }
+
+  const server = await startAgentWorkbenchLlmSmokeServer();
+  return {
+    close: server.close,
+    mode: 'fixture',
+    providerConfig: {
+      providerId: 'agent-workbench-fixture',
+      label: 'Agent Workbench Fixture',
+      apiFamily: 'chat-completions',
+      baseUrl: server.baseUrl,
+      model: server.model,
+      token: server.token,
+      systemPrompt: '',
+    },
+  };
+}
 
 function assertUiSavedPath(value, label) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -330,6 +421,7 @@ async function prepareAgentWorkbenchSmokeState() {
   const approvalFixtureContent = await readOptionalFile(
     agentWorkbenchApprovalFixturePath,
   );
+  const providerSeed = await resolveAgentWorkbenchProviderSeed();
 
   await rm(agentRuntimeRoot, {recursive: true, force: true});
   await mkdir(path.dirname(agentWorkbenchApprovalFixturePath), {recursive: true});
@@ -348,16 +440,23 @@ async function prepareAgentWorkbenchSmokeState() {
     }),
     'utf8',
   );
+  await writeFile(
+    agentWorkbenchProviderConfigPath,
+    JSON.stringify(providerSeed.providerConfig),
+    'utf8',
+  );
   await clearOptionalFile(companionStartupTargetPath);
 
   return {
     agentRuntimeSnapshot,
     approvalFixtureContent,
     legacyStartupTargetContent,
+    providerSeed,
   };
 }
 
 async function cleanupAgentWorkbenchSmokeState(state) {
+  await state?.providerSeed?.close?.();
   await restoreTextTree(agentRuntimeRoot, state?.agentRuntimeSnapshot);
 
   if (typeof state?.approvalFixtureContent === 'string') {
@@ -525,26 +624,44 @@ function assertStructuredAgentTimeline(
     expectedToolResultStatus,
     expectedExitCode,
     commandMarker,
+    expectedAssistantMessageCount = 0,
     outputMarkers = [],
   },
 ) {
   const messageEntries = Array.isArray(runDocument?.timeline)
     ? runDocument.timeline.filter(entry => entry?.kind === 'message')
     : [];
-  if (messageEntries.length !== 1) {
+  const userMessages = messageEntries.filter(entry => entry?.role === 'user');
+  const assistantMessages = messageEntries.filter(
+    entry => entry?.role === 'assistant',
+  );
+  if (userMessages.length !== 1) {
     throw new Error(
-      `Windows dev verify failed: expected exactly 1 message entry in ${failureLabel}, received ${messageEntries.length}.`,
+      `Windows dev verify failed: expected exactly 1 user message entry in ${failureLabel}, received ${userMessages.length}.`,
     );
   }
-  if (messageEntries[0]?.role !== 'user') {
+  if (assistantMessages.length !== expectedAssistantMessageCount) {
     throw new Error(
-      `Windows dev verify failed: expected ${failureLabel} message role to be 'user', received '${messageEntries[0]?.role ?? '<missing>'}'.`,
+      `Windows dev verify failed: expected ${expectedAssistantMessageCount} assistant message entries in ${failureLabel}, received ${assistantMessages.length}.`,
     );
   }
-  if (typeof messageEntries[0]?.content !== 'string' || !messageEntries[0].content.trim()) {
+  if (
+    typeof userMessages[0]?.content !== 'string' ||
+    !userMessages[0].content.trim()
+  ) {
     throw new Error(
-      `Windows dev verify failed: ${failureLabel} message content is empty.`,
+      `Windows dev verify failed: ${failureLabel} user message content is empty.`,
     );
+  }
+  for (const assistantMessage of assistantMessages) {
+    if (
+      typeof assistantMessage?.content !== 'string' ||
+      !assistantMessage.content.trim()
+    ) {
+      throw new Error(
+        `Windows dev verify failed: ${failureLabel} assistant continuation content is empty.`,
+      );
+    }
   }
 
   const planEntries = Array.isArray(runDocument?.timeline)
@@ -864,7 +981,7 @@ async function assertAgentWorkbenchApprovalState({decision}) {
     );
   }
 
-  const expectedRunStatus = decision === 'approve' ? 'completed' : 'cancelled';
+  const expectedRunStatus = 'completed';
   const expectedApprovalStatus =
     decision === 'approve' ? 'approved' : 'rejected';
   const decisionLabel = decision === 'approve' ? 'approved' : 'rejected';
@@ -945,6 +1062,27 @@ async function assertAgentWorkbenchApprovalState({decision}) {
           `Windows dev verify failed: expected the ${decisionLabel} approval entry status to be '${expectedApprovalStatus}', received '${approvalEntry.status ?? '<missing>'}'.`,
         );
       }
+      if (
+        typeof approvalEntry.requestReason !== 'string' ||
+        !approvalEntry.requestReason.trim()
+      ) {
+        throw new Error(
+          `Windows dev verify failed: the ${decisionLabel} approval entry is missing requestReason.`,
+        );
+      }
+      if (
+        typeof approvalEntry.commandText !== 'string' ||
+        !approvalEntry.commandText.includes('agent-workbench-approval-smoke.txt')
+      ) {
+        throw new Error(
+          `Windows dev verify failed: the ${decisionLabel} approval entry commandText no longer targets agent-workbench-approval-smoke.txt.`,
+        );
+      }
+      if (approvalEntry.requestedCwd !== 'opapp-frontend') {
+        throw new Error(
+          `Windows dev verify failed: expected approval requestedCwd to stay on 'opapp-frontend', received '${approvalEntry.requestedCwd ?? '<missing>'}'.`,
+        );
+      }
 
       if (
         threadIndex.threads[0]?.lastRunId &&
@@ -978,8 +1116,14 @@ async function assertAgentWorkbenchApprovalState({decision}) {
           expectedToolResultStatus: 'success',
           expectedExitCode: 0,
           commandMarker: 'agent-workbench-approval-smoke.txt',
+          expectedAssistantMessageCount: 1,
           outputMarkers: ['$ Set-Content', '[exit 0]'],
         });
+        if (approvalEntry.decisionMode !== 'approve-once') {
+          throw new Error(
+            `Windows dev verify failed: approved approval entry decisionMode was '${approvalEntry.decisionMode ?? '<missing>'}' instead of 'approve-once'.`,
+          );
+        }
         if (artifactEntries.length !== 1) {
           throw new Error(
             `Windows dev verify failed: expected exactly 1 artifact entry after approved agent workbench run, received ${artifactEntries.length}.`,
@@ -1035,9 +1179,21 @@ async function assertAgentWorkbenchApprovalState({decision}) {
           failureLabel: 'the rejected agent workbench run',
           expectedToolCallStatus: 'cancelled',
           expectedToolResultStatus: 'cancelled',
-          expectedExitCode: null,
+          expectedExitCode: -1,
           commandMarker: 'agent-workbench-approval-smoke.txt',
+          expectedAssistantMessageCount: 1,
+          outputMarkers: ['用户手动拒绝', agentWorkbenchApprovalRejectReason],
         });
+        if (approvalEntry.decisionMode !== 'reject') {
+          throw new Error(
+            `Windows dev verify failed: rejected approval entry decisionMode was '${approvalEntry.decisionMode ?? '<missing>'}' instead of 'reject'.`,
+          );
+        }
+        if (approvalEntry.decisionNote !== agentWorkbenchApprovalRejectReason) {
+          throw new Error(
+            `Windows dev verify failed: rejected approval entry decisionNote was '${approvalEntry.decisionNote ?? '<missing>'}' instead of '${agentWorkbenchApprovalRejectReason}'.`,
+          );
+        }
         if (terminalEvents.length > 0) {
           throw new Error(
             'Windows dev verify failed: rejected agent workbench approval run should not have started a terminal session.',
@@ -1309,6 +1465,34 @@ async function runDevScenario(scenario, scenarioIndex) {
 
     await prepareScenarioRun(scenario, scenarioState);
 
+    async function waitForScenarioReadiness(currentHostChild) {
+      const ready = await waitForHostLogMarkers(readinessMarkers, readinessTimeoutMs, {
+        failFastOnFatalFrontendError: true,
+        logPathCandidates: resolveHostLogPathCandidates,
+        failFastCheck: () =>
+          detectDeterministicCommandFailureFromHost(currentHostChild, {
+            fallbackOutputPath: hostCommandOutputPath,
+          }),
+      });
+      if (ready.status === 'matched') {
+        return;
+      }
+
+      throw new Error(
+        await buildHostWaitFailureMessage(
+          ready,
+          `Metro-backed host readiness for scenario '${scenario.name}'`,
+          currentHostChild,
+          {
+            hostTailLines: 80,
+            commandTailLines: 120,
+            timeoutMs: readinessTimeoutMs,
+            logPathCandidates: resolveHostLogPathCandidates,
+          },
+        ),
+      );
+    }
+
     if (launchStrategy.launchMode === 'installed-debug-relaunch') {
       log(
         'verify-dev',
@@ -1332,29 +1516,7 @@ async function runDevScenario(scenario, scenarioIndex) {
       }
     }
 
-    const ready = await waitForHostLogMarkers(readinessMarkers, readinessTimeoutMs, {
-      failFastOnFatalFrontendError: true,
-      logPathCandidates: resolveHostLogPathCandidates,
-      failFastCheck: () =>
-        detectDeterministicCommandFailureFromHost(hostChild, {
-          fallbackOutputPath: hostCommandOutputPath,
-        }),
-    });
-    if (ready.status !== 'matched') {
-      throw new Error(
-        await buildHostWaitFailureMessage(
-          ready,
-          `Metro-backed host readiness for scenario '${scenario.name}'`,
-          hostChild,
-          {
-            hostTailLines: 80,
-            commandTailLines: 120,
-            timeoutMs: readinessTimeoutMs,
-            logPathCandidates: resolveHostLogPathCandidates,
-          },
-        ),
-      );
-    }
+    await waitForScenarioReadiness(hostChild);
 
     const foregroundResult = tryPromoteOpappWindowToForeground();
     if (foregroundResult.ok) {
@@ -1367,6 +1529,38 @@ async function runDevScenario(scenario, scenarioIndex) {
         'verify-dev',
         `Foreground assist could not confirm focus for scenario '${scenario.name}'. stdout=${foregroundResult.stdout || '<empty>'} stderr=${foregroundResult.stderr || '<empty>'}`,
       );
+
+      if (launchStrategy.launchMode === 'installed-debug-relaunch') {
+        log(
+          'verify-dev',
+          `Foreground assist fallback: relaunching full Metro-backed host for scenario '${scenario.name}' so UI automation is not blocked by an occluding window.`,
+        );
+        stopHostProcesses();
+        clearHostLog({logPathCandidates: resolveHostLogPathCandidates});
+        await clearOptionalFile(hostCommandOutputPath);
+        hostChild = await spawnCmdAsync('npm run windows', {
+          cwd: hostRoot,
+          env: process.env,
+          label: 'host',
+          outputCapturePath: hostCommandOutputPath,
+        });
+        if (hostChild?.opappSpawnMode) {
+          log('verify-dev', `Host spawn mode: ${hostChild.opappSpawnMode}`);
+        }
+        await waitForScenarioReadiness(hostChild);
+        const retryForegroundResult = tryPromoteOpappWindowToForeground();
+        if (retryForegroundResult.ok) {
+          log(
+            'verify-dev',
+            `Foreground assist confirmed after fallback for scenario '${scenario.name}': ${retryForegroundResult.stdout || 'focused'}`,
+          );
+        } else {
+          log(
+            'verify-dev',
+            `Foreground assist still could not confirm focus for scenario '${scenario.name}' after fallback. stdout=${retryForegroundResult.stdout || '<empty>'} stderr=${retryForegroundResult.stderr || '<empty>'}`,
+          );
+        }
+      }
     }
 
     let uiResult = null;
@@ -1453,15 +1647,16 @@ async function main() {
 
   log('verify-dev', `hostRoot=${hostRoot}`);
   log('verify-dev', `scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
-    log('verify-dev', `scenarioCount=${scenarios.length}`);
-    log('verify-dev', `validateOnly=${validateOnly}`);
-    log('verify-dev', `skipPrepare=${skipPrepare}`);
-    log(
-      'verify-dev',
-      `multiScenarioInstalledDebugReuse=${!skipPrepare && scenarios.length > 1}`,
-    );
-    log('verify-dev', `readinessTimeoutMs=${readinessTimeoutMs}`);
-    log('verify-dev', `smokeTimeoutMs=${smokeTimeoutMs}`);
+  log('verify-dev', `scenarioCount=${scenarios.length}`);
+  log('verify-dev', `validateOnly=${validateOnly}`);
+  log('verify-dev', `skipPrepare=${skipPrepare}`);
+  log('verify-dev', `agentWorkbenchLlmMode=${liveLlm ? 'live' : 'fixture'}`);
+  log(
+    'verify-dev',
+    `multiScenarioInstalledDebugReuse=${!skipPrepare && scenarios.length > 1}`,
+  );
+  log('verify-dev', `readinessTimeoutMs=${readinessTimeoutMs}`);
+  log('verify-dev', `smokeTimeoutMs=${smokeTimeoutMs}`);
 
   if (validateOnly) {
     log('verify-dev', 'validate-only enabled; skipping Metro and host execution.');
@@ -1471,6 +1666,11 @@ async function main() {
   let metroChild = null;
 
   try {
+    if (liveLlm) {
+      const liveProviderSeed = await resolveAgentWorkbenchProviderSeed();
+      await liveProviderSeed.close();
+    }
+
     const metro = await ensureMetroRunning({reuseIfReady: true, label: 'metro'});
     metroChild = metro.child;
     log('verify-dev', `Metro startup outcome: ${describeMetroOutcome(metro)}`);

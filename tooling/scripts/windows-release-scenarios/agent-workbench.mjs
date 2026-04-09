@@ -1,6 +1,7 @@
 import {existsSync} from 'node:fs';
 import {mkdir, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {startAgentWorkbenchLlmSmokeServer} from '../agent-workbench-llm-smoke.mjs';
 
 const defaultStateVerificationTimeoutMs = 10_000;
 const defaultStateVerificationPollMs = 200;
@@ -12,6 +13,7 @@ const agentWorkbenchApprovalFixtureBaseline = [
   'executor=baseline',
   '',
 ].join('\n');
+const agentWorkbenchApprovalRejectReason = '当前不允许写入临时文件';
 
 function assertUiSavedText(value, label) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -180,26 +182,44 @@ function assertStructuredAgentTimeline(
     expectedToolResultStatus,
     expectedExitCode,
     commandMarker,
+    expectedAssistantMessageCount = 0,
     outputMarkers = [],
   },
 ) {
   const messageEntries = Array.isArray(runDocument?.timeline)
     ? runDocument.timeline.filter(entry => entry?.kind === 'message')
     : [];
-  if (messageEntries.length !== 1) {
+  const userMessages = messageEntries.filter(entry => entry?.role === 'user');
+  const assistantMessages = messageEntries.filter(
+    entry => entry?.role === 'assistant',
+  );
+  if (userMessages.length !== 1) {
     throw new Error(
-      `Windows release smoke failed: expected exactly 1 message entry in ${failureLabel}, received ${messageEntries.length}.`,
+      `Windows release smoke failed: expected exactly 1 user message entry in ${failureLabel}, received ${userMessages.length}.`,
     );
   }
-  if (messageEntries[0]?.role !== 'user') {
+  if (assistantMessages.length !== expectedAssistantMessageCount) {
     throw new Error(
-      `Windows release smoke failed: expected ${failureLabel} message role to be 'user', received '${messageEntries[0]?.role ?? '<missing>'}'.`,
+      `Windows release smoke failed: expected ${expectedAssistantMessageCount} assistant message entries in ${failureLabel}, received ${assistantMessages.length}.`,
     );
   }
-  if (typeof messageEntries[0]?.content !== 'string' || !messageEntries[0].content.trim()) {
+  if (
+    typeof userMessages[0]?.content !== 'string' ||
+    !userMessages[0].content.trim()
+  ) {
     throw new Error(
-      `Windows release smoke failed: ${failureLabel} message content is empty.`,
+      `Windows release smoke failed: ${failureLabel} user message content is empty.`,
     );
+  }
+  for (const assistantMessage of assistantMessages) {
+    if (
+      typeof assistantMessage?.content !== 'string' ||
+      !assistantMessage.content.trim()
+    ) {
+      throw new Error(
+        `Windows release smoke failed: ${failureLabel} assistant continuation content is empty.`,
+      );
+    }
   }
 
   const planEntries = Array.isArray(runDocument?.timeline)
@@ -300,6 +320,10 @@ function createAgentWorkbenchRuntimePaths({workspaceRoot, userDataRoot}) {
     agentRuntimeRoot,
     agentRunDocumentsRoot: path.join(agentRuntimeRoot, 'runs'),
     agentThreadIndexPath: path.join(agentRuntimeRoot, 'thread-index.json'),
+    agentWorkbenchProviderConfigPath: path.join(
+      agentRuntimeRoot,
+      'llm-provider-config.json',
+    ),
     agentWorkbenchApprovalFixturePath: path.join(
       workspaceRoot,
       'opapp-frontend',
@@ -325,6 +349,7 @@ async function prepareAgentWorkbenchSmokeState(paths, workspaceRoot) {
   const approvalFixtureContent = await readOptionalFile(
     paths.agentWorkbenchApprovalFixturePath,
   );
+  const providerSeed = await resolveAgentWorkbenchProviderSeed();
 
   await rm(paths.agentRuntimeRoot, {recursive: true, force: true});
   await mkdir(path.dirname(paths.agentWorkbenchApprovalFixturePath), {
@@ -345,16 +370,23 @@ async function prepareAgentWorkbenchSmokeState(paths, workspaceRoot) {
     }),
     'utf8',
   );
+  await writeFile(
+    paths.agentWorkbenchProviderConfigPath,
+    JSON.stringify(providerSeed.providerConfig),
+    'utf8',
+  );
   await clearOptionalFile(paths.companionStartupTargetPath);
 
   return {
     agentRuntimeSnapshot,
     approvalFixtureContent,
     legacyStartupTargetContent,
+    providerSeed,
   };
 }
 
 async function cleanupAgentWorkbenchSmokeState(paths, state) {
+  await state?.providerSeed?.close?.();
   await restoreTextTree(paths.agentRuntimeRoot, state?.agentRuntimeSnapshot);
 
   if (typeof state?.approvalFixtureContent === 'string') {
@@ -750,7 +782,7 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
     );
   }
 
-  const expectedRunStatus = decision === 'approve' ? 'completed' : 'cancelled';
+  const expectedRunStatus = 'completed';
   const expectedApprovalStatus =
     decision === 'approve' ? 'approved' : 'rejected';
   const decisionLabel = decision === 'approve' ? 'approved' : 'rejected';
@@ -831,6 +863,27 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
           `Windows release smoke failed: expected the ${decisionLabel} approval entry status to be '${expectedApprovalStatus}', received '${approvalEntry.status ?? '<missing>'}'.`,
         );
       }
+      if (
+        typeof approvalEntry.requestReason !== 'string' ||
+        !approvalEntry.requestReason.trim()
+      ) {
+        throw new Error(
+          `Windows release smoke failed: the ${decisionLabel} approval entry is missing requestReason.`,
+        );
+      }
+      if (
+        typeof approvalEntry.commandText !== 'string' ||
+        !approvalEntry.commandText.includes('agent-workbench-approval-smoke.txt')
+      ) {
+        throw new Error(
+          `Windows release smoke failed: the ${decisionLabel} approval entry commandText no longer targets agent-workbench-approval-smoke.txt.`,
+        );
+      }
+      if (approvalEntry.requestedCwd !== 'opapp-frontend') {
+        throw new Error(
+          `Windows release smoke failed: expected approval requestedCwd to stay on 'opapp-frontend', received '${approvalEntry.requestedCwd ?? '<missing>'}'.`,
+        );
+      }
 
       if (
         threadIndex.threads[0]?.lastRunId &&
@@ -864,8 +917,14 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
           expectedToolResultStatus: 'success',
           expectedExitCode: 0,
           commandMarker: 'agent-workbench-approval-smoke.txt',
+          expectedAssistantMessageCount: 1,
           outputMarkers: ['$ Set-Content', '[exit 0]'],
         });
+        if (approvalEntry.decisionMode !== 'approve-once') {
+          throw new Error(
+            `Windows release smoke failed: approved approval entry decisionMode was '${approvalEntry.decisionMode ?? '<missing>'}' instead of 'approve-once'.`,
+          );
+        }
         if (artifactEntries.length !== 1) {
           throw new Error(
             `Windows release smoke failed: expected exactly 1 artifact entry after approved agent workbench run, received ${artifactEntries.length}.`,
@@ -920,9 +979,21 @@ async function assertAgentWorkbenchApprovalState(paths, {decision}) {
           failureLabel: 'the rejected agent workbench run',
           expectedToolCallStatus: 'cancelled',
           expectedToolResultStatus: 'cancelled',
-          expectedExitCode: null,
+          expectedExitCode: -1,
           commandMarker: 'agent-workbench-approval-smoke.txt',
+          expectedAssistantMessageCount: 1,
+          outputMarkers: ['用户手动拒绝', agentWorkbenchApprovalRejectReason],
         });
+        if (approvalEntry.decisionMode !== 'reject') {
+          throw new Error(
+            `Windows release smoke failed: rejected approval entry decisionMode was '${approvalEntry.decisionMode ?? '<missing>'}' instead of 'reject'.`,
+          );
+        }
+        if (approvalEntry.decisionNote !== agentWorkbenchApprovalRejectReason) {
+          throw new Error(
+            `Windows release smoke failed: rejected approval entry decisionNote was '${approvalEntry.decisionNote ?? '<missing>'}' instead of '${agentWorkbenchApprovalRejectReason}'.`,
+          );
+        }
         if (terminalEvents.length > 0) {
           throw new Error(
             'Windows release smoke failed: rejected agent workbench approval run should not have started a terminal session.',
@@ -1085,6 +1156,21 @@ export function createAgentWorkbenchReleaseScenarios({
           'agent workbench retry/restore smoke',
         );
       },
+    },
+  };
+}
+async function resolveAgentWorkbenchProviderSeed() {
+  const server = await startAgentWorkbenchLlmSmokeServer();
+  return {
+    close: server.close,
+    providerConfig: {
+      providerId: 'agent-workbench-fixture',
+      label: 'Agent Workbench Fixture',
+      apiFamily: 'chat-completions',
+      baseUrl: server.baseUrl,
+      model: server.model,
+      token: server.token,
+      systemPrompt: '',
     },
   };
 }
