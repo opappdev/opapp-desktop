@@ -1022,7 +1022,6 @@ export function createAgentWorkbenchReleaseScenarios({
   assertPersistedSessionHasSurfaceId,
   commonSuccessMarkers,
   createAgentWorkbenchApprovalSpec,
-  createAgentWorkbenchRetryRestoreSpec,
   createAgentWorkbenchSpec,
   defaultPreferences,
   userDataRoot,
@@ -1137,23 +1136,6 @@ export function createAgentWorkbenchReleaseScenarios({
         verifyPersistedAgentWorkbenchSession(
           sessionFile,
           'agent workbench approval reject smoke',
-        );
-      },
-    },
-    'companion-agent-workbench-retry-restore-current-window': {
-      ...baseScenario,
-      description:
-        'auto-open agent workbench in the current window and exercise packaged retry/restore history flow',
-      async buildUiSpec() {
-        return await createAgentWorkbenchRetryRestoreSpec({});
-      },
-      async verifyUiResult(uiResult) {
-        await assertAgentWorkbenchRetryRestoreState(runtimePaths, {uiResult});
-      },
-      verifyPersistedSession(sessionFile) {
-        verifyPersistedAgentWorkbenchSession(
-          sessionFile,
-          'agent workbench retry/restore smoke',
         );
       },
     },

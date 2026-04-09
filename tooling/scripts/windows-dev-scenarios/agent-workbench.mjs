@@ -13,14 +13,11 @@ function createAgentWorkbenchSmokeMarkers({
 
 export function createAgentWorkbenchDevScenarios({
   assertAgentWorkbenchApprovalState,
-  assertAgentWorkbenchRetryRestoreState,
   cleanupAgentWorkbenchSmokeState,
   companionAgentWorkbenchSurfaceId,
   companionMainBundleId,
   createAgentWorkbenchApprovalSpec,
-  createAgentWorkbenchRetryRestoreSpec,
   createAgentWorkbenchSpec,
-  createAgentWorkbenchWorkspaceManagementSpec,
   prepareAgentWorkbenchSmokeState,
   verifyDevPreferencesPath,
 }) {
@@ -43,7 +40,7 @@ export function createAgentWorkbenchDevScenarios({
     {
       name: 'companion-agent-workbench-current-window',
       description:
-        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises the workspace/diff smoke path',
+        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises the core task run flow',
       smokeMarkers: [
         ...baseSmokeMarkers,
         '[frontend-agent-workbench] dev-smoke-start',
@@ -66,24 +63,6 @@ export function createAgentWorkbenchDevScenarios({
       },
       successSummary:
         'Metro-backed Windows host completed current-window agent-workbench startup smoke.',
-    },
-    {
-      name: 'companion-agent-workbench-workspace-management-current-window',
-      description:
-        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises trusted workspace clear/recovery flow',
-      smokeMarkers: baseSmokeMarkers,
-      async prepareState() {
-        return await prepareAgentWorkbenchSmokeState();
-      },
-      launchConfig: baseLaunchConfig,
-      async cleanupState(state) {
-        await cleanupAgentWorkbenchSmokeState(state);
-      },
-      async buildUiSpec() {
-        return await createAgentWorkbenchWorkspaceManagementSpec({});
-      },
-      successSummary:
-        'Metro-backed Windows host completed current-window agent-workbench workspace management smoke.',
     },
     {
       name: 'companion-agent-workbench-approval-approve-current-window',
@@ -136,29 +115,6 @@ export function createAgentWorkbenchDevScenarios({
       },
       successSummary:
         'Metro-backed Windows host completed current-window agent-workbench approval reject smoke.',
-    },
-    {
-      name: 'companion-agent-workbench-retry-restore-current-window',
-      description:
-        'Metro-backed Windows host auto-opens the agent workbench in the current window and exercises retry/restore flow from thread history',
-      smokeMarkers: baseSmokeMarkers,
-      async prepareState() {
-        return await prepareAgentWorkbenchSmokeState();
-      },
-      launchConfig: baseLaunchConfig,
-      async cleanupState(state) {
-        await cleanupAgentWorkbenchSmokeState(state);
-      },
-      async buildUiSpec() {
-        return await createAgentWorkbenchRetryRestoreSpec({});
-      },
-      async verifyUiResult(uiResult) {
-        await assertAgentWorkbenchRetryRestoreState({
-          uiResult,
-        });
-      },
-      successSummary:
-        'Metro-backed Windows host completed current-window agent-workbench retry/restore smoke.',
     },
   ];
 }

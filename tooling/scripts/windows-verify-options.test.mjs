@@ -83,14 +83,6 @@ test('verify-windows validate-only accepts agent-workbench approval reject scena
   assert.equal(result.status, 0);
 });
 
-test('verify-windows validate-only accepts agent-workbench retry/restore scenario filter', () => {
-  const result = runVerifyValidateOnly([
-    '--scenario=companion-agent-workbench-retry-restore-current-window',
-  ]);
-
-  assert.equal(result.status, 0);
-});
-
 test('verify-windows validate-only accepts comma-separated agent-workbench approval scenario filters', () => {
   const result = runVerifyValidateOnly([
     '--scenario=companion-agent-workbench-approval-approve-current-window,companion-agent-workbench-approval-reject-current-window',

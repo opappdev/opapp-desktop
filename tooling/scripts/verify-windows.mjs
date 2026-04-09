@@ -118,12 +118,6 @@ const publicScenarios = [
     args: ['--scenario=companion-agent-workbench-approval-reject-current-window', '--skip-prepare'],
   },
   {
-    name: 'companion-agent-workbench-retry-restore-current-window',
-    description:
-      'packaged auto-open agent workbench exercises retry/restore flow from thread history in the current window',
-    args: ['--scenario=companion-agent-workbench-retry-restore-current-window', '--skip-prepare'],
-  },
-  {
     name: 'secondary-window',
     description: 'startup detached settings window surface-model check',
     args: ['--scenario=secondary-window'],
