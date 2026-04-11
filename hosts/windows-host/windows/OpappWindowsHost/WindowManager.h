@@ -20,6 +20,13 @@ struct StagedBundleDescriptor {
   std::optional<std::wstring> ProvenanceStagedAt;
 };
 
+struct TitleBarMetrics {
+  bool ExtendsContentIntoTitleBar{false};
+  int32_t Height{0};
+  int32_t LeftInset{0};
+  int32_t RightInset{0};
+};
+
 winrt::Microsoft::ReactNative::JSValueArgWriter CreateLaunchProps(
     LaunchSurfaceConfig const &launchSurface,
     std::optional<AutoOpenSurfaceConfig> const &autoOpenSurface = std::nullopt) noexcept;
@@ -29,6 +36,7 @@ void InitializeWindowManager(
     std::wstring const &appDirectory,
     bool bundledRuntime) noexcept;
 std::optional<std::string> GetCurrentManagedWindowPayload() noexcept;
+std::string GetCurrentTitleBarMetricsPayload() noexcept;
 bool FocusManagedWindow(std::wstring const &windowId) noexcept;
 bool CloseManagedWindow(std::wstring const &windowId) noexcept;
 bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept;

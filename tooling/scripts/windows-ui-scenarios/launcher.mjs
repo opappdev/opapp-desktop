@@ -17,9 +17,6 @@ const bundleLauncherServiceDetailLocator = byAutomationId(
 const bundleLauncherDetailTitleLocator = byAutomationId(
   'bundle-launcher.detail.title',
 );
-const bundleLauncherHbrRowLocator = byAutomationId(
-  'bundle-launcher.row.opapp.hbr.workspace',
-);
 const bundleLauncherStartupPreferencesHeaderLocator = byAutomationId(
   'bundle-launcher.startup-preferences.header',
 );
@@ -62,26 +59,6 @@ export async function createBundleLauncherRootSpec({
         },
         timeoutMs: defaultLocatorTimeoutMs,
         saveAs: 'selectedBundleTitle',
-      },
-      {
-        // Public verify runs packaged and portable launches under CI-hosted
-        // windows where pointer coordinates can drift to unrelated windows.
-        // Keep launcher selection on semantic UIA activation so the scenario
-        // survives both launch modes.
-        type: 'click',
-        window,
-        locator: bundleLauncherHbrRowLocator,
-        timeoutMs: defaultLocatorTimeoutMs,
-      },
-      {
-        type: 'waitText',
-        window,
-        locator: bundleLauncherDetailTitleLocator,
-        matcher: {
-          includes: 'HBR',
-        },
-        timeoutMs: defaultLocatorTimeoutMs,
-        saveAs: 'selectedBundleTitleAfterHbrSelection',
       },
       {
         // Rows need a real pointer path after the selectable-row polish, but

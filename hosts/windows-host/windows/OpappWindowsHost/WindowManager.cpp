@@ -11,10 +11,29 @@
 #include <set>
 #include <cwctype>
 
+#include <dwmapi.h>
 #include <winrt/Windows.Data.Json.h>
+
+#pragma comment(lib, "dwmapi.lib")
 
 namespace OpappWindowsHost {
 namespace {
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+
+#ifndef DWMWA_TEXT_COLOR
+#define DWMWA_TEXT_COLOR 36
+#endif
 
 struct BundleManifestMetadata {
   std::optional<std::wstring> BundleId;
@@ -216,6 +235,164 @@ RECT GetWindowWorkArea(HWND hwnd) noexcept {
   return workArea;
 }
 
+template <typename TValue>
+void TryApplyDwmWindowAttribute(HWND hwnd, DWORD attribute, TValue const &value) noexcept {
+  if (hwnd == nullptr) {
+    return;
+  }
+
+  DwmSetWindowAttribute(
+      hwnd,
+      attribute,
+      &value,
+      static_cast<DWORD>(sizeof(value)));
+}
+
+void ApplyNativeWindowTheme(
+    HWND hwnd,
+    char const *context,
+    std::wstring const &appearancePreset) noexcept {
+  if (hwnd == nullptr) {
+    return;
+  }
+
+  auto normalizedAppearance = NormalizeAppearancePreset(appearancePreset);
+  auto captionColor =
+      normalizedAppearance == L"blossom" ? RGB(250, 244, 249) : RGB(247, 243, 235);
+  auto borderColor =
+      normalizedAppearance == L"blossom" ? RGB(214, 198, 222) : RGB(200, 185, 160);
+  auto textColor =
+      normalizedAppearance == L"blossom" ? RGB(54, 44, 64) : RGB(29, 42, 51);
+  static constexpr BOOL kUseImmersiveDarkMode = FALSE;
+
+  TryApplyDwmWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, kUseImmersiveDarkMode);
+  TryApplyDwmWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, captionColor);
+  TryApplyDwmWindowAttribute(hwnd, DWMWA_BORDER_COLOR, borderColor);
+  TryApplyDwmWindowAttribute(hwnd, DWMWA_TEXT_COLOR, textColor);
+
+  AppendLog(
+      std::string("NativeTitleBarThemeApplied context=") + context +
+      " hwnd=" + std::to_string(reinterpret_cast<uintptr_t>(hwnd)));
+}
+
+winrt::Windows::UI::Color MakeTitleBarColor(
+    uint8_t red,
+    uint8_t green,
+    uint8_t blue,
+    uint8_t alpha = 0xff) noexcept {
+  winrt::Windows::UI::Color color{};
+  color.A = alpha;
+  color.R = red;
+  color.G = green;
+  color.B = blue;
+  return color;
+}
+
+bool ShouldUseCustomTitleBar(
+    LaunchSurfaceConfig const &launchSurface,
+    WindowPreferences const &preferences) noexcept {
+  return
+      NormalizeAppearancePreset(preferences.AppearancePreset) == L"blossom" &&
+      launchSurface.WindowId == L"window.main" &&
+      launchSurface.Policy == WindowPolicyId::Main;
+}
+
+void ApplyDefaultWindowTheme(
+    winrt::Microsoft::UI::Windowing::AppWindow const &appWindow,
+    char const *context) noexcept {
+  try {
+    auto titleBar = appWindow.TitleBar();
+    titleBar.ExtendsContentIntoTitleBar(false);
+    titleBar.PreferredHeightOption(winrt::Microsoft::UI::Windowing::TitleBarHeightOption::Standard);
+    AppendLog(std::string("AppWindowTitleBarThemeApplied context=") + context + " mode=native");
+  } catch (...) {
+    AppendLog(std::string("AppWindowTitleBarThemeApplied context=") + context + " mode=native-fallback");
+  }
+}
+
+void ApplyCustomWindowTheme(
+    winrt::Microsoft::UI::Windowing::AppWindow const &appWindow,
+    char const *context) noexcept {
+  try {
+    auto titleBar = appWindow.TitleBar();
+    auto transparent = MakeTitleBarColor(0, 0, 0, 0);
+    auto foreground = MakeTitleBarColor(61, 50, 72);
+    auto foregroundMuted = MakeTitleBarColor(128, 117, 140);
+    auto hoverBackground = MakeTitleBarColor(244, 226, 236, 0xf4);
+    auto hoverForeground = MakeTitleBarColor(103, 53, 80);
+    auto pressedBackground = MakeTitleBarColor(226, 180, 208, 0xfa);
+    auto pressedForeground = MakeTitleBarColor(88, 40, 69);
+
+    titleBar.ExtendsContentIntoTitleBar(true);
+    titleBar.PreferredHeightOption(winrt::Microsoft::UI::Windowing::TitleBarHeightOption::Tall);
+    titleBar.BackgroundColor(transparent);
+    titleBar.ForegroundColor(foreground);
+    titleBar.InactiveBackgroundColor(transparent);
+    titleBar.InactiveForegroundColor(foregroundMuted);
+    titleBar.ButtonBackgroundColor(transparent);
+    titleBar.ButtonForegroundColor(foreground);
+    titleBar.ButtonHoverBackgroundColor(hoverBackground);
+    titleBar.ButtonHoverForegroundColor(hoverForeground);
+    titleBar.ButtonPressedBackgroundColor(pressedBackground);
+    titleBar.ButtonPressedForegroundColor(pressedForeground);
+    titleBar.ButtonInactiveBackgroundColor(transparent);
+    titleBar.ButtonInactiveForegroundColor(foregroundMuted);
+
+    AppendLog(std::string("AppWindowTitleBarThemeApplied context=") + context + " mode=custom");
+  } catch (...) {
+    AppendLog(std::string("AppWindowTitleBarThemeApplied context=") + context + " mode=custom-fallback");
+  }
+}
+
+void ApplyManagedWindowTheme(
+    winrt::Microsoft::UI::Windowing::AppWindow const &appWindow,
+    HWND hwnd,
+    LaunchSurfaceConfig const &launchSurface,
+    char const *context,
+    WindowPreferences const &preferences) noexcept {
+  ApplyNativeWindowTheme(hwnd, context, preferences.AppearancePreset);
+
+  if (ShouldUseCustomTitleBar(launchSurface, preferences)) {
+    ApplyCustomWindowTheme(appWindow, context);
+    return;
+  }
+
+  ApplyDefaultWindowTheme(appWindow, context);
+}
+
+TitleBarMetrics ReadTitleBarMetrics(
+    winrt::Microsoft::UI::Windowing::AppWindow const &appWindow) noexcept {
+  TitleBarMetrics metrics{};
+
+  try {
+    auto titleBar = appWindow.TitleBar();
+    metrics.ExtendsContentIntoTitleBar = titleBar.ExtendsContentIntoTitleBar();
+    metrics.Height = titleBar.Height();
+    metrics.LeftInset = titleBar.LeftInset();
+    metrics.RightInset = titleBar.RightInset();
+  } catch (...) {
+  }
+
+  return metrics;
+}
+
+std::string SerializeTitleBarMetricsPayload(TitleBarMetrics const &metrics) noexcept {
+  winrt::Windows::Data::Json::JsonObject payload;
+  payload.Insert(
+      L"extendsContentIntoTitleBar",
+      winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(metrics.ExtendsContentIntoTitleBar));
+  payload.Insert(
+      L"height",
+      winrt::Windows::Data::Json::JsonValue::CreateNumberValue(metrics.Height));
+  payload.Insert(
+      L"leftInset",
+      winrt::Windows::Data::Json::JsonValue::CreateNumberValue(metrics.LeftInset));
+  payload.Insert(
+      L"rightInset",
+      winrt::Windows::Data::Json::JsonValue::CreateNumberValue(metrics.RightInset));
+  return ToUtf8(payload.Stringify());
+}
+
 struct HostedSurfaceWindow : public std::enable_shared_from_this<HostedSurfaceWindow> {
   static constexpr PCWSTR WindowClassName = L"OPAPP_SURFACE_WINDOW";
 
@@ -273,6 +450,18 @@ struct HostedSurfaceWindow : public std::enable_shared_from_this<HostedSurfaceWi
       return false;
     }
 
+    try {
+      auto appWindow = winrt::Microsoft::UI::Windowing::AppWindow::GetFromWindowId(
+          winrt::Microsoft::UI::GetWindowIdFromWindow(m_hwnd));
+      ApplyManagedWindowTheme(
+          appWindow,
+          m_hwnd,
+          m_launchSurface,
+          "secondary-window",
+          LoadWindowPreferences());
+    } catch (...) {
+      ApplyNativeWindowTheme(m_hwnd, "secondary-window", LoadWindowPreferences().AppearancePreset);
+    }
     ApplyInitialPlacement();
     ShowWindow(m_hwnd, IsWindowPolicyDefaultMaximized(m_launchSurface.Policy) ? SW_MAXIMIZE : SW_SHOW);
     BringWindowToTop(m_hwnd);
@@ -496,7 +685,7 @@ LRESULT CALLBACK MainWindowDiagnosticWndProc(
 std::optional<std::wstring> ResolveBundleRootPath(
     WindowManagerState const &state,
     std::wstring const &bundleId) noexcept {
-  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+  if (state.AppDirectory.empty()) {
     return std::nullopt;
   }
 
@@ -836,6 +1025,15 @@ std::optional<std::string> GetCurrentManagedWindowPayload() noexcept {
   return std::nullopt;
 }
 
+std::string GetCurrentTitleBarMetricsPayload() noexcept {
+  auto &state = GetWindowManagerState();
+  if (!state.MainAppWindow) {
+    return SerializeTitleBarMetricsPayload(TitleBarMetrics{});
+  }
+
+  return SerializeTitleBarMetricsPayload(ReadTitleBarMetrics(state.MainAppWindow));
+}
+
 bool FocusManagedWindow(std::wstring const &windowId) noexcept {
   auto &state = GetWindowManagerState();
 
@@ -902,8 +1100,8 @@ bool CachedOtaIndexContainsBundle(
 
 bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept {
   auto &state = GetWindowManagerState();
-  if (!state.BundledRuntime) {
-    return true;
+  if (state.AppDirectory.empty()) {
+    return false;
   }
 
   auto normalizedBundleId = bundleId;
@@ -935,7 +1133,7 @@ bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept {
 
 std::optional<std::string> GetCachedOtaRemoteCatalogPayload() noexcept {
   auto &state = GetWindowManagerState();
-  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+  if (state.AppDirectory.empty()) {
     return std::nullopt;
   }
 
@@ -1015,7 +1213,7 @@ std::optional<std::string> GetCachedOtaRemoteCatalogPayload() noexcept {
 std::optional<std::string> GetBundleUpdateStatusesPayload(
     std::vector<std::wstring> const &bundleIds) noexcept {
   auto &state = GetWindowManagerState();
-  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+  if (state.AppDirectory.empty()) {
     return std::nullopt;
   }
 
@@ -1097,7 +1295,7 @@ std::optional<std::string> GetBundleUpdateStatusesPayload(
 std::optional<std::string> RunBundleUpdatePayload(
     std::wstring const &bundleId) noexcept {
   auto &state = GetWindowManagerState();
-  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+  if (state.AppDirectory.empty()) {
     return std::nullopt;
   }
 
@@ -1178,7 +1376,7 @@ std::optional<std::string> RunBundleUpdatePayload(
 std::vector<StagedBundleDescriptor> ListStagedBundles() noexcept {
   std::vector<StagedBundleDescriptor> bundles;
   auto &state = GetWindowManagerState();
-  if (!state.BundledRuntime || state.AppDirectory.empty()) {
+  if (state.AppDirectory.empty()) {
     return bundles;
   }
 
@@ -1317,19 +1515,18 @@ std::optional<std::string> SwitchMainWindowToBundle(
     return "Only the main window supports bundle switching.";
   }
 
-  if (!state.BundledRuntime) {
-    return "Bundle switching is only supported in bundled runtime.";
-  }
-
   auto activeTarget = ExtractActiveSessionTargetFromPayload(sessionPayload);
   if (!activeTarget) {
     return "Invalid session payload.";
   }
 
   auto normalizedBundleId = bundleId.empty() ? std::wstring(L"opapp.companion.main") : bundleId;
-  auto bundleRootPath = ResolveBundleRootPath(state, normalizedBundleId);
+  auto useMetroRuntime = !state.BundledRuntime && normalizedBundleId == L"opapp.companion.main";
+  auto bundleRootPath = useMetroRuntime
+      ? std::optional<std::wstring>{}
+      : ResolveBundleRootPath(state, normalizedBundleId);
   auto entryFile = bundleRootPath ? ReadBundleManifestEntryFile(*bundleRootPath) : std::nullopt;
-  if (normalizedBundleId != L"opapp.companion.main" && (!bundleRootPath || !entryFile)) {
+  if (!useMetroRuntime && normalizedBundleId != L"opapp.companion.main" && (!bundleRootPath || !entryFile)) {
     AppendLog(
         "BundleSwitchRemoteHydration.Start window=" + ToUtf8(windowId) +
         " bundle=" + ToUtf8(normalizedBundleId));
@@ -1341,11 +1538,11 @@ std::optional<std::string> SwitchMainWindowToBundle(
     entryFile = bundleRootPath ? ReadBundleManifestEntryFile(*bundleRootPath) : std::nullopt;
   }
 
-  if (!bundleRootPath) {
+  if (!useMetroRuntime && !bundleRootPath) {
     return "Unable to resolve the target bundle root.";
   }
 
-  if (!entryFile && normalizedBundleId != L"opapp.companion.main") {
+  if (!useMetroRuntime && !entryFile && normalizedBundleId != L"opapp.companion.main") {
     return "Target bundle manifest is missing the entry file.";
   }
 
@@ -1362,17 +1559,60 @@ std::optional<std::string> SwitchMainWindowToBundle(
   if (state.MainAppWindow) {
     state.MainAppWindow.Title(GetWindowTitle(*state.MainLaunchSurface));
     ApplyAppWindowPlacement(state.MainAppWindow, *state.MainLaunchSurface, "WindowRectUpdated");
+    if (auto hwnd = TryGetMainWindowHandle()) {
+      ApplyManagedWindowTheme(
+          state.MainAppWindow,
+          *hwnd,
+          *state.MainLaunchSurface,
+          "main-window-bundle-switch",
+          LoadWindowPreferences());
+    }
   }
 
   auto instanceSettings = state.ReactNativeHost.InstanceSettings();
-  auto jsBundleFile = entryFile.value_or(L"index.windows");
-  instanceSettings.BundleRootPath(bundleRootPath->c_str());
-  instanceSettings.JavaScriptBundleFile(jsBundleFile.c_str());
+  std::wstring jsBundleFile;
+  if (useMetroRuntime) {
+    jsBundleFile = GetMainJavaScriptEntryFile().value_or(L"index");
+    instanceSettings.BundleRootPath(L"");
+    instanceSettings.JavaScriptBundleFile(jsBundleFile.c_str());
+    instanceSettings.UseFastRefresh(true);
+#if _DEBUG
+    instanceSettings.UseDirectDebugger(true);
+    instanceSettings.UseDeveloperSupport(true);
+#else
+    instanceSettings.UseDirectDebugger(false);
+    instanceSettings.UseDeveloperSupport(false);
+#endif
+  } else {
+    jsBundleFile = entryFile.value_or(L"index.windows");
+    instanceSettings.BundleRootPath(bundleRootPath->c_str());
+    instanceSettings.JavaScriptBundleFile(jsBundleFile.c_str());
+    instanceSettings.UseFastRefresh(false);
+#if _DEBUG
+    instanceSettings.UseDirectDebugger(false);
+    instanceSettings.UseDeveloperSupport(false);
+#else
+    instanceSettings.UseDirectDebugger(false);
+    instanceSettings.UseDeveloperSupport(false);
+#endif
+  }
+
+  AppendLog(
+      "BundleSwitchRuntime window=" + ToUtf8(windowId) +
+      " bundle=" + ToUtf8(state.CurrentBundleId) +
+      " mode=" + std::string(useMetroRuntime ? "metro" : "bundle") +
+      (useMetroRuntime
+           ? std::string(" entryFile=") + ToUtf8(jsBundleFile)
+           : std::string(" root=") + ToUtf8(*bundleRootPath) +
+                 " file=" + ToUtf8(jsBundleFile)));
 
   AppendLog(
       "BundleSwitchPrepared window=" + ToUtf8(windowId) + " bundle=" + ToUtf8(state.CurrentBundleId) +
       " surface=" + ToUtf8(activeTarget->SurfaceId) + " policy=" + ToUtf8(activeTarget->Policy) +
-      " root=" + ToUtf8(*bundleRootPath) + " file=" + ToUtf8(jsBundleFile));
+      (useMetroRuntime
+           ? std::string(" runtime=metro entryFile=") + ToUtf8(jsBundleFile)
+           : std::string(" root=") + ToUtf8(*bundleRootPath) +
+                 " file=" + ToUtf8(jsBundleFile)));
 
   state.ReactNativeHost.ReloadInstance();
   AppendLog(
@@ -1452,6 +1692,14 @@ void ConfigureInitialWindow(
   state.MainAppWindow = appWindow;
   state.MainLaunchSurface = launchSurface;
   EnsureMainWindowDiagnosticsHook();
+  if (auto hwnd = TryGetMainWindowHandle()) {
+    ApplyManagedWindowTheme(
+        appWindow,
+        *hwnd,
+        launchSurface,
+        "main-window-initial",
+        LoadWindowPreferences());
+  }
 
   ApplyAppWindowPlacement(appWindow, launchSurface, "WindowRect");
 }
@@ -1469,9 +1717,18 @@ bool ApplySavedPreferencesToCurrentWindow(
     state.MainLaunchSurface->MetricsMode =
         ResolveWindowSizeMode(state.MainLaunchSurface->Policy, preferences);
     ApplyAppWindowPlacement(state.MainAppWindow, *state.MainLaunchSurface, "WindowRectUpdated");
+    if (auto hwnd = TryGetMainWindowHandle()) {
+      ApplyManagedWindowTheme(
+          state.MainAppWindow,
+          *hwnd,
+          *state.MainLaunchSurface,
+          "main-window-preferences",
+          preferences);
+    }
     AppendLog(
         "WindowPreferencesApplied window=" + ToUtf8(currentWindowId) + " mode=" +
-        ToUtf8(state.MainLaunchSurface->MetricsMode));
+        ToUtf8(state.MainLaunchSurface->MetricsMode) + " appearance=" +
+        ToUtf8(NormalizeAppearancePreset(preferences.AppearancePreset)));
     return true;
   }
 
@@ -1482,8 +1739,24 @@ bool ApplySavedPreferencesToCurrentWindow(
 
     auto nextMode = ResolveWindowSizeMode(window->Policy(), preferences);
     window->ApplyMetricsMode(nextMode);
+    if (auto hwnd = window->Hwnd()) {
+      try {
+        auto appWindow = winrt::Microsoft::UI::Windowing::AppWindow::GetFromWindowId(
+            winrt::Microsoft::UI::GetWindowIdFromWindow(hwnd));
+        ApplyManagedWindowTheme(
+            appWindow,
+            hwnd,
+            window->LaunchSurface(),
+            "secondary-window-preferences",
+            preferences);
+      } catch (...) {
+        ApplyNativeWindowTheme(hwnd, "secondary-window-preferences", preferences.AppearancePreset);
+      }
+    }
     AppendLog(
-        "WindowPreferencesApplied window=" + ToUtf8(currentWindowId) + " mode=" + ToUtf8(nextMode));
+        "WindowPreferencesApplied window=" + ToUtf8(currentWindowId) + " mode=" +
+        ToUtf8(nextMode) + " appearance=" +
+        ToUtf8(NormalizeAppearancePreset(preferences.AppearancePreset)));
     return true;
   }
 
@@ -1491,4 +1764,3 @@ bool ApplySavedPreferencesToCurrentWindow(
 }
 
 } // namespace OpappWindowsHost
-

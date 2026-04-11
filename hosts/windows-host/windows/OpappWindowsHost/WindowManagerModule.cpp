@@ -244,11 +244,17 @@ struct OpappWindowManagerModule {
     result.Resolve(OpappWindowsHost::SerializeWindowPreferences(OpappWindowsHost::LoadWindowPreferences()));
   }
 
+  REACT_METHOD(GetTitleBarMetrics, L"getTitleBarMetrics")
+  void GetTitleBarMetrics(winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
+    result.Resolve(OpappWindowsHost::GetCurrentTitleBarMetricsPayload());
+  }
+
   REACT_METHOD(SetWindowPreferences, L"setWindowPreferences")
   void SetWindowPreferences(
       std::string mainWindowMode,
       std::string settingsWindowMode,
       std::string settingsPresentation,
+      std::string appearancePreset,
       std::string currentWindowId,
       winrt::Microsoft::ReactNative::ReactPromise<std::string> &&result) noexcept {
     auto parsedMainWindowMode = OpappWindowsHost::ParseWindowSizeMode(mainWindowMode);
@@ -265,11 +271,14 @@ struct OpappWindowManagerModule {
 
     auto normalizedSettingsPresentation =
         OpappWindowsHost::NormalizeSettingsPresentation(std::wstring(winrt::to_hstring(settingsPresentation)));
+    auto normalizedAppearancePreset =
+        OpappWindowsHost::NormalizeAppearancePreset(std::wstring(winrt::to_hstring(appearancePreset)));
 
     OpappWindowsHost::WindowPreferences preferences{
         *parsedMainWindowMode,
         *parsedSettingsWindowMode,
         normalizedSettingsPresentation,
+        normalizedAppearancePreset,
     };
 
     if (!OpappWindowsHost::SaveWindowPreferences(preferences)) {

@@ -16,13 +16,13 @@ const windowPolicyRegistryPath = path.join(
 
 export const windows = {
   main: {
-    title: 'OpappWindowsHost',
+    titleRegex: '^(OPApp(?: 设置| 工具)?|Opapp(?:WindowsHost| Settings| Tool))$',
   },
   settings: {
     className: 'OPAPP_SURFACE_WINDOW',
   },
   tool: {
-    title: 'Opapp Tool',
+    titleRegex: '^(OPApp 工具|Opapp Tool)$',
   },
 };
 

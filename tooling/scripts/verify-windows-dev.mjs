@@ -66,6 +66,18 @@ const companionMainBundleId = 'opapp.companion.main';
 const companionChatBundleId = 'opapp.companion.chat';
 const companionAgentWorkbenchSurfaceId = 'companion.agent-workbench';
 const companionChatSurfaceId = 'companion.chat.main';
+const frontendBundleRoot = path.join(
+  frontendRoot,
+  '.dist',
+  'bundles',
+  'companion-app',
+  'windows',
+);
+const frontendChatBundleRoot = path.join(
+  frontendBundleRoot,
+  'bundles',
+  companionChatBundleId,
+);
 const packageName = 'OpappWindowsHost';
 const applicationId = 'App';
 const resolveHostLogPathCandidates = () =>
@@ -134,7 +146,14 @@ const readinessTimeoutMs = parsePositiveIntegerArg(
 );
 const smokeTimeoutMs = parsePositiveIntegerArg(process.argv, '--smoke-ms', defaultSmokeTimeoutMs);
 
-const foregroundWindowTitles = ['OpappWindowsHost', 'Opapp Tool', 'Opapp Settings'];
+const foregroundWindowTitles = [
+  'OPApp',
+  'OPApp 工具',
+  'OPApp 设置',
+  'OpappWindowsHost',
+  'Opapp Tool',
+  'Opapp Settings',
+];
 const devChatToken = 'opapp-dev-ui-automation';
 
 function parseSimpleEnvFile(raw) {
@@ -362,6 +381,8 @@ const allScenarios = [
     companionChatSurfaceId,
     createLlmChatSpec,
     devChatToken,
+    frontendRoot,
+    frontendChatBundleRoot,
     tempRoot,
   }),
 ];
@@ -1350,6 +1371,7 @@ function appendConfigSection(content, name, values) {
 function buildLaunchConfigForScenario(launchConfig) {
   let content = `[sessions]\npath=${devSessionsPath}\n`;
   content = appendConfigSection(content, 'preferences', launchConfig.preferences);
+  content = appendConfigSection(content, 'ota', launchConfig.ota);
   content = appendConfigSection(content, 'main', launchConfig.main);
   content = appendConfigSection(content, 'main-props', launchConfig.mainProps);
   content = appendConfigSection(content, 'initial-open', launchConfig.initialOpen);

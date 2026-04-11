@@ -203,24 +203,31 @@ WindowPreferences LoadWindowPreferences() noexcept {
     preferences.SettingsPresentation = NormalizeSettingsPresentation(*settingsPresentation);
   }
 
+  if (auto appearancePreset = ReadPreferencesValue(L"theme", L"appearance-preset")) {
+    preferences.AppearancePreset = NormalizeAppearancePreset(*appearancePreset);
+  }
+
   return preferences;
 }
 
 bool SaveWindowPreferences(WindowPreferences const &preferences) noexcept {
   auto normalizedPresentation = NormalizeSettingsPresentation(preferences.SettingsPresentation);
+  auto normalizedAppearance = NormalizeAppearancePreset(preferences.AppearancePreset);
 
   return WritePreferencesValue(L"window", L"main-mode", WindowSizeModeName(preferences.MainWindowMode).c_str()) &&
       WritePreferencesValue(
           L"window",
           L"settings-mode",
           WindowSizeModeName(preferences.SettingsWindowMode).c_str()) &&
-      WritePreferencesValue(L"surface", L"settings-presentation", normalizedPresentation);
+      WritePreferencesValue(L"surface", L"settings-presentation", normalizedPresentation) &&
+      WritePreferencesValue(L"theme", L"appearance-preset", normalizedAppearance);
 }
 
 std::string SerializeWindowPreferences(WindowPreferences const &preferences) {
   return std::string("{\"mainWindowMode\":\"") + ToUtf8(WindowSizeModeName(preferences.MainWindowMode)) +
       "\",\"settingsWindowMode\":\"" + ToUtf8(WindowSizeModeName(preferences.SettingsWindowMode)) +
       "\",\"settingsPresentation\":\"" + ToUtf8(NormalizeSettingsPresentation(preferences.SettingsPresentation)) +
+      "\",\"appearancePreset\":\"" + ToUtf8(NormalizeAppearancePreset(preferences.AppearancePreset)) +
       "\"}";
 }
 

@@ -32,6 +32,7 @@ struct WindowPreferences {
   WindowSizeMode MainWindowMode{WindowSizeMode::Balanced};
   WindowSizeMode SettingsWindowMode{WindowSizeMode::Balanced};
   std::wstring SettingsPresentation{L"current-window"};
+  std::wstring AppearancePreset{L"classic"};
 };
 
 struct StartupTargetPreference {
@@ -116,6 +117,7 @@ std::optional<WindowSizeMode> ParseWindowSizeMode(std::string const &mode);
 std::optional<ParsedWindowPolicy> ParseWindowPolicy(std::string const &policy);
 std::wstring NormalizeSettingsPresentation(std::wstring presentation);
 std::wstring NormalizeStartupTargetPresentation(std::wstring presentation);
+std::wstring NormalizeAppearancePreset(std::wstring appearancePreset);
 WindowSizeMode ResolveWindowSizeMode(WindowPolicyId policy, WindowPreferences const &preferences) noexcept;
 std::wstring GetWindowTitle(LaunchSurfaceConfig const &launchSurface);
 std::string GetHostLogPath() noexcept;

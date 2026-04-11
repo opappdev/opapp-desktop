@@ -213,16 +213,24 @@ std::wstring NormalizeStartupTargetPresentation(std::wstring presentation) {
   return presentation;
 }
 
+std::wstring NormalizeAppearancePreset(std::wstring appearancePreset) {
+  if (appearancePreset != L"classic" && appearancePreset != L"blossom") {
+    return L"classic";
+  }
+
+  return appearancePreset;
+}
+
 std::wstring GetWindowTitle(LaunchSurfaceConfig const &launchSurface) {
   if (launchSurface.Policy == WindowPolicyId::Settings) {
-    return L"Opapp Settings";
+    return L"OPApp 设置";
   }
 
   if (launchSurface.Policy == WindowPolicyId::Tool) {
-    return L"Opapp Tool";
+    return L"OPApp 工具";
   }
 
-  return L"OpappWindowsHost";
+  return L"OPApp";
 }
 
 void ResetLog() noexcept {
