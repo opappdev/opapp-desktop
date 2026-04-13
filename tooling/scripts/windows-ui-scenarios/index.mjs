@@ -1,5 +1,13 @@
 export {createWindowRectPolicyStep, windows} from './shared.mjs';
-export {createBundleLauncherRootSpec} from './launcher.mjs';
+export {
+  createBundleLauncherAgentWorkbenchRoundTripSpec,
+  createBundleLauncherPostSettingsPointerSwitchSpec,
+  createBundleLauncherPostSettingsViewShotPointerOpenSpec,
+  createBundleLauncherPostSettingsWindowCapturePointerOpenSpec,
+  createBundleLauncherRootSpec,
+  createBundleLauncherSettingsRoundTripSpec,
+  createBundleLauncherStartupPreferenceOpenSpec,
+} from './launcher.mjs';
 export {
   createMainAndDetachedSettingsSpec,
   createSaveMainWindowPreferencesSpec,

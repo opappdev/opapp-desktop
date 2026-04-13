@@ -249,6 +249,69 @@ struct OpappWindowManagerModule {
     result.Resolve(OpappWindowsHost::GetCurrentTitleBarMetricsPayload());
   }
 
+  REACT_METHOD(SetTitleBarPassthroughRects, L"setTitleBarPassthroughRects")
+  void SetTitleBarPassthroughRects(
+      std::string windowId,
+      std::string rectsPayload,
+      winrt::Microsoft::ReactNative::ReactPromise<void> &&result) noexcept {
+    auto targetWindowId = std::wstring(winrt::to_hstring(windowId));
+    if (targetWindowId.empty()) {
+      result.Reject(L"Window ID is required.");
+      return;
+    }
+
+    std::vector<winrt::Windows::Graphics::RectInt32> rects;
+    try {
+      auto parsedPayload = winrt::to_hstring(rectsPayload);
+      if (!parsedPayload.empty()) {
+        auto parsedArray = winrt::Windows::Data::Json::JsonArray::Parse(parsedPayload);
+        rects.reserve(parsedArray.Size());
+        for (uint32_t index = 0; index < parsedArray.Size(); ++index) {
+          auto item = parsedArray.GetAt(index);
+          if (item.ValueType() != winrt::Windows::Data::Json::JsonValueType::Object) {
+            continue;
+          }
+
+          auto rectObject = item.GetObject();
+          auto x = rectObject.GetNamedNumber(L"x", 0.0);
+          auto y = rectObject.GetNamedNumber(L"y", 0.0);
+          auto width = rectObject.GetNamedNumber(L"width", 0.0);
+          auto height = rectObject.GetNamedNumber(L"height", 0.0);
+          if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height)) {
+            continue;
+          }
+
+          auto roundedWidth = static_cast<int32_t>(std::lround(width));
+          auto roundedHeight = static_cast<int32_t>(std::lround(height));
+          if (roundedWidth <= 0 || roundedHeight <= 0) {
+            continue;
+          }
+
+          winrt::Windows::Graphics::RectInt32 rect{};
+          rect.X = static_cast<int32_t>(std::lround(x));
+          rect.Y = static_cast<int32_t>(std::lround(y));
+          rect.Width = roundedWidth;
+          rect.Height = roundedHeight;
+          rects.push_back(rect);
+        }
+      }
+    } catch (...) {
+      result.Reject(L"Invalid title bar passthrough payload.");
+      return;
+    }
+
+    auto reactContext = m_reactContext;
+    reactContext.UIDispatcher().Post(
+        [targetWindowId, rects = std::move(rects), result = std::move(result)]() mutable {
+          if (!OpappWindowsHost::SetManagedWindowTitleBarPassthroughRects(targetWindowId, rects)) {
+            result.Reject(L"Unable to update title bar passthrough rects.");
+            return;
+          }
+
+          result.Resolve();
+        });
+  }
+
   REACT_METHOD(SetWindowPreferences, L"setWindowPreferences")
   void SetWindowPreferences(
       std::string mainWindowMode,

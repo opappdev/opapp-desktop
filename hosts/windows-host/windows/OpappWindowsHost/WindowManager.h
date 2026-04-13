@@ -6,6 +6,7 @@
 
 #include <winrt/Microsoft.ReactNative.h>
 #include <winrt/Microsoft.UI.Windowing.h>
+#include <winrt/Windows.Graphics.h>
 
 #include "HostCore.h"
 
@@ -37,6 +38,9 @@ void InitializeWindowManager(
     bool bundledRuntime) noexcept;
 std::optional<std::string> GetCurrentManagedWindowPayload() noexcept;
 std::string GetCurrentTitleBarMetricsPayload() noexcept;
+bool SetManagedWindowTitleBarPassthroughRects(
+    std::wstring const &windowId,
+    std::vector<winrt::Windows::Graphics::RectInt32> const &rects) noexcept;
 bool FocusManagedWindow(std::wstring const &windowId) noexcept;
 bool CloseManagedWindow(std::wstring const &windowId) noexcept;
 bool CanOpenBundleTarget(std::wstring const &bundleId) noexcept;

@@ -612,6 +612,8 @@ WindowManagerState &GetWindowManagerState() noexcept {
   return state;
 }
 
+std::shared_ptr<HostedSurfaceWindow> FindHostedWindowById(std::wstring const &windowId) noexcept;
+
 std::string DescribeMainWindowHandle(HWND hwnd) noexcept {
   return std::to_string(reinterpret_cast<uintptr_t>(hwnd));
 }
@@ -718,6 +720,72 @@ std::optional<HWND> TryGetMainWindowHandle() noexcept {
       return hwnd;
     }
   } catch (...) {
+  }
+
+  return std::nullopt;
+}
+
+double GetWindowRasterizationScale(HWND hwnd) noexcept {
+  if (hwnd == nullptr) {
+    return 1.0;
+  }
+
+  auto dpi = GetDpiForWindow(hwnd);
+  if (dpi == 0) {
+    return 1.0;
+  }
+
+  return static_cast<double>(dpi) / 96.0;
+}
+
+int32_t ScaleWindowCoordinate(int32_t value, double scale) noexcept {
+  return static_cast<int32_t>(std::lround(static_cast<double>(value) * scale));
+}
+
+winrt::Windows::Graphics::RectInt32 ScalePassthroughRectForWindow(
+    winrt::Windows::Graphics::RectInt32 const &rect,
+    HWND hwnd) noexcept {
+  auto scale = GetWindowRasterizationScale(hwnd);
+  winrt::Windows::Graphics::RectInt32 scaledRect{};
+  scaledRect.X = ScaleWindowCoordinate(rect.X, scale);
+  scaledRect.Y = ScaleWindowCoordinate(rect.Y, scale);
+  scaledRect.Width = std::max(0, ScaleWindowCoordinate(rect.Width, scale));
+  scaledRect.Height = std::max(0, ScaleWindowCoordinate(rect.Height, scale));
+  return scaledRect;
+}
+
+winrt::Microsoft::UI::Windowing::AppWindow TryGetManagedAppWindow(
+    std::wstring const &windowId) noexcept {
+  auto &state = GetWindowManagerState();
+
+  if (state.MainLaunchSurface && state.MainLaunchSurface->WindowId == windowId) {
+    return state.MainAppWindow;
+  }
+
+  if (auto window = FindHostedWindowById(windowId)) {
+    try {
+      return winrt::Microsoft::UI::Windowing::AppWindow::GetFromWindowId(
+          winrt::Microsoft::UI::GetWindowIdFromWindow(window->Hwnd()));
+    } catch (...) {
+      return nullptr;
+    }
+  }
+
+  return nullptr;
+}
+
+std::optional<HWND> TryGetManagedWindowHandle(std::wstring const &windowId) noexcept {
+  auto &state = GetWindowManagerState();
+
+  if (state.MainLaunchSurface && state.MainLaunchSurface->WindowId == windowId) {
+    return TryGetMainWindowHandle();
+  }
+
+  if (auto window = FindHostedWindowById(windowId)) {
+    auto hwnd = window->Hwnd();
+    if (hwnd != nullptr) {
+      return hwnd;
+    }
   }
 
   return std::nullopt;
@@ -1032,6 +1100,56 @@ std::string GetCurrentTitleBarMetricsPayload() noexcept {
   }
 
   return SerializeTitleBarMetricsPayload(ReadTitleBarMetrics(state.MainAppWindow));
+}
+
+bool SetManagedWindowTitleBarPassthroughRects(
+    std::wstring const &windowId,
+    std::vector<winrt::Windows::Graphics::RectInt32> const &rects) noexcept {
+  if (windowId.empty()) {
+    return false;
+  }
+
+  auto appWindow = TryGetManagedAppWindow(windowId);
+  auto hwnd = TryGetManagedWindowHandle(windowId);
+  if (!appWindow || !hwnd) {
+    return false;
+  }
+
+  try {
+    auto inputSource =
+        winrt::Microsoft::UI::Input::InputNonClientPointerSource::GetForWindowId(appWindow.Id());
+    inputSource.ClearRegionRects(winrt::Microsoft::UI::Input::NonClientRegionKind::Passthrough);
+
+    auto titleBarMetrics = ReadTitleBarMetrics(appWindow);
+    if (!titleBarMetrics.ExtendsContentIntoTitleBar || rects.empty()) {
+      AppendLog("TitleBarPassthroughRectsCleared window=" + ToUtf8(windowId));
+      return true;
+    }
+
+    std::vector<winrt::Windows::Graphics::RectInt32> scaledRects;
+    scaledRects.reserve(rects.size());
+    for (auto const &rect : rects) {
+      if (rect.Width <= 0 || rect.Height <= 0) {
+        continue;
+      }
+
+      scaledRects.push_back(ScalePassthroughRectForWindow(rect, *hwnd));
+    }
+
+    if (!scaledRects.empty()) {
+      inputSource.SetRegionRects(
+          winrt::Microsoft::UI::Input::NonClientRegionKind::Passthrough,
+          scaledRects);
+    }
+
+    AppendLog(
+        "TitleBarPassthroughRectsApplied window=" + ToUtf8(windowId) +
+        " count=" + std::to_string(scaledRects.size()));
+    return true;
+  } catch (...) {
+    AppendLog("TitleBarPassthroughRectsFailed window=" + ToUtf8(windowId));
+    return false;
+  }
 }
 
 bool FocusManagedWindow(std::wstring const &windowId) noexcept {

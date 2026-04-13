@@ -40,6 +40,7 @@ import {startAgentWorkbenchLlmSmokeServer} from './agent-workbench-llm-smoke.mjs
 import {
   createAgentWorkbenchDevScenarios,
   createCompanionChatDevScenarios,
+  createLauncherDevScenarios,
   createViewShotDevScenarios,
   createWindowCaptureDevScenarios,
 } from './windows-dev-scenarios/index.mjs';
@@ -49,6 +50,12 @@ import {
   createAgentWorkbenchRetryRestoreSpec,
   createAgentWorkbenchSpec,
   createAgentWorkbenchWorkspaceManagementSpec,
+  createBundleLauncherAgentWorkbenchRoundTripSpec,
+  createBundleLauncherPostSettingsPointerSwitchSpec,
+  createBundleLauncherPostSettingsViewShotPointerOpenSpec,
+  createBundleLauncherPostSettingsWindowCapturePointerOpenSpec,
+  createBundleLauncherSettingsRoundTripSpec,
+  createBundleLauncherStartupPreferenceOpenSpec,
   createLlmChatSpec,
   createViewShotCaptureRefSpec,
   createViewShotDataUriAndScreenSpec,
@@ -345,6 +352,20 @@ function applyUiDebugOptions(uiSpec) {
 }
 
 const allScenarios = [
+  ...createLauncherDevScenarios({
+    clearOptionalFile,
+    companionStartupTargetPath,
+    createBundleLauncherAgentWorkbenchRoundTripSpec,
+    createBundleLauncherPostSettingsPointerSwitchSpec,
+    createBundleLauncherPostSettingsViewShotPointerOpenSpec,
+    createBundleLauncherPostSettingsWindowCapturePointerOpenSpec,
+    createBundleLauncherSettingsRoundTripSpec,
+    createBundleLauncherStartupPreferenceOpenSpec,
+    mkdir,
+    readOptionalFile,
+    verifyDevPreferencesPath,
+    writeFile,
+  }),
   ...createViewShotDevScenarios({
     assertPngCaptureLooksOpaque,
     assertUiSavedDataUri,

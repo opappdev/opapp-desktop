@@ -26,12 +26,14 @@
 #include <winrt/Microsoft.UI.Composition.h>
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/Microsoft.UI.Input.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.interop.h>
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Windows.UI.h>
 
 // C RunTime Header Files
+#include <cmath>
 #include <malloc.h>
 #include <memory.h>
 #include <stdlib.h>
