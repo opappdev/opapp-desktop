@@ -11,6 +11,7 @@ import {loadTimeoutDefaultsForLaunch} from './windows-timeout-defaults.mjs';
 const includeSecondaryWindowOnly = process.argv.includes('--include-secondary-window');
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
+const listScenarios = process.argv.includes('--list-scenarios');
 const validateOnly = process.argv.includes('--validate-only');
 const preflightOnly = process.argv.includes('--preflight-only');
 const skipTypecheck = process.argv.includes('--skip-typecheck');
@@ -503,7 +504,37 @@ function verifyPackagedScenarios(scenarios) {
   return scenarioTimings;
 }
 
+function printScenarioList(scenarios) {
+  const publicDefaultScenarioNames = new Set(publicScenarios.map(scenario => scenario.name));
+  const publicOptionalScenarioNames = new Set(
+    publicOptionalScenarios.map(scenario => scenario.name),
+  );
+  const privateScenarioNames = new Set(
+    privateVerifyScenarios.map(scenario => scenario.name),
+  );
+
+  console.log('Available packaged Windows verify scenarios:');
+  for (const scenario of scenarios) {
+    let scope = 'default';
+    if (publicOptionalScenarioNames.has(scenario.name)) {
+      scope = 'optional';
+    } else if (privateScenarioNames.has(scenario.name)) {
+      scope = publicDefaultScenarioNames.has(scenario.name)
+        ? 'default+private'
+        : 'private';
+    }
+
+    console.log(`- [${scope}] ${scenario.name}: ${scenario.description}`);
+  }
+}
+
 function main() {
+  if (listScenarios) {
+    const scenarios = scenarioFilterArg ? resolveScenariosOrThrow() : allScenarios;
+    printScenarioList(scenarios);
+    return;
+  }
+
   const scenarios = resolveScenariosOrThrow();
 
   log(`repoRoot=${repoRoot}`);
@@ -513,6 +544,7 @@ function main() {
   log(`scenarioCount=${scenarios.length}`);
   log(`optionalPrivateScenarioModulePath=${optionalPrivateScenarioModulePath}`);
   log(`optionalPrivateScenarioCount=${privateVerifyScenarios.length}`);
+  log(`listScenarios=${listScenarios}`);
   log(`validateOnly=${validateOnly}`);
   log(`preflightOnly=${preflightOnly}`);
   log(`skipTypecheck=${skipTypecheck}`);

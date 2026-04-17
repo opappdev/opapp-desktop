@@ -65,6 +65,7 @@ import {
 
 const scenarioFilterToken = process.argv.find(argument => argument.startsWith('--scenario='));
 const scenarioFilterArg = scenarioFilterToken?.split('=')[1];
+const listScenarios = process.argv.includes('--list-scenarios');
 const validateOnly = process.argv.includes('--validate-only');
 const skipPrepare = process.argv.includes('--skip-prepare');
 const uiDebugScreenshots = process.argv.includes('--ui-debug-screenshots');
@@ -1678,6 +1679,15 @@ async function runDevScenario(scenario, scenarioIndex) {
 }
 
 async function main() {
+  if (listScenarios) {
+    const scenarios = scenarioFilterArg ? resolveScenariosOrThrow() : allScenarios;
+    console.log('Available Metro-backed Windows verify scenarios:');
+    for (const scenario of scenarios) {
+      console.log(`- ${scenario.name}: ${scenario.description}`);
+    }
+    return;
+  }
+
   const scenarios = resolveScenariosOrThrow();
 
   ensureWorkspaceTemp();
@@ -1691,6 +1701,7 @@ async function main() {
   log('verify-dev', `hostRoot=${hostRoot}`);
   log('verify-dev', `scenarioFilterName=${scenarioFilterArg ?? '<all>'}`);
   log('verify-dev', `scenarioCount=${scenarios.length}`);
+  log('verify-dev', `listScenarios=${listScenarios}`);
   log('verify-dev', `validateOnly=${validateOnly}`);
   log('verify-dev', `skipPrepare=${skipPrepare}`);
   log('verify-dev', `agentWorkbenchLlmMode=${liveLlm ? 'live' : 'fixture'}`);
