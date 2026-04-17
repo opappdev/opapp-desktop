@@ -58,7 +58,13 @@ export function createLauncherAndSettingsReleaseScenarios({
   buildPersistedSessionFile,
   commonSuccessMarkers,
   companionStartupTargetPath,
+  createBundleLauncherAgentWorkbenchRoundTripSpec,
+  createBundleLauncherPostSettingsPointerSwitchSpec,
+  createBundleLauncherPostSettingsViewShotPointerOpenSpec,
+  createBundleLauncherPostSettingsWindowCapturePointerOpenSpec,
   createBundleLauncherRootSpec,
+  createBundleLauncherSettingsRoundTripSpec,
+  createBundleLauncherStartupPreferenceOpenSpec,
   createMainAndDetachedSettingsSpec,
   createSaveMainWindowPreferencesSpec,
   createSettingsRootSpec,
@@ -79,6 +85,29 @@ export function createLauncherAndSettingsReleaseScenarios({
   sessionsPath,
   writeFile,
 }) {
+  const createLauncherCurrentWindowUiScenario = ({
+    description,
+    buildUiSpec,
+    finalSurfaceId,
+    persistedSurfaceReason,
+  }) => ({
+    description,
+    preferences: defaultPreferences,
+    launchConfig: {},
+    successMarkers: [...commonSuccessMarkers],
+    async buildUiSpec() {
+      return await buildUiSpec();
+    },
+    verifyPersistedSession(sessionFile) {
+      assertPersistedSessionHasSurfaceId(
+        sessionFile,
+        'window.main',
+        finalSurfaceId,
+        persistedSurfaceReason,
+      );
+    },
+  });
+
   return {
     'main-window-bootstrap-compact': {
       description: 'saved main window mode is applied during startup bootstrap',
@@ -487,6 +516,69 @@ export function createLauncherAndSettingsReleaseScenarios({
         );
       },
     },
+    'launcher-agent-workbench-current-window': createLauncherCurrentWindowUiScenario(
+      {
+        description:
+          'packaged launcher opens Agent Workbench from the home action and returns to the launcher in the current window',
+        buildUiSpec: async () =>
+          await createBundleLauncherAgentWorkbenchRoundTripSpec({}),
+        finalSurfaceId: 'companion.main',
+        persistedSurfaceReason:
+          'launcher Agent Workbench round-trip did not persist the launcher surface back into the main window session.',
+      },
+    ),
+    'launcher-startup-preference-open-current-window':
+      createLauncherCurrentWindowUiScenario({
+        description:
+          'packaged launcher opens the selected startup preference entry in the current window without requiring a second click',
+        buildUiSpec: async () =>
+          await createBundleLauncherStartupPreferenceOpenSpec({}),
+        finalSurfaceId: 'companion.main',
+        persistedSurfaceReason:
+          'launcher startup-preference open flow did not persist the launcher surface back into the main window session after returning home.',
+      }),
+    'launcher-settings-round-trip-current-window':
+      createLauncherCurrentWindowUiScenario({
+        description:
+          'packaged launcher reopens Settings from startup preferences after returning home without requiring a second click',
+        buildUiSpec: async () =>
+          await createBundleLauncherSettingsRoundTripSpec({}),
+        finalSurfaceId: 'companion.settings',
+        persistedSurfaceReason:
+          'launcher settings round-trip did not persist the reopened settings surface into the main window session.',
+      }),
+    'launcher-post-settings-pointer-switch-current-window':
+      createLauncherCurrentWindowUiScenario({
+        description:
+          'packaged launcher supports pointer-driven startup target switching after returning home from Settings',
+        buildUiSpec: async () =>
+          await createBundleLauncherPostSettingsPointerSwitchSpec({}),
+        finalSurfaceId: 'companion.agent-workbench',
+        persistedSurfaceReason:
+          'launcher pointer-driven startup target switching did not persist the Agent Workbench surface into the main window session.',
+      }),
+    'launcher-post-settings-view-shot-pointer-open-current-window':
+      createLauncherCurrentWindowUiScenario({
+        description:
+          'packaged launcher opens View Shot from startup preferences after returning home from Settings with pointer input',
+        buildUiSpec: async () =>
+          await createBundleLauncherPostSettingsViewShotPointerOpenSpec({}),
+        finalSurfaceId: 'companion.view-shot',
+        persistedSurfaceReason:
+          'launcher post-settings View Shot open flow did not persist the View Shot surface into the main window session.',
+      }),
+    'launcher-post-settings-window-capture-pointer-open-current-window':
+      createLauncherCurrentWindowUiScenario({
+        description:
+          'packaged launcher opens Window Capture from startup preferences after returning home from Settings with pointer input',
+        buildUiSpec: async () =>
+          await createBundleLauncherPostSettingsWindowCapturePointerOpenSpec(
+            {},
+          ),
+        finalSurfaceId: 'companion.window-capture',
+        persistedSurfaceReason:
+          'launcher post-settings Window Capture open flow did not persist the Window Capture surface into the main window session.',
+      }),
     'settings-default-current-window': {
       description:
         'saved settings preference keeps default settings entry in the current window',

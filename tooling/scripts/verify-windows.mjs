@@ -70,6 +70,42 @@ const publicScenarios = [
     args: ['--scenario=startup-target-settings', '--skip-prepare'],
   },
   {
+    name: 'launcher-agent-workbench-current-window',
+    description:
+      'packaged launcher opens Agent Workbench from the home action button and returns to the launcher in the current window',
+    args: ['--scenario=launcher-agent-workbench-current-window', '--skip-prepare'],
+  },
+  {
+    name: 'launcher-startup-preference-open-current-window',
+    description:
+      'packaged launcher opens the selected startup preference entry in the current window without requiring a second click',
+    args: ['--scenario=launcher-startup-preference-open-current-window', '--skip-prepare'],
+  },
+  {
+    name: 'launcher-settings-round-trip-current-window',
+    description:
+      'packaged launcher reopens Settings from startup preferences after returning home without requiring a second click',
+    args: ['--scenario=launcher-settings-round-trip-current-window', '--skip-prepare'],
+  },
+  {
+    name: 'launcher-post-settings-pointer-switch-current-window',
+    description:
+      'packaged launcher supports pointer-driven startup target switching after returning home from Settings',
+    args: ['--scenario=launcher-post-settings-pointer-switch-current-window', '--skip-prepare'],
+  },
+  {
+    name: 'launcher-post-settings-view-shot-pointer-open-current-window',
+    description:
+      'packaged launcher opens View Shot from startup preferences after returning home from Settings with pointer input',
+    args: ['--scenario=launcher-post-settings-view-shot-pointer-open-current-window', '--skip-prepare'],
+  },
+  {
+    name: 'launcher-post-settings-window-capture-pointer-open-current-window',
+    description:
+      'packaged launcher opens Window Capture from startup preferences after returning home from Settings with pointer input',
+    args: ['--scenario=launcher-post-settings-window-capture-pointer-open-current-window', '--skip-prepare'],
+  },
+  {
     name: 'settings-default-new-window',
     description: 'saved settings preference opens the default settings entry in a detached window and seeds a detached session',
     args: ['--scenario=settings-default-new-window', '--skip-prepare', '--preserve-state', '--reset-sessions'],
