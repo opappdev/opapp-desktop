@@ -30,6 +30,9 @@
     <ClInclude Include="HostCore.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ScenePreviewWindow.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="WindowManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -42,6 +45,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="HostCore.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ScenePreviewModule.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ScenePreviewWindow.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="WindowPolicyRegistry.cpp">

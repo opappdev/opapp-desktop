@@ -4,6 +4,7 @@
 #include "pch.h"
 #include "OpappWindowsHost.h"
 #include "HostCore.h"
+#include "ScenePreviewWindow.h"
 #include "WindowManager.h"
 
 #include <MddBootstrap.h>
@@ -2431,6 +2432,17 @@ _Use_decl_annotations_ int CALLBACK WinMain(HINSTANCE /*instance*/, HINSTANCE, P
     WCHAR appDirectory[MAX_PATH];
     GetModuleFileNameW(NULL, appDirectory, MAX_PATH);
     PathCchRemoveFileSpec(appDirectory, MAX_PATH);
+
+    if (auto scenePreviewFile = GetScenePreviewFile()) {
+      AppendLog("ScenePreview.Bootstrap file=" + ToUtf8(*scenePreviewFile));
+      if (auto error = RunScenePreviewWindow(*scenePreviewFile)) {
+        AppendLog("ScenePreview.BootstrapFailed reason=" + *error);
+        return -1;
+      }
+
+      AppendLog("ScenePreview.Bootstrap.Done");
+      return 0;
+    }
 
     // RFC-013: Run the crash watchdog guard synchronously before loading any
     // bundle.  If it exits with code 2 a rollback was performed; the current

@@ -297,6 +297,10 @@ bool ShouldUseCustomTitleBar(
       launchSurface.Policy == WindowPolicyId::Main;
 }
 
+bool IsOverlayWindowPolicy(WindowPolicyId policy) noexcept {
+  return policy == WindowPolicyId::Overlay;
+}
+
 void ApplyDefaultWindowTheme(
     winrt::Microsoft::UI::Windowing::AppWindow const &appWindow,
     char const *context) noexcept {
@@ -344,6 +348,35 @@ void ApplyCustomWindowTheme(
   }
 }
 
+void ApplyOverlayWindowTheme(
+    winrt::Microsoft::UI::Windowing::AppWindow const &appWindow,
+    char const *context) noexcept {
+  try {
+    auto presenter = winrt::Microsoft::UI::Windowing::OverlappedPresenter::CreateForToolWindow();
+    presenter.SetBorderAndTitleBar(false, false);
+    presenter.IsAlwaysOnTop(true);
+    presenter.IsMaximizable(false);
+    presenter.IsMinimizable(false);
+    presenter.IsResizable(false);
+    appWindow.SetPresenter(presenter);
+
+    AppendLog(std::string("AppWindowTitleBarThemeApplied context=") + context + " mode=overlay");
+  } catch (winrt::hresult_error const &error) {
+    AppendLog(
+        std::string("AppWindowTitleBarThemeFailed context=") + context + " mode=overlay code=" +
+        std::to_string(static_cast<int32_t>(error.code().value)) + " message=" +
+        ToUtf8(error.message()));
+    AppendLog(std::string("AppWindowTitleBarThemeApplied context=") + context + " mode=overlay-fallback");
+  } catch (std::exception const &error) {
+    AppendLog(
+        std::string("AppWindowTitleBarThemeFailed context=") + context + " mode=overlay std=" +
+        error.what());
+    AppendLog(std::string("AppWindowTitleBarThemeApplied context=") + context + " mode=overlay-fallback");
+  } catch (...) {
+    AppendLog(std::string("AppWindowTitleBarThemeApplied context=") + context + " mode=overlay-fallback");
+  }
+}
+
 void ApplyManagedWindowTheme(
     winrt::Microsoft::UI::Windowing::AppWindow const &appWindow,
     HWND hwnd,
@@ -351,6 +384,11 @@ void ApplyManagedWindowTheme(
     char const *context,
     WindowPreferences const &preferences) noexcept {
   ApplyNativeWindowTheme(hwnd, context, preferences.AppearancePreset);
+
+  if (IsOverlayWindowPolicy(launchSurface.Policy)) {
+    ApplyOverlayWindowTheme(appWindow, context);
+    return;
+  }
 
   if (ShouldUseCustomTitleBar(launchSurface, preferences)) {
     ApplyCustomWindowTheme(appWindow, context);
@@ -525,7 +563,7 @@ struct HostedSurfaceWindow : public std::enable_shared_from_this<HostedSurfaceWi
 
     SetWindowPos(
         m_hwnd,
-        nullptr,
+        IsOverlayWindowPolicy(m_launchSurface.Policy) ? HWND_TOPMOST : nullptr,
         metrics.X,
         metrics.Y,
         metrics.Width,
@@ -1096,6 +1134,10 @@ std::optional<std::string> GetCurrentManagedWindowPayload() noexcept {
 std::string GetCurrentTitleBarMetricsPayload() noexcept {
   auto &state = GetWindowManagerState();
   if (!state.MainAppWindow) {
+    return SerializeTitleBarMetricsPayload(TitleBarMetrics{});
+  }
+
+  if (state.MainLaunchSurface && IsOverlayWindowPolicy(state.MainLaunchSurface->Policy)) {
     return SerializeTitleBarMetricsPayload(TitleBarMetrics{});
   }
 

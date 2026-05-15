@@ -3,6 +3,7 @@ import {mkdir, readFile, readdir, rm, unlink, writeFile} from 'node:fs/promises'
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
+import {pathToFileURL} from 'node:url';
 import {
   clearDevSessions,
   clearHostLaunchConfig,
@@ -41,6 +42,7 @@ import {
   createAgentWorkbenchDevScenarios,
   createCompanionChatDevScenarios,
   createLauncherDevScenarios,
+  createOverlayDevScenarios,
   createViewShotDevScenarios,
   createWindowCaptureDevScenarios,
 } from './windows-dev-scenarios/index.mjs';
@@ -93,6 +95,14 @@ const resolveHostLogPathCandidates = () =>
 const verifyDevPreferencesPath = path.join(
   tempRoot,
   'opapp-windows-host.verify-dev.preferences.ini',
+);
+const optionalPrivateScenarioModulePath = path.join(
+  workspaceRoot,
+  'opapp-desktop',
+  'tooling',
+  'scripts',
+  '.private-companion',
+  'windows-private-scenarios.mjs',
 );
 const opappUserDataRoot = path.join(
   process.env.LOCALAPPDATA || tempRoot,
@@ -352,7 +362,40 @@ function applyUiDebugOptions(uiSpec) {
   };
 }
 
+async function loadOptionalPrivateDevScenarios() {
+  if (!existsSync(optionalPrivateScenarioModulePath)) {
+    return [];
+  }
+
+  const privateScenarioModule = await import(
+    pathToFileURL(optionalPrivateScenarioModulePath).href,
+  );
+
+  if (typeof privateScenarioModule.createPrivateDevScenarios !== 'function') {
+    return [];
+  }
+
+  const privateScenarios = await privateScenarioModule.createPrivateDevScenarios({
+    assertLogContainsRegex,
+    assertLogDoesNotContain,
+  });
+
+  if (!Array.isArray(privateScenarios)) {
+    throw new Error(
+      `Windows dev verify failed: ${optionalPrivateScenarioModulePath} must return an array from createPrivateDevScenarios().`,
+    );
+  }
+
+  return privateScenarios;
+}
+
+const privateDevScenarios = await loadOptionalPrivateDevScenarios();
+
 const allScenarios = [
+  ...createOverlayDevScenarios({
+    assertLogContainsRegex,
+    assertLogDoesNotContain,
+  }),
   ...createLauncherDevScenarios({
     clearOptionalFile,
     companionStartupTargetPath,
@@ -407,6 +450,7 @@ const allScenarios = [
     frontendChatBundleRoot,
     tempRoot,
   }),
+  ...privateDevScenarios,
 ];
 const defaultScenarios = allScenarios;
 const scenarioByName = new Map(allScenarios.map(scenario => [scenario.name, scenario]));

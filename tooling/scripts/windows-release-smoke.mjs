@@ -40,6 +40,7 @@ import {
   createAgentWorkbenchReleaseScenarios,
   createCompanionChatReleaseScenarios,
   createLauncherAndSettingsReleaseScenarios,
+  createOverlayReleaseScenarios,
   createViewShotReleaseScenarios,
   createWindowCaptureReleaseScenarios,
 } from './windows-release-scenarios/index.mjs';
@@ -1043,6 +1044,12 @@ const publicSmokeScenarios = {
     userDataRoot,
     workspaceRoot,
   }),
+  ...createOverlayReleaseScenarios({
+    assertLogContainsRegex,
+    assertLogDoesNotContain,
+    assertPersistedSessionHasSurfaceId,
+    defaultPreferences,
+  }),
   ...createViewShotReleaseScenarios({
     assertPersistedSessionHasSurfaceId,
     assertPngCaptureLooksOpaque,
@@ -1737,6 +1744,14 @@ function buildLaunchConfig() {
     content += '\n[initial-open-props]\n';
 
     for (const [key, value] of Object.entries(activeLaunchConfig.initialOpenProps)) {
+      content += `${key}=${value}\n`;
+    }
+  }
+
+  if (activeLaunchConfig.main) {
+    content += '\n[main]\n';
+
+    for (const [key, value] of Object.entries(activeLaunchConfig.main)) {
       content += `${key}=${value}\n`;
     }
   }

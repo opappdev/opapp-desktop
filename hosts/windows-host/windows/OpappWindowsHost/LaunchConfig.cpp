@@ -155,6 +155,10 @@ std::optional<std::wstring> GetMainJavaScriptEntryFile() noexcept {
   return GetStartupOverride(L"main", L"entry-file", L"OPAPP_MAIN_JS_ENTRY_FILE");
 }
 
+std::optional<std::wstring> GetScenePreviewFile() noexcept {
+  return GetStartupOverride(L"scene-preview", L"file", L"OPAPP_SCENE_PREVIEW_FILE");
+}
+
 std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept {
   auto surfaceId = GetStartupOverride(L"initial-open", L"surface", L"OPAPP_INITIAL_OPEN_SURFACE_ID");
   if (!surfaceId) {

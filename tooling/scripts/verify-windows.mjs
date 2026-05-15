@@ -46,6 +46,11 @@ const publicScenarios = [
     args: ['--scenario=main-window-bootstrap-compact'],
   },
   {
+    name: 'main-window-overlay',
+    description: 'packaged startup applies the overlay main-window policy to companion.overlay-probe',
+    args: ['--scenario=main-window-overlay', '--skip-prepare'],
+  },
+  {
     name: 'tab-session',
     description: 'packaged explicit settings tab flow seeds a persisted session',
     args: ['--scenario=tab-session', '--skip-prepare', '--preserve-state'],

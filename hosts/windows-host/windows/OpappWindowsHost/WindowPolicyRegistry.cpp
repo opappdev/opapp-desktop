@@ -39,6 +39,7 @@ WindowPolicyRegistry BuildEmergencyWindowPolicyRegistry() noexcept {
                           WindowPolicyId policy,
                           int minWidth,
                           int minHeight,
+                          bool allowManualResize,
                           std::initializer_list<std::pair<const WindowSizeMode, WindowModeGeometry>> geometry) {
     WindowPolicyDefinition definition{};
     definition.Policy = policy;
@@ -47,7 +48,7 @@ WindowPolicyRegistry BuildEmergencyWindowPolicyRegistry() noexcept {
     definition.MinHeight = minHeight;
     definition.DefaultPlacement = L"centered";
     definition.RememberWindowRect = true;
-    definition.AllowManualResize = true;
+    definition.AllowManualResize = allowManualResize;
     definition.Geometry = std::map<WindowSizeMode, WindowModeGeometry>(geometry);
     return definition;
   };
@@ -58,6 +59,7 @@ WindowPolicyRegistry BuildEmergencyWindowPolicyRegistry() noexcept {
            WindowPolicyId::Main,
            960,
            780,
+           true,
            {{WindowSizeMode::Balanced, WindowModeGeometry{0.5, 0.72, 960, 780}},
             {WindowSizeMode::Compact, WindowModeGeometry{0.42, 0.78, 820, 730}},
             {WindowSizeMode::Wide, WindowModeGeometry{0.6, 0.66, 1140, 800}}})},
@@ -66,6 +68,7 @@ WindowPolicyRegistry BuildEmergencyWindowPolicyRegistry() noexcept {
            WindowPolicyId::Settings,
            780,
            820,
+           true,
            {{WindowSizeMode::Balanced, WindowModeGeometry{0.34, 0.88, 780, 820}},
             {WindowSizeMode::Compact, WindowModeGeometry{0.26, 0.94, 720, 770}},
             {WindowSizeMode::Wide, WindowModeGeometry{0.44, 0.82, 960, 840}}})},
@@ -74,9 +77,19 @@ WindowPolicyRegistry BuildEmergencyWindowPolicyRegistry() noexcept {
            WindowPolicyId::Tool,
            860,
            760,
+           true,
            {{WindowSizeMode::Balanced, WindowModeGeometry{0.4, 0.82, 860, 760}},
             {WindowSizeMode::Compact, WindowModeGeometry{0.32, 0.88, 720, 710}},
             {WindowSizeMode::Wide, WindowModeGeometry{0.5, 0.76, 1040, 780}}})},
+      {WindowPolicyId::Overlay,
+       createPolicy(
+           WindowPolicyId::Overlay,
+           380,
+           560,
+           false,
+           {{WindowSizeMode::Balanced, WindowModeGeometry{0.22, 1.52, 380, 560}},
+            {WindowSizeMode::Compact, WindowModeGeometry{0.2, 1.58, 340, 520}},
+            {WindowSizeMode::Wide, WindowModeGeometry{0.26, 1.42, 420, 600}}})},
   };
 }
 
@@ -304,7 +317,8 @@ std::optional<WindowPolicyRegistry> LoadWindowPolicyRegistryFromPath(
   WindowPolicyRegistry registry{};
   for (auto namedPolicy : {NamedPolicy{L"main", WindowPolicyId::Main},
                            NamedPolicy{L"settings", WindowPolicyId::Settings},
-                           NamedPolicy{L"tool", WindowPolicyId::Tool}}) {
+                           NamedPolicy{L"tool", WindowPolicyId::Tool},
+                           NamedPolicy{L"overlay", WindowPolicyId::Overlay}}) {
     auto policyObject = TryJsonValue<winrt::Windows::Data::Json::JsonObject>([&]() {
       return rootObject->GetNamedObject(namedPolicy.Key);
     });
@@ -341,6 +355,7 @@ WindowSizeMode ResolveWindowSizeMode(
     case WindowPolicyId::Settings:
       return preferences.SettingsWindowMode;
     case WindowPolicyId::Tool:
+    case WindowPolicyId::Overlay:
       break;
   }
 

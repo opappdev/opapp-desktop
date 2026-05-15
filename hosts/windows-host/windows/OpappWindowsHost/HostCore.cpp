@@ -134,6 +134,8 @@ winrt::hstring WindowPolicyName(WindowPolicyId policy) {
       return L"settings";
     case WindowPolicyId::Tool:
       return L"tool";
+    case WindowPolicyId::Overlay:
+      return L"overlay";
   }
 
   return L"main";
@@ -184,6 +186,9 @@ std::optional<ParsedWindowPolicy> ParseWindowPolicy(std::string const &policy) {
   if (policy == "tool") {
     return ParsedWindowPolicy{WindowPolicyId::Tool, std::nullopt};
   }
+  if (policy == "overlay") {
+    return ParsedWindowPolicy{WindowPolicyId::Overlay, std::nullopt};
+  }
   if (policy == "compact") {
     return ParsedWindowPolicy{WindowPolicyId::Main, WindowSizeMode::Compact};
   }
@@ -228,6 +233,10 @@ std::wstring GetWindowTitle(LaunchSurfaceConfig const &launchSurface) {
 
   if (launchSurface.Policy == WindowPolicyId::Tool) {
     return L"OPApp 工具";
+  }
+
+  if (launchSurface.Policy == WindowPolicyId::Overlay) {
+    return L"OPApp 悬浮窗口";
   }
 
   return L"OPApp";

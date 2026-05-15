@@ -29,8 +29,15 @@
 #include <winrt/Microsoft.UI.Input.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.interop.h>
+#include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.UI.Composition.Desktop.h>
+#include <winrt/Windows.UI.Composition.Scenes.h>
+#include <winrt/Windows.UI.Composition.h>
 #include <winrt/Windows.UI.h>
+#include <winrt/Windows.UI.Xaml.Media.h>
 
 // C RunTime Header Files
 #include <cmath>

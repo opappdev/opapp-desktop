@@ -15,6 +15,7 @@ enum class WindowPolicyId {
   Main,
   Settings,
   Tool,
+  Overlay,
 };
 
 enum class WindowSizeMode {
@@ -158,6 +159,7 @@ std::optional<AutoOpenSurfaceConfig> GetInitialAutoOpenSurface() noexcept;
 std::optional<std::wstring> GetMainJavaScriptEntryFile() noexcept;
 std::optional<std::wstring> GetMainDevSmokeScenario() noexcept;
 std::optional<std::wstring> GetMainDevSmokeBaseUrl() noexcept;
+std::optional<std::wstring> GetScenePreviewFile() noexcept;
 std::optional<std::wstring> GetOtaRemoteUrl() noexcept;
 std::optional<std::wstring> GetOtaChannel() noexcept;
 bool GetOtaForceUpdate() noexcept;
